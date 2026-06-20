@@ -105,7 +105,7 @@ yalp deliberately feels like two different things at once, and that's a feature,
 
 ### Why some things feel instant
 
-Reflexes — stop, follow, steer, don't-hit-things — run **on the robot itself**, with no network in the path. They respond as fast as you'd expect a toy to. This is what keeps yalp feeling *alive* rather than laggy. The "how" is in `architecture.md`; from the user's side, just expect Tier 1 to be immediate.
+Reflexes — stop, steer, come-here, don't-hit-things — run **on the robot itself**, with no network in the path. They respond as fast as you'd expect a toy to. This is what keeps yalp feeling *alive* rather than laggy. Continuous **follow** is the one local behavior that *isn't* uniformly snappy: its control loop is instant, but it can only re-aim as often as the camera spots you, and on v1 hardware that cadence is slow — so it tracks a slow walk and stops on fast motion (§2), rather than tracking a moving target without lag. The "how" is in `architecture.md`; from the user's side, just expect Tier 1 to be immediate, with continuous follow the noted exception.
 
 ### Why some things take a beat
 
