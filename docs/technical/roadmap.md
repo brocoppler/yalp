@@ -32,7 +32,7 @@ the Phase 1 hardware already in hand.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
 |---|---|---|---|---|
-| **0** | **Order Phase 2 parts now** | Phase 2 order placed (motors, driver, ball caster, HC-SR04, divider resistors, battery + holder, breadboard/wiring, 470–1000 µF + 0.1 µF caps, glue/zip-ties) the day Step A starts; order/tracking numbers recorded. Parts ship in parallel with laptop work. | Laptop / none | |
+| **0** | **Order Phase 2 parts now** ✅ ORDERED 2026-06-20 | Phase 2 order placed (motors, driver, ball caster, HC-SR04, divider resistors, battery + holder, breadboard/wiring, 470–1000 µF + 0.1 µF caps, glue/zip-ties) the day Step A starts; order/tracking numbers recorded. Parts ship in parallel with laptop work. | Laptop / none | |
 | **A** | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | An agent stub and a fake reactive stub exchange **one hand-authored Intent and one RobotState over the REAL socket**, both printed to console. Documentation alone is **NOT** done. (Run `scripts/contract_demo.py` — prints the handshake and 'STEP A OK'.) | Laptop | |
 | **B** | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. | Phase 1 (C270 / laptop cam) | |
 | **C** | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. | Phase 1 | ⭐ **the magic moment** |
@@ -169,7 +169,7 @@ follower with collision-stop underneath — not a demoted one. See `software-spe
   wall supply, active-cooling case, 128GB OS card) plus the Logitech C270 webcam.
 - **Remaining (~$135):** microSD card reader (if no laptop SD slot), Phase 2 body
   parts (~$105), Phase 3 voice (~$20). Total project ~$335.
-- **Phase 2 deferred — order at milestone 0:** motors, driver, ball caster, HC-SR04,
+- **Phase 2 ORDERED 2026-06-20 (inbound):** motors, driver, ball caster, HC-SR04,
   divider resistors, battery + holder, breadboard/wiring, bulk + ceramic caps,
   glue/zip-ties.
 - **Phase 3 deferred:** USB mic + small speaker.

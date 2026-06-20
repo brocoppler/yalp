@@ -188,7 +188,7 @@ ASCII wiring sketch:
 | Phase | What it covers | Status | ~Cost |
 |---|---|---|---|
 | **Phase 1 — Brain** | CanaKit Pi 5 4GB Starter Kit PRO (~$180) + Logitech C270 (~$22) | ✅ Ordered | ~$200 |
-| **Phase 2 — Body** | Card reader, PD power bank, TT motors, driver, ball caster, HC-SR04, AA power, wiring, glue/chassis | 🛒 To buy | ~$115 |
+| **Phase 2 — Body** | Card reader, PD power bank, TT motors, driver, ball caster, HC-SR04, AA power, wiring, glue/chassis | ✅ ORDERED 2026-06-20 (inbound) | ~$115 |
 | **Phase 3 — Voice** | USB mic + small speaker (deferred) | 🛒 Later | ~$20 |
 | | | **Total** | **~$335** |
 
