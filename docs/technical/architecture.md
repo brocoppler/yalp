@@ -79,7 +79,7 @@ This is the crux of the whole design — the seam where a slow planner meets a f
 
 The deliberative layer never streams motor commands. It hands the reactive layer a single **active goal/mode**, not a motor command. Examples of the *kind* of thing it sets (exact schema → `software-spec.md`):
 
-- a **mode**: `FOLLOW`, `EXPLORE`, `IDLE`.
+- a **mode**: `FOLLOW`, `IDLE` (exploration is a deliberative loop, not a reactive mode — see `software-spec.md`).
 - a **bounded action**: `drive_until(clear=false)`, "drive forward up to 1 m or until blocked," "turn right ~90°."
 - a **terminating condition**: keep going *until* X (an obstacle, a timeout, a target lost).
 
