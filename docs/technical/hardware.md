@@ -26,7 +26,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 
 > **DECISION —** Eyes = Logitech C270 USB webcam. **Ordered.** UVC means zero driver work. Pi Camera Module 3 stays a possible later swap (needs a Pi-5 camera cable) only if autofocus is wanted.
 
-> **DECISION —** Locomotion = differential drive: 2× TT gear motors + 1 ball caster. Approach locked; parts are in the Phase 2 order, not yet bought.
+> **DECISION —** Locomotion = differential drive: 2× TT gear motors + 1 ball caster. Approach locked; parts ORDERED 2026-06-20 (inbound).
 
 > **DECISION —** Motor driver = DRV8833 / TB6612FNG, **not** L298N. Cooler and more efficient; only fall back to an L298N if one is already in the parts bin.
 
