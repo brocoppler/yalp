@@ -32,6 +32,16 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 
 > **THESIS —** The Pi is an I/O hub in v1, not a compute engine. Every dollar buys debugging time (real USB ports, plug-and-play camera, pre-soldered modules), not FLOPS. Spend accordingly.
 
+### Deliberately NOT bought
+
+These are tempting but wrong for v1, and naming them keeps the budget honest:
+
+- **Monitor / keyboard / mouse** — headless; everything is over SSH from the laptop.
+- **Separate Active Cooler / heatsink** — the CanaKit case fan already covers cooling.
+- **AI HAT / NPU accelerator** — the heavy AI runs in the cloud; on-device models on a Pi accelerator are a known hobbyist trap for build #1.
+- **Depth camera / LiDAR** — that's the post-v1 navigation upgrade, not a v1 part.
+- **Soldering iron** — every module is bought pre-headered; ~$20 nice-to-have, not a must.
+
 ---
 
 ## 2. Power architecture — treat this as a first-class hazard
@@ -62,7 +72,14 @@ Two independent supplies, one shared ground. This is the single most failure-pro
 
 > **RISK —** Shared-ground noise + TT stall spikes browning out the Pi is the most likely "ghost reboot" bug in the whole build. Budget the caps and the separate supply now; retrofitting after chasing phantom crashes is miserable.
 
-> **DECISION —** A deliberate **power bring-up gate** before motors and Pi are ever trusted together: (1) Pi alone on PD, confirm stable under load; (2) motor supply alone, confirm driver spins motors with the Pi powered *but logic disconnected*; (3) join common ground, drive motors while watching for Pi resets / `vcgencmd get_throttled` flags. Only past this gate do motors + brain run as one system. This gate sits in sequence in `roadmap.md` (it gates "Hello motors" → everything after).
+**Power bring-up checklist (run in order, do not skip ahead):**
+
+1. **Pi alone** on the PD supply — boot, confirm stable, check `vcgencmd get_throttled` reads `0x0` under a CPU load.
+2. **Motor supply alone** — driver powered from AA pack, Pi powered separately, **logic inputs disconnected**; confirm the driver spins both motors by jumpering inputs by hand.
+3. **Join common ground** — tie the grounds, connect the 4 logic GPIOs, and drive motors from Python while watching for Pi resets and re-checking `get_throttled`. Add caps if any sag/reset appears.
+4. **Only past step 3** do motors + brain run as one trusted system.
+
+> **DECISION —** Gate motors-with-Pi behind the bring-up checklist above. No autonomous driving until step 3 passes clean (no resets, `get_throttled` stays `0x0`). This gate sits in sequence in `roadmap.md` — it stands between "Hello motors" and everything after it.
 
 ---
 
