@@ -3,12 +3,15 @@
 self-contained, shareable page — every referenced doc opens inline, no page
 ever leaves the file.
 
-The docs live in subdirectories (product/, technical/, archive/), but each is
-embedded under its BASENAME only (e.g. "software-spec.md", "architecture.md",
-"initial-plan.md") so that backticked cross-links inside the docs resolve to
-the embedded copies.
+The docs live in subdirectories under docs/ (product/, technical/, archive/),
+but each is embedded under its BASENAME only (e.g. "software-spec.md",
+"architecture.md", "initial-plan.md") so that backticked cross-links inside the
+docs resolve to the embedded copies.
 
-Usage: python3 build.py   (run from the repo root after editing any .md doc)
+All paths are resolved RELATIVE TO THIS FILE'S LOCATION (the docs/ directory)
+via ``pathlib.Path(__file__).parent``, so the script can be run from anywhere.
+
+Usage: python3 docs/build.py   (run after editing any .md doc under docs/)
 """
 import os
 import re

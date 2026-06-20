@@ -1,71 +1,73 @@
-# yalp — Robot Spec
+# yalp
 
-The spec for **yalp**, a from-scratch hobby robot: a Raspberry Pi 5 brain with a USB camera and
-two differential-drive wheels that you talk to in plain language — it interprets your intent, moves
-and looks around, and tells you what it sees. The honest mental model is *a clever talking pet that
-sees, chats, and moves toward things — not a butler that fetches.*
+**yalp** is a from-scratch hobby robot: a Raspberry Pi 5 brain, a USB camera, and
+differential-drive wheels, driven by a two-loop design. A fast on-Pi **reactive**
+layer (motors, ultrasonic, ~10–30 Hz, owns the camera) keeps the robot safe and
+responsive; a slow cloud **deliberative** layer (Claude VLM/LLM) handles intent
+and vision Q&A. Development is **laptop-first** — the whole brain is built and run
+on a laptop against a *fake* reactive backend (your laptop webcam stands in for
+the robot's camera); only the real reactive layer needs the Pi.
 
-## Start here
-
-Open **`index.html`** in a browser — a clean, navigable, badge-coded consolidation of the whole
-spec. **It is fully self-contained:** every doc is embedded, so any sidebar link or any
-`` `filename.md` `` reference in the text opens **inline** — you never leave the page. Share the
-single `index.html` file and the recipient gets everything, offline, with no server.
-
-## How to view
-
-No dependencies, no server, no build step required just to read it:
+## Repository layout
 
 ```
-open index.html        # macOS — opens in your default browser
+yalp/
+├── README.md              # this file
+├── SETUP.md               # step-by-step laptop bring-up for a non-coder owner
+├── pyproject.toml         # packaging (src layout, console script `yalp`)
+├── requirements.txt       # runtime deps (mirror of pyproject)
+├── .env.example           # copy to .env; holds ANTHROPIC_API_KEY + model ids
+├── src/yalp/
+│   ├── config.py          # canonical constants (model tiers, thresholds, IPC)
+│   ├── camera.py          # threaded latest-frame capture (webcam/image/synthetic)
+│   ├── llm.py             # thin, mockable Anthropic wrapper
+│   ├── cli.py             # `yalp` entrypoint + subcommand registry
+│   ├── contract/          # loop-to-loop interface (Intent/RobotState) — Wave 2
+│   ├── reactive/          # fast on-Pi loop + its fake — later wave
+│   └── deliberative/      # perceive→think→act→report loop — later wave
+├── scripts/               # dev/ops scripts
+├── tests/                 # pytest suite + tests/assets/sample.jpg
+└── docs/                  # the spec hub (open docs/index.html); source of truth
 ```
 
-Click any sidebar doc link or any `` `*.md` `` reference to read that doc inline. Deep links work too:
-`index.html#doc/architecture.md` jumps straight to that doc. Press **Esc** or **← Back** to return to
-the overview. The four opinionated markers — **DECISION**, **THESIS**, **RISK**, **OPEN** — render as
-colored callouts inside the docs and as a legend on the overview.
+## Quickstart
 
-## Source-of-truth workflow
+```bash
+# 1. Create and activate a virtual environment (Python 3.11+)
+python3 -m venv .venv
+source .venv/bin/activate
 
-The **markdown files are the source of truth.** The page is generated from them.
+# 2. Install yalp in editable mode (with dev extras for pytest)
+pip install -e ".[dev]"
 
-1. **Edit content** — edit the `.md` files in `product/`, `technical/`, and `archive/`. Edit
-   `index.html` directly *only* for the consolidated overview sections or layout/CSS.
-2. **Rebuild** — re-embed the docs into the page (needs `python3`, preinstalled on macOS):
-   ```
-   python3 build.py     # embeds all docs into index.html, prints a summary
-   ```
-3. **Reload** the browser (⌘R / Ctrl-R).
+# 3. Add your Anthropic API key
+cp .env.example .env
+# then edit .env and set ANTHROPIC_API_KEY=...
 
-`build.py` reads each doc from its subdirectory but embeds it under its **basename** (e.g.
-`technical/architecture.md` → `data-name="architecture.md"`) so the backticked cross-links inside
-the docs resolve. Only `build.py` touches the embedded copies between the `<!--DOCS:START-->` /
-`<!--DOCS:END-->` markers — your `.md` files stay the editable source.
+# 4. Sanity-check the install
+yalp --help        # shows the (currently minimal) command set
+pytest             # runs the smoke test
+```
 
-## Add a new doc
+> **Coming next:** `yalp see` (capture a still → Claude "what do you see?") lands
+> in the next wave, followed by `yalp agent` (the full deliberative loop driving
+> the fake reactive backend). They are not implemented yet — `yalp --help` lists
+> only what exists today.
 
-1. Create the `.md` file (e.g. `technical/sensing-notes.md`).
-2. Add its **path** to the `DOCS` list in `build.py` (the path, not just the basename).
-3. Add a sidebar link in `index.html` under the right group:
-   `<a class="doc" data-doc="sensing-notes.md">sensing-notes.md</a>` (use the **basename**).
-4. Run `python3 build.py` and reload.
+## Viewing the spec hub
 
-## Document map
+The full design — product vision, architecture, software/hardware specs, and the
+build roadmap — is a single self-contained page. Open it in a browser:
 
-| Track | Doc | What it is |
-|---|---|---|
-| Product | `product/product-vision.md` | Why yalp exists, who it's for, the two horizons, the scope envelope. |
-| Product | `product/product-spec.md` | What yalp does from the user's seat — capability catalog, acceptance scenarios, latency. |
-| Technical | `technical/architecture.md` | The two-loop concept, the agent/tool model, the contract between thinking and reflexes. |
-| Technical | `technical/hardware.md` | Bill of materials, power architecture, drivetrain, sensing, pin planning. |
-| Technical | `technical/software-spec.md` | The two-layer runtime, the loop-to-loop wire contract, person-tracking, config. |
-| Technical | `technical/roadmap.md` | Build sequencing, the go/no-go gates, the risk register, the consolidated open questions. |
-| Archive | `archive/initial-plan.md` | The original brain-dump the six specs were factored out of — kept for provenance. |
+```
+docs/index.html
+```
 
-## How it's built
+After editing any markdown doc under `docs/`, rebuild the embedded page with
+`python3 docs/build.py`.
 
-`index.html` is a single, hand-written, zero-dependency file: a sticky sidebar, a consolidated
-overview, and a small vanilla-JS markdown renderer that displays any doc inline in a modal overlay
-with hash routing (`#doc/<name>`). No CDNs, no frameworks, no external assets — offline-first by
-design. `build.py` is the only moving part, and it only re-embeds the markdown between the DOCS
-markers.
+## Learn more
+
+- **Setup:** [SETUP.md](SETUP.md) — laptop bring-up, getting an API key, running tests.
+- **Build order & gates:** [docs/technical/roadmap.md](docs/technical/roadmap.md).
+- **The loop contract:** [docs/technical/software-spec.md](docs/technical/software-spec.md).
