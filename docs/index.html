@@ -1386,7 +1386,10 @@ def deliberative_step(user_text, history, client, reactive):
     msg = client.messages.create(
         model=model,
         max_tokens=1024,
-        thinking={"type": "adaptive"},            # let it reason on hard asks
+        # thinking is opt-in AND only sent to models that support it — the fast
+        # per-step tier (Haiku) does NOT, and sending it there 400s. Omit it by
+        # default; attach {"type": "adaptive"} only on the mid/big tiers when a
+        # step needs deeper reasoning.
         tools=ABILITY_MENU,                       # the §2.1 schema
         messages=history + [{
             "role": "user",
@@ -1419,7 +1422,7 @@ def deliberative_step(user_text, history, client, reactive):
 | Mid | Ambiguous requests, multi-step `explore` reasoning | `claude-sonnet-4-6` |
 | Big | "Describe this whole scene in detail", "read this sign", genuinely hard asks (often triggered by `describe_scene` detail="full") | `claude-opus-4-8` |
 
-> **DECISION —** `pick_model()` is an **explicit, auditable routing table**, not a vibe. It **defaults to `claude-haiku-4-5`** and escalates **only** on enumerated signals. Every step **logs the chosen tier and the signal that chose it**, so routing is reviewable after the fact. Adaptive thinking stays on (`thinking={"type":"adaptive"}`) at every tier so the model spends more reasoning on hard turns and little on easy ones.
+> **DECISION —** `pick_model()` is an **explicit, auditable routing table**, not a vibe. It **defaults to `claude-haiku-4-5`** and escalates **only** on enumerated signals. Every step **logs the chosen tier and the signal that chose it**, so routing is reviewable after the fact. Extended/adaptive thinking is enabled **ONLY on models that support it** (`thinking={"type":"adaptive"}` on the mid/big tiers) and **only when a step needs deeper reasoning**; the fast per-step tier (`claude-haiku-4-5`) runs **without** it — sending `thinking` to Haiku returns a 400 ("adaptive thinking is not supported on this model"), so it stays off by default and is omitted entirely on that tier.
 
 ```python
 # Auditable routing. Default cheap; escalate only on the listed signals; log every choice.
@@ -1454,7 +1457,7 @@ The deliberative loop has two latency-sensitive paths, and both must be **measur
 |---|---|---|
 | **Capture** | C270 JPEG grab from the latest-frame buffer + encode | downscale before encode; the still is already buffered (§2.5) |
 | **Upload** | the JPEG over **real home WiFi** to the API | **JPEG-compress / downscale the uploaded still** — this is the biggest controllable term |
-| **Model think** | server-side time to first/last token at the chosen tier | tier routing (§3); adaptive thinking |
+| **Model think** | server-side time to first/last token at the chosen tier | tier routing (§3); adaptive thinking (mid/big tiers only) |
 
 Two budgets to validate:
 
