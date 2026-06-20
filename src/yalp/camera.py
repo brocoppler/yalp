@@ -19,11 +19,14 @@ frames, so tests and dev never require real hardware.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:  # OpenCV is a runtime dep, but keep import failures legible.
     import cv2
@@ -41,6 +44,22 @@ DEFAULT_HEIGHT = 480
 # Cap the capture loop so we never drive the camera faster than the sensor-
 # friendly cadence (software-spec.md §2.5 / hardware.md ~15 Hz ultrasonic).
 DEFAULT_MAX_FPS = 15.0
+
+# Real webcam warm-up. OpenCV's VideoCapture hands back the *first* frame the
+# instant the device opens — before the sensor's auto-exposure / auto-gain have
+# ramped up — so the first frames are black/very dark. Before publishing any
+# frame to callers we read and DISCARD an initial burst, stopping as soon as a
+# frame is non-trivially bright (mean pixel value above the threshold), or when
+# the warm-up budget (time or frame count) elapses (then we publish the best
+# frame seen anyway, so we never hang). This applies ONLY to the real webcam
+# source; the image-file and synthetic sources publish immediately.
+WARMUP_MAX_SECONDS = 1.5
+WARMUP_MAX_FRAMES = 30
+WARMUP_BRIGHTNESS_THRESHOLD = 16.0
+
+# How long ``wait_for_frame`` blocks by default — generous enough to cover the
+# webcam warm-up above plus the device-open cost.
+DEFAULT_FRAME_TIMEOUT = 5.0
 
 Frame = "np.ndarray"  # BGR uint8 HxWx3, the OpenCV convention.
 
@@ -85,6 +104,10 @@ class Camera:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        # Set once the capture thread has published a usable (warmed-up, for the
+        # webcam source) frame — or given up trying. Lets the one-shot still path
+        # avoid reading a black first frame.
+        self._warmed = threading.Event()
         self._frame_count = 0
 
     # -- lifecycle -----------------------------------------------------------
@@ -96,6 +119,7 @@ class Camera:
         """
         self._configure_source()
         self._stop.clear()
+        self._warmed.clear()
         self._thread = threading.Thread(
             target=self._capture_loop, name="yalp-camera", daemon=True
         )
@@ -130,8 +154,17 @@ class Camera:
         with self._lock:
             return None if self._latest is None else self._latest.copy()
 
-    def wait_for_frame(self, timeout: float = 2.0) -> Optional[np.ndarray]:
-        """Block (briefly) until the first frame is available, then return it."""
+    def wait_for_frame(
+        self, timeout: float = DEFAULT_FRAME_TIMEOUT
+    ) -> Optional[np.ndarray]:
+        """Block (briefly) until a usable frame is available, then return it.
+
+        For the webcam source the capture thread does not publish anything until
+        it has warmed the sensor up (see :meth:`_warm_up_webcam`), so the frame
+        returned here is never the camera's black first frame. The image-file and
+        synthetic sources publish their first frame immediately, so this returns
+        without any warm-up delay.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             frame = self.latest()
@@ -168,6 +201,15 @@ class Camera:
 
     def _capture_loop(self) -> None:
         min_dt = 1.0 / self.max_fps if self.max_fps > 0 else 0.0
+        # Real webcams need a warm-up before the first published frame is usable;
+        # other sources publish immediately so tests/dev stay fast.
+        if self.source == "webcam" and self._cap is not None:
+            warmed = self._warm_up_webcam()
+            if warmed is not None:
+                with self._lock:
+                    self._latest = warmed
+                    self._frame_count += 1
+        self._warmed.set()
         while not self._stop.is_set():
             t0 = time.monotonic()
             frame = self._grab_one()
@@ -178,6 +220,43 @@ class Camera:
             elapsed = time.monotonic() - t0
             if min_dt > elapsed:
                 time.sleep(min_dt - elapsed)
+
+    def _warm_up_webcam(self) -> Optional[np.ndarray]:
+        """Read and discard early (dark) webcam frames until one is exposed.
+
+        Reads up to :data:`WARMUP_MAX_FRAMES` frames for at most
+        :data:`WARMUP_MAX_SECONDS` seconds, returning the first frame whose mean
+        pixel value clears :data:`WARMUP_BRIGHTNESS_THRESHOLD`. If the budget is
+        exhausted (lens covered, truly dark room, or a slow sensor) the brightest
+        frame seen is returned anyway — we never hang — with a one-line hint.
+        """
+        if self._cap is None:  # pragma: no cover - guarded by caller
+            return None
+        deadline = time.monotonic() + WARMUP_MAX_SECONDS
+        best: Optional[np.ndarray] = None
+        best_brightness = -1.0
+        frames_read = 0
+        while frames_read < WARMUP_MAX_FRAMES and time.monotonic() < deadline:
+            if self._stop.is_set():
+                break
+            ok, frame = self._cap.read()
+            if not ok or frame is None:
+                continue
+            frames_read += 1
+            brightness = float(np.asarray(frame).mean())
+            if brightness > best_brightness:
+                best_brightness = brightness
+                best = frame
+            if brightness >= WARMUP_BRIGHTNESS_THRESHOLD:
+                return frame
+        if best is not None and best_brightness < WARMUP_BRIGHTNESS_THRESHOLD:
+            logger.warning(
+                "camera frame is very dark — check lighting / lens cover "
+                "(mean brightness %.1f after %d warm-up frame(s))",
+                max(best_brightness, 0.0),
+                frames_read,
+            )
+        return best
 
     def _grab_one(self) -> Optional[np.ndarray]:
         if self.source == "webcam" and self._cap is not None:
@@ -226,4 +305,12 @@ def encode_jpeg(
     return buf.tobytes()
 
 
-__all__ = ["Camera", "encode_jpeg", "DEFAULT_WIDTH", "DEFAULT_HEIGHT"]
+__all__ = [
+    "Camera",
+    "encode_jpeg",
+    "DEFAULT_WIDTH",
+    "DEFAULT_HEIGHT",
+    "WARMUP_MAX_SECONDS",
+    "WARMUP_MAX_FRAMES",
+    "WARMUP_BRIGHTNESS_THRESHOLD",
+]
