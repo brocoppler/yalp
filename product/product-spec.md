@@ -20,7 +20,7 @@ Interaction is turn-based, like a chat: you send one thing, yalp does it and rep
 
 > **DECISION —** v1 is **text-first**. You type commands from your laptop and read its replies as text. Voice — speech-to-text in, text-to-speech out — is a **deferred, separate track**, bolted on only after the full typed loop works end to end. Treating voice as its own project (mic quality, audio over USB, STT/TTS latency, wake-words) keeps the voice rabbit hole from blocking the core magic. See `roadmap.md`.
 
-> **THESIS —** yalp has **two speeds**, and the user feels both. Reflexes (stop, follow, don't-hit-things) are **instant** because they run locally; thinking (understanding a request, describing a scene) takes **a beat** because it goes to the cloud. Every expectation in this doc flows from that split. The mechanism lives in `architecture.md`; here we only describe how it *feels*.
+> **THESIS —** yalp has **two speeds**, and the user feels both. Reflexes (stop, steer, come-here, don't-hit-things) are **instant** because they run locally; thinking (understanding a request, describing a scene) takes **a beat** because it goes to the cloud. Every expectation in this doc flows from that split. One caveat the reflex framing hides: vision-driven moves can only react as often as the camera spots a person, and on v1 hardware that cadence is slow — which is exactly why continuous follow is a stretch and come-here is the safe bet. The mechanism lives in `architecture.md`; here we only describe how it *feels*.
 
 ---
 
@@ -38,13 +38,19 @@ These respond immediately and keep responding without waiting on the network.
 |---|---|---|---|
 | **Stop** | Halts the wheels at once, mid-command if needed. | Instant — top priority. | Always works, every time, even while doing something else. |
 | **Forward / left / right** | Drives or steers the named way until told to stop or something blocks it. | Instant. | Direct and responsive; collision-stop always underneath. |
-| **Back up** | Reverses a short, timed distance. | Instant. | Short and controlled; not guarded by a rear sensor (v1 senses forward only). |
-| **Spin / turn in place** | Rotates left or right on the spot. | Instant. | Turns reliably; angle is approximate, not degree-accurate. |
+| **Back up** | Reverses a short, timed distance — best-effort, not a measured one. | Instant. | Short and controlled; open-loop and un-odometered, so distance is approximate; not guarded by a rear sensor (v1 senses forward only). |
+| **Spin / turn in place** | Rotates left or right on the spot. | Instant. | Turns reliably; angle is approximate and open-loop, not degree-accurate. |
 | **Dance** | Runs a short, canned playful motion. | Instant. | A fixed fun routine — purely for delight. |
-| **Come here** | Drives toward the person it sees until close, then stops. | Instant start, continuous. | Reaches you across a clear room in decent light; needs line of sight, not a homing beacon. |
-| **Follow me** | Locks onto the nearest person and drives to keep them centered and at distance. | Instant and continuous — tracks a *moving* target without lag. | Keeps up with a walking person in good light; in clutter or low light it loses the lock and stops rather than chasing the wrong thing. |
+| **Come here** | Drives toward the person it sees until close, then stops — a one-shot approach, not a continuous lock. | Instant start; runs to completion, then stops. | Reaches you across a clear room in good light; needs line of sight, not a homing beacon. The easiest, most repeatable people-seeking behavior in v1 — the demo centerpiece. |
+| **Follow me** | Locks onto the nearest person and drives to keep them centered and at distance. | Instant to react, but the person-detector runs at a low frame rate, so fast motion outpaces it. | Tracks a person walking at a slow, steady pace in good light; stops and reports ("I lost you") if the person moves fast, turns away, or the scene is cluttered. A v1 stretch — see §3 and the come-here decision below. |
 | **React to faces / gestures** | Notices a face or simple gesture and responds (orients, acknowledges). | Near-instant. | Detects faces in good light; gesture vocabulary is small and best-effort. |
 | **Basic obstacle avoidance** | Won't drive into what's directly ahead; stops or refuses. | Instant reflex. | Reliably stops for obstacles in the forward cone; **not** 360° aware. |
+
+> **DECISION —** **"Come here" is the v1 demo centerpiece, not "follow me."** A one-shot approach-then-stop only has to find a person once and drive until close — far easier and far more repeatable than continuous tracking, which depends on a low-frame-rate person detector keeping a moving lock. Continuous **"follow me" is a stretch goal within v1**: nice if it lands, never the thing the demo rests on. Build, demo, and judge v1 on come-here; treat follow as a bonus. The engineering reasons live in `architecture.md` and `software-spec.md`.
+
+> **DECISION —** **"Good light" means roughly 200–300 lux** — an ordinary, well-lit indoor room. This is the floor for any vision-driven motion (come-here, follow, face/gesture reactions). **Below that floor, come-here and follow degrade gracefully to a hard STOP plus an "I lost you" report** — a spec'd behavior, not an anecdotal caveat. yalp never gropes around in the dark; if it can't see well enough to be sure, it stops and says so. The exposure/detection mechanics are in `software-spec.md` and `hardware.md`.
+
+> **RISK —** **Motion is approximate and open-loop.** With no wheel encoders, "back up," "spin," and "turn" run on timed power, not measured distance or angle — so the same command lands a little differently each time, and exact distances and angles are best-effort, not guaranteed. Set this expectation with the user up front so it reads as honest, not broken. The safety upside: after a near-collision the robot **halts and reports** rather than blindly reversing into something it can't see (v1 senses forward only — see §5). Details in `software-spec.md` and `hardware.md`.
 
 ### Tier 2 — Talk & visual Q&A (cloud, latency is fine)
 
@@ -73,12 +79,13 @@ These take a beat but the wait doesn't hurt — you're asking, not steering.
 Concrete "when I do X, it does Y / says Z" cases that define success. Each one pins down a capability.
 
 - **Stop wins.** When I type `stop` while it's mid-drive, the wheels halt within a fraction of a second. *(Tier 1: Stop.)*
-- **It follows a moving me.** When I type `follow me` and walk across a lit room, it pivots and drives to stay pointed at me at a roughly constant distance; when I stand still, it stops. *(Tier 1: Follow me.)*
-- **It refuses to crash.** When I type `go forward` while it faces a wall, it drives, then stops on its own before contact and tells me it's blocked — it never pushes into the wall. *(Tier 1: Obstacle avoidance / safety.)*
-- **It describes the room.** When I type `what do you see?`, within a few seconds it replies with a sentence or two naming the main things in front of it. *(Tier 2: VQA.)*
+- **It comes to me — the centerpiece.** When I type `come here` from across a clear room in good light (~200–300 lux), it turns toward me and drives over until it's close, then stops on its own. This is the one-shot approach the v1 demo rests on. *(Tier 1: Come here.)*
+- **It follows me at a walk.** When I type `follow me` and walk at a slow, steady pace across a well-lit room (~200–300 lux), it pivots and drives to stay pointed at me at a roughly constant distance; when I stand still, it stops. If I move fast, turn away, or the scene is cluttered, it stops and reports *"I lost you"* rather than chasing the wrong thing. *(Tier 1: Follow me — a v1 stretch.)*
+- **It stops in the dark.** When I run `come here` or `follow me` in a dim room (below ~200 lux), it does not grope toward me — it stops and reports *"I lost you."* Failing to see is a clean STOP, not a guess. *(Tier 1: low-light degradation.)*
+- **It refuses to crash.** When I type `go forward` while it faces a wall, it drives, then stops on its own before contact and tells me it's blocked — it never pushes into the wall. After such a halt it reports rather than blindly reversing. *(Tier 1: Obstacle avoidance / safety.)*
+- **It describes the room.** When I type `what do you see?`, within a few seconds it replies with a sentence or two naming the main things in front of it. *(Tier 2: VQA — the magic moment.)*
 - **It reads a sign.** When I hold a hand-printed sign reading `HELLO` in front of it and type `read this sign`, it replies `HELLO`. *(Tier 2: Read text.)*
 - **It tells a story.** When I type `tell me a story about a robot`, it tells one. *(Tier 2: Talk.)*
-- **It comes to me.** When I type `come here` from across a clear, lit room, it turns toward me and drives over until it's close, then stops on its own. *(Tier 1: Come here.)*
 - **It handles a combined command.** When I type `go forward and tell me what you see`, it drives forward and, a beat later, reports what's now in front of it — one command, both a move and a description. *(Tier 1 + Tier 2.)*
 - **It explores, haltingly.** When I type `go around the corner and tell me what's there`, it drives in halting steps, pauses to think, and finally reports something like *"I see a couch and a doorway"* — taking maybe a minute, not a smooth glide. *(Tier 3: Explore-and-report.)*
 
@@ -92,7 +99,7 @@ yalp deliberately feels like two different things at once, and that's a feature,
 
 | Tier | What you're doing | How it should feel | If it feels wrong |
 |---|---|---|---|
-| **1 — Reactive** | Steering, stopping, following | Immediate, like a toy | Any lag here is a bug — Tier 1 must never wait on the cloud. |
+| **1 — Reactive** | Steering, stopping, come-here | Immediate, like a toy | Any lag here is a bug — Tier 1 must never wait on the cloud. Continuous follow is the exception: its *control* is instant, but it can only re-aim as often as it spots you, so it tracks a slow walk and stops on fast motion (§2). |
 | **2 — Talk & VQA** | Asking, chatting, "what's this?" | A short, unremarkable pause | A multi-second wait is expected and fine — you're conversing, not driving. |
 | **3 — Explore** | "Go look and report" | Visibly stop-go | Smooth motion would be *nice* but isn't promised in v1 (see below). |
 
