@@ -1,0 +1,1990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>yalp — Robot Spec</title>
+<style>
+  :root{
+    --bg:#f6f9fa; --panel:#ffffff; --ink:#16232b; --muted:#5b6b75; --line:#e2e9ec;
+    --accent:#0e8f8a; --accent-soft:#dbf0ee;
+    /* badge palette — one color per marker convention */
+    --dec:#2563c9;  --dec-bg:#e6eefb;     /* DECISION — a settled call */
+    --thesis:#1f8a54; --thesis-bg:#e6f6ed;/* THESIS  — a conviction */
+    --risk:#d23150;  --risk-bg:#fde7ec;   /* RISK    — a hazard */
+    --open:#b06a00;  --open-bg:#fbeed3;   /* OPEN    — undecided */
+    --radius:14px; --maxw:840px;
+    font-synthesis:none;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.62; font-size:16px; -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* layout */
+  .wrap{display:grid; grid-template-columns:272px 1fr; max-width:1280px; margin:0 auto}
+  nav.side{
+    position:sticky; top:0; height:100vh; overflow-y:auto; padding:26px 18px 40px;
+    border-right:1px solid var(--line); background:var(--panel);
+  }
+  nav.side .brand{font-weight:800; font-size:22px; letter-spacing:-.02em; margin:0 8px 2px}
+  nav.side .brand .bot{color:var(--accent)}
+  nav.side .tag{color:var(--muted); font-size:12.5px; margin:0 8px 18px}
+  nav.side a{
+    display:block; color:var(--muted); font-size:14px; padding:7px 9px; border-radius:9px;
+    border-left:2px solid transparent;
+  }
+  nav.side a:hover{background:var(--accent-soft); text-decoration:none; color:var(--ink)}
+  nav.side a.active{color:var(--accent); background:var(--accent-soft); border-left-color:var(--accent); font-weight:600}
+  nav.side .grp{font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#9aa7ae; margin:18px 9px 6px}
+  nav.side a.doc{cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px}
+
+  main{padding:48px 40px 120px; min-width:0}
+  .col{max-width:var(--maxw); margin:0 auto}
+
+  header.hero{margin-bottom:14px}
+  header.hero .eyebrow{font-size:12.5px; text-transform:uppercase; letter-spacing:.12em; color:var(--accent); font-weight:700; margin:0 0 6px}
+  header.hero h1{font-size:42px; line-height:1.08; letter-spacing:-.03em; margin:0 0 12px}
+  header.hero h1 .bot{color:var(--accent)}
+  header.hero p.lede{font-size:18.5px; color:var(--muted); margin:0 0 8px; max-width:700px}
+
+  section{padding:34px 0; border-top:1px solid var(--line)}
+  section.hero-sec{border-top:0; padding-top:46px}
+  h2{font-size:25px; letter-spacing:-.02em; margin:0 0 6px; scroll-margin-top:24px}
+  h3{font-size:17px; margin:24px 0 6px; letter-spacing:-.01em}
+  p{margin:11px 0}
+  ul,ol{margin:11px 0; padding-left:22px}
+  li{margin:6px 0}
+  .sub{color:var(--muted); font-size:15px; margin:-2px 0 14px}
+  strong{font-weight:660}
+  code{background:#eef3f3; padding:1.5px 6px; border-radius:6px; font-size:13.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+  /* badges — DECISION / THESIS / RISK / OPEN */
+  .badge{display:inline-block; font-size:11px; font-weight:800; padding:2px 9px; border-radius:999px;
+    letter-spacing:.04em; vertical-align:middle; white-space:nowrap}
+  .b-dec{color:var(--dec); background:var(--dec-bg)}
+  .b-thesis{color:var(--thesis); background:var(--thesis-bg)}
+  .b-risk{color:var(--risk); background:var(--risk-bg)}
+  .b-open{color:var(--open); background:var(--open-bg)}
+
+  .legend{display:flex; flex-wrap:wrap; gap:14px; margin:14px 0 0}
+  .legend span.item{font-size:13px; color:var(--muted); display:inline-flex; align-items:center; gap:7px}
+
+  /* track summary cards */
+  .tracks{display:grid; grid-template-columns:1fr; gap:0}
+  .pill-row{display:flex; flex-wrap:wrap; gap:8px; margin:14px 0}
+  .pill{font-size:12.5px; background:#eef3f3; border:1px solid var(--line); border-radius:999px; padding:4px 11px; color:var(--ink)}
+
+  /* a decision/risk/open list item with a leading badge */
+  ul.badged{list-style:none; padding-left:0}
+  ul.badged>li{display:flex; gap:10px; align-items:flex-start; margin:9px 0}
+  ul.badged>li>.badge{flex:none; margin-top:3px}
+
+  .sev{font-size:13px; font-weight:700}
+
+  table{width:100%; border-collapse:collapse; margin:16px 0; font-size:14px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted)}
+  tr:last-child td{border-bottom:0}
+
+  footer{color:var(--muted); font-size:13px; padding-top:24px; border-top:1px solid var(--line); margin-top:8px}
+
+  @media (max-width:880px){
+    .wrap{grid-template-columns:1fr}
+    nav.side{position:static; height:auto; border-right:0; border-bottom:1px solid var(--line)}
+    nav.side a{display:inline-block; margin:2px}
+    main{padding:28px 20px 80px}
+    header.hero h1{font-size:34px}
+  }
+
+  /* ---- inline doc viewer (rendered markdown in a modal overlay) ---- */
+  code.doc-link{cursor:pointer; color:var(--accent); background:var(--accent-soft)}
+  code.doc-link:hover{text-decoration:underline}
+  #docview{position:fixed; inset:0; background:var(--bg); z-index:60; overflow-y:auto; display:none}
+  #docview.open{display:block}
+  #docview .bar{position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:14px;
+    padding:13px 22px; border-bottom:1px solid var(--line); background:rgba(246,249,250,.93);
+    -webkit-backdrop-filter:saturate(180%) blur(8px); backdrop-filter:saturate(180%) blur(8px)}
+  #docview .bar button{font:inherit; cursor:pointer; border:1px solid var(--line); background:var(--panel);
+    padding:7px 14px; border-radius:9px; color:var(--accent); font-weight:600; font-size:14px}
+  #docview .bar button:hover{background:var(--accent-soft)}
+  #docview .bar .fname{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; color:var(--muted)}
+  .md-body{max-width:var(--maxw); margin:0 auto; padding:36px 28px 110px}
+  .md-body h1{font-size:31px; letter-spacing:-.02em; margin:.1em 0 .5em}
+  .md-body h2{font-size:22px; letter-spacing:-.01em; margin:1.4em 0 .35em; padding-top:.7em; border-top:1px solid var(--line)}
+  .md-body h3{font-size:17px; margin:1.3em 0 .25em}
+  .md-body h4{font-size:15px; margin:1.1em 0 .2em}
+  .md-body p{margin:.7em 0}
+  .md-body ul,.md-body ol{padding-left:24px; margin:.55em 0}
+  .md-body li{margin:.32em 0}
+  .md-body code{background:#eef3f3; padding:1.5px 6px; border-radius:6px; font-size:.85em;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .md-body pre{background:#11202a; color:#e7eff1; padding:14px 16px; border-radius:10px; overflow-x:auto; font-size:13px; line-height:1.5}
+  .md-body pre code{background:none; padding:0; color:inherit; font-size:13px}
+  .md-body table{width:100%; border-collapse:collapse; margin:1.1em 0; font-size:14px}
+  .md-body th,.md-body td{border:1px solid var(--line); padding:8px 11px; text-align:left; vertical-align:top}
+  .md-body th{background:#eef3f3; font-weight:660}
+  .md-body hr{border:0; border-top:1px solid var(--line); margin:1.7em 0}
+  .md-body a{color:var(--accent)}
+
+  /* opinionated blockquote callouts — colored by their leading marker */
+  .md-body blockquote{margin:.95em 0; padding:.55em 16px; border-left:4px solid var(--muted);
+    background:#eef3f3; border-radius:0 8px 8px 0; color:#2b3942}
+  .md-body blockquote p{margin:.3em 0}
+  .md-body blockquote.cl-decision{border-left-color:var(--dec); background:var(--dec-bg)}
+  .md-body blockquote.cl-thesis{border-left-color:var(--thesis); background:var(--thesis-bg)}
+  .md-body blockquote.cl-risk{border-left-color:var(--risk); background:var(--risk-bg)}
+  .md-body blockquote.cl-open{border-left-color:var(--open); background:var(--open-bg)}
+  .md-body blockquote .cl-tag{display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:.05em;
+    padding:1px 8px; border-radius:999px; margin-right:6px; vertical-align:middle}
+  .md-body blockquote.cl-decision .cl-tag{color:var(--dec); background:#fff}
+  .md-body blockquote.cl-thesis .cl-tag{color:var(--thesis); background:#fff}
+  .md-body blockquote.cl-risk .cl-tag{color:var(--risk); background:#fff}
+  .md-body blockquote.cl-open .cl-tag{color:var(--open); background:#fff}
+
+  @media (max-width:880px){ .md-body{padding:24px 18px 80px} #docview .bar{padding:11px 16px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="side" id="nav">
+    <div class="brand"><span class="bot">yalp</span></div>
+    <div class="tag">Robot spec — consolidated &amp; navigable</div>
+
+    <div class="grp">Overview</div>
+    <a href="#overview">The Project</a>
+    <a href="#product">Product Track</a>
+    <a href="#technical">Technical Track</a>
+    <a href="#risks">Top Risks &amp; Open Questions</a>
+    <a href="#legend">Badge Legend</a>
+
+    <div class="grp">Product</div>
+    <a class="doc" data-doc="product-vision.md">product-vision.md</a>
+    <a class="doc" data-doc="product-spec.md">product-spec.md</a>
+
+    <div class="grp">Technical</div>
+    <a class="doc" data-doc="architecture.md">architecture.md</a>
+    <a class="doc" data-doc="hardware.md">hardware.md</a>
+    <a class="doc" data-doc="software-spec.md">software-spec.md</a>
+    <a class="doc" data-doc="roadmap.md">roadmap.md</a>
+
+    <div class="grp">Archive</div>
+    <a class="doc" data-doc="initial-plan.md">initial-plan.md</a>
+  </nav>
+
+  <main>
+  <div class="col">
+
+    <!-- HERO -->
+    <section class="hero-sec" id="overview">
+      <header class="hero">
+        <p class="eyebrow">Build-and-learn robot · v1</p>
+        <h1><span class="bot">yalp</span> — a clever talking pet that sees, chats &amp; moves</h1>
+        <p class="lede">A from-scratch hobby robot — a Raspberry&nbsp;Pi&nbsp;5 brain, a USB camera, and two
+        differential-drive wheels — that you talk to in plain language. It interprets your intent, moves and looks
+        around under its own power, and tells you what it sees.</p>
+      </header>
+      <p>This page is the single, self-contained home for the whole spec. The depth lives in seven embedded
+      documents — click any sidebar link or any <code>backticked-filename.md</code> in the text to read it
+      <strong>inline</strong>, no page ever leaves this file. Below is a skimmable consolidation: what yalp is, the
+      headline decisions on each track, and the risks most likely to bite.</p>
+      <div class="legend" id="legend-top">
+        <span class="item"><span class="badge b-dec">DECISION</span> a settled call</span>
+        <span class="item"><span class="badge b-thesis">THESIS</span> a guiding conviction</span>
+        <span class="item"><span class="badge b-risk">RISK</span> a known hazard</span>
+        <span class="item"><span class="badge b-open">OPEN</span> still undecided</span>
+      </div>
+    </section>
+
+    <!-- PRODUCT TRACK -->
+    <section id="product">
+      <h2>Product Track</h2>
+      <p class="sub">What yalp does from the user's seat. Full detail in <code>product-vision.md</code> and
+      <code>product-spec.md</code>.</p>
+      <p>You drive yalp with plain language, not a fixed keyword list: you say something, it works out what you mean,
+      and it acts and/or reports back. The honest mental model — and the scope guardrail — is <strong>"a clever
+      talking pet that sees, chats, and moves toward things, not a butler that fetches."</strong> Capabilities sort
+      into three tiers by how they <em>feel</em>: snappy local reflexes (follow, come here, back up, spin, stop,
+      don't-hit-things), cloud-powered talk &amp; visual Q&amp;A ("what do you see?", "read this sign", tell a story),
+      and a clumsy-but-real explore-and-report ("go around the corner and tell me what's there").</p>
+      <p>v1 is deliberately scoped for the <strong>builder's learning</strong>, not yet the son's delight: cardboard
+      is fine, and looks, durability, and child-safety are explicit non-goals deferred to a later, sturdier robot-pet
+      build that reuses v1's brain. The headline product calls:</p>
+      <ul class="badged">
+        <li><span class="badge b-dec">DECISION</span> v1 is <strong>text-first</strong>; voice (STT in, TTS out) is a deferred, separate track so the audio rabbit hole never blocks the core loop. <code>product-vision.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> Reactive movement <em>plus</em> talk &amp; visual Q&amp;A are the heart of v1 — nail those two and v1 is already a success. <code>product-spec.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> Explore-and-report ships in its <strong>clumsy, stop-go form</strong>; smooth continuous narration is a named post-v1 stretch goal. <code>product-spec.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> Named-place navigation, manipulation, and stairs/rough-terrain/off-WiFi are <strong>cut</strong> — and yalp must <strong>decline gracefully</strong> instead of flailing. <code>product-vision.md</code></li>
+      </ul>
+      <div class="pill-row">
+        <span class="pill">Tier 1 — reactive, instant, local</span>
+        <span class="pill">Tier 2 — talk &amp; VQA, a beat</span>
+        <span class="pill">Tier 3 — explore &amp; report, stop-go</span>
+      </div>
+    </section>
+
+    <!-- TECHNICAL TRACK -->
+    <section id="technical">
+      <h2>Technical Track</h2>
+      <p class="sub">How it's built. Full detail in <code>architecture.md</code>, <code>software-spec.md</code>,
+      <code>hardware.md</code>, and <code>roadmap.md</code>.</p>
+      <p>yalp runs on <strong>two control loops with different clocks</strong>. A <strong>fast reactive layer</strong>
+      lives entirely on the Pi (~10–30&nbsp;Hz, no network) and owns the motors and safety in real time; a
+      <strong>slow deliberative layer</strong> in the cloud (~seconds/step) turns your words plus one still photo into
+      a high-level intent. The cloud is an LLM <em>agent</em> handed a bounded menu of robot abilities — most of which
+      are <em>modes for the reactive layer</em>, not direct motor twitches — which is what makes "do whatever I tell
+      it" tractable on cheap hardware. The two loops exchange exactly two message shapes (<code>RobotState</code> up,
+      <code>Intent</code> down), and collision-stop sits at the very top of the reactive tick where no command can
+      out-vote it.</p>
+      <p>The build strategy is <strong>brain-on-the-laptop-first</strong> behind a hardware-abstraction seam: only
+      motor-control and camera-capture ever cross over to the Pi. The bot is a ~$335 project (the ~$200 brain — a
+      CanaKit Pi&nbsp;5 kit + Logitech C270 — is already ordered), with a cardboard chassis, zero soldering, and two
+      separate power supplies sharing a common ground. The headline technical calls:</p>
+      <ul class="badged">
+        <li><span class="badge b-dec">DECISION</span> Split control into a <strong>local fast reactive layer</strong> and a <strong>cloud slow deliberative layer</strong> — the single most important architectural decision; everything follows from it. <code>architecture.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> Collision-stop is a <strong>software priority</strong> at the top of the reactive loop (plus a watchdog); a hardware cutoff is deferred to the kid version. <code>architecture.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> <strong>Stills, not video</strong>, and <strong>tiered models</strong> (cheap per-step VLM, big model only on hard asks) keep the cloud cheap and fast enough to be fun. <code>software-spec.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> Skip the AI&nbsp;HAT/NPU (CPU + cloud); differential drive with a DRV8833/TB6612, <strong>not</strong> an L298N. <code>hardware.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> New intents <strong>replace, never queue</strong>, and <code>SAFE_STOP</code> is sticky — the body always reflects the freshest human instruction, and never lurches out of a wall on its own. <code>software-spec.md</code></li>
+      </ul>
+    </section>
+
+    <!-- RISKS & OPEN QUESTIONS -->
+    <section id="risks">
+      <h2>Top Risks &amp; Open Questions</h2>
+      <p class="sub">The highest-severity items from the risk register in <code>roadmap.md</code> §4–§5. These are
+      where to spend worry first.</p>
+
+      <h3>Risks ranked by what will actually bite</h3>
+      <ul class="badged">
+        <li><span class="badge b-risk">RISK</span> <span class="sev">🔴 Critical —</span> <strong>The loop-to-loop interface is the hard part and the least specified.</strong> If motors and the agent loop are built against different mental models of "a mode," step&nbsp;5 becomes a rewrite. Mitigation: design the contract first, laptop-only, in parallel. <code>architecture.md</code> · <code>software-spec.md</code></li>
+        <li><span class="badge b-risk">RISK</span> <span class="sev">🔴 Critical —</span> <strong>Person-following on a Pi&nbsp;5 with no NPU.</strong> A real person detector may not hit usable fps on CPU, so follow-mode could stutter and lose a moving target. Mitigation: an early fps spike as a go/no-go gate before any follow code. <code>software-spec.md</code></li>
+        <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>A single front ultrasonic is thin.</strong> Narrow cone, side/rear blind spots, silent failure on glass and angled surfaces. Mitigation: define collision-stop priority + post-collision behavior; budget 2–3 sensors. <code>hardware.md</code></li>
+        <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>No encoders = open-loop control.</strong> Distance and heading are guesses; the robot drifts and "back up 30&nbsp;cm" is dead reckoning. Mitigation: accept open-loop for v1; lean on vision feedback in follow mode. <code>hardware.md</code></li>
+        <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>Power / brownout.</strong> Motor inrush and flyback drag the shared rail down and the Pi reboots — the #1 cause of mysterious resets. Mitigation: separate supplies + common ground, caps, and a bring-up gate before motors run under the Pi. <code>hardware.md</code></li>
+      </ul>
+
+      <h3>Open questions on the critical path</h3>
+      <ul class="badged">
+        <li><span class="badge b-open">OPEN</span> <strong>Final sensor count</strong> — one front HC-SR04 for v1, or budget 2–3 (front + corners) to cover the blind spots from the start? <code>hardware.md</code></li>
+        <li><span class="badge b-open">OPEN</span> <strong>Follow-mode tracker choice</strong> — full person detector, lightweight blob/color tracker, or track-by-detection hybrid? Pending the fps spike. <code>software-spec.md</code></li>
+        <li><span class="badge b-open">OPEN</span> <strong>Model / provider choice</strong> — which VLM for the per-step loop vs. the escalation model, and what's the tiering threshold? <code>software-spec.md</code></li>
+        <li><span class="badge b-open">OPEN</span> <strong>Voice timing &amp; far-field STT</strong> — when does the voice track start, and is noisy far-field speech in scope for v1 or punted to the kid version? <code>product-spec.md</code></li>
+        <li><span class="badge b-open">OPEN</span> <strong>How much should v1 anticipate the kid version?</strong> Carry the software/brain forward, treat the body as throwaway — but where exactly is the line? <code>product-vision.md</code></li>
+        <li><span class="badge b-open">OPEN</span> <strong>Post-collision behavior</strong> — after a collision-stop fires, back off, rotate to find clear space, or halt and ask the brain? <code>architecture.md</code></li>
+      </ul>
+    </section>
+
+    <!-- LEGEND -->
+    <section id="legend">
+      <h2>Badge Legend &amp; Document Map</h2>
+      <p class="sub">Every doc uses the same four opinionated markers as blockquotes (e.g.
+      <code>&gt; **DECISION —** ...</code>). They render as colored callouts inside the docs and as pills here.</p>
+      <div class="legend">
+        <span class="item"><span class="badge b-dec">DECISION</span> a call we've made and are building to</span>
+        <span class="item"><span class="badge b-thesis">THESIS</span> a guiding belief that shapes choices</span>
+        <span class="item"><span class="badge b-risk">RISK</span> a known hazard with a mitigation</span>
+        <span class="item"><span class="badge b-open">OPEN</span> a question still to be settled</span>
+      </div>
+      <h3>The documents</h3>
+      <table>
+        <tr><th>Track</th><th>Doc</th><th>What it is</th></tr>
+        <tr><td>Product</td><td><code>product-vision.md</code></td><td>Why yalp exists, who it's for, the two horizons, and the scope envelope.</td></tr>
+        <tr><td>Product</td><td><code>product-spec.md</code></td><td>What yalp does from the user's seat — the capability catalog, acceptance scenarios, latency feel.</td></tr>
+        <tr><td>Technical</td><td><code>architecture.md</code></td><td>The two-loop concept, the agent/tool model, and the contract between thinking and reflexes.</td></tr>
+        <tr><td>Technical</td><td><code>hardware.md</code></td><td>Bill of materials, power architecture, drivetrain, sensing, and pin planning.</td></tr>
+        <tr><td>Technical</td><td><code>software-spec.md</code></td><td>The two-layer runtime, the loop-to-loop wire contract, person-tracking, config.</td></tr>
+        <tr><td>Technical</td><td><code>roadmap.md</code></td><td>Build sequencing, the gates, the risk register, and the consolidated open questions.</td></tr>
+        <tr><td>Archive</td><td><code>initial-plan.md</code></td><td>The original brain-dump the six specs were factored out of — kept for provenance.</td></tr>
+      </table>
+      <footer>
+        Self-contained, offline-first, zero-dependency spec hub · the <code>.md</code> files are the source of truth —
+        edit them, run <code>python3 build.py</code>, reload. Badges mark what's decided vs. believed vs. risky vs. open.
+      </footer>
+    </section>
+
+  </div>
+  </main>
+</div>
+
+<!-- inline doc viewer -->
+<div id="docview" aria-hidden="true">
+  <div class="bar">
+    <button id="docback">← Back to the overview</button>
+    <span class="fname" id="docname"></span>
+  </div>
+  <div class="md-body" id="docbody"></div>
+</div>
+
+<!-- embedded docs (populated by build.py) -->
+<div id="docstore" hidden>
+<!--DOCS:START-->
+<script type="text/markdown" data-name="product-vision.md">
+# Product Vision — yalp
+
+> Why yalp exists, who it's for, and what is in and out of scope. The product-level north star; hardware, architecture, and code live in the sibling specs.
+
+---
+
+## 1. What yalp is
+
+yalp is a from-scratch hobby robot — a Raspberry Pi 5 "brain" with a USB camera and two
+differential-drive wheels — that you talk to in plain language. It interprets your intent,
+moves and looks around under its own power, and tells you out loud what it sees.
+
+The mental model that keeps scope honest:
+
+> **THESIS —** yalp is *a clever talking pet that sees, chats, and moves toward things* —
+> not a butler that fetches. Every scoping decision in this doc flows from that one image.
+> If a request fits "a pet that notices and reacts," it's probably in scope. If it needs
+> hands, a map, or stairs, it isn't.
+
+This is a deliberate build-from-scratch project. There is no kit, no fixed dog/car/sphere
+shape, and no closed list of keyword commands — full creative freedom over both the body and
+the behavior is the point, not an accident of being cheap.
+
+For the parts, wiring, and control loops behind this summary, see `hardware.md`,
+`architecture.md`, and `software-spec.md`. For the concrete feature list and behaviors, see
+`product-spec.md`. For sequencing and what ships when, see `roadmap.md`.
+
+---
+
+## 2. Vision & goals
+
+The dream, stated plainly:
+
+- **Talk to it naturally.** You say *"follow me,"* *"go check around the corner and tell me
+  what's there,"* or *"what do you see?"* — and it understands and acts. Intent, not a fixed
+  vocabulary of keyword commands.
+- **It sees and reports back.** It looks at a scene and describes it to you in spoken language.
+- **It moves through the world** under its own power and reacts to what's around it.
+- **It's not locked into a kit.** Full freedom over form and behavior is a first-class goal.
+  Building from scratch is the project, not a constraint to be apologized for.
+- **v1 is a learning project.** Aesthetics, durability, and polish are explicitly *out of
+  scope* for the first iteration. Get the core loop working; make it nice later.
+- **Long-term it becomes a robot pet** — a delightful, kid-friendly companion for the
+  builder's son (age 5–8). At that age he is the audience and co-pilot, not the operator.
+
+> **DECISION —** The "dream" is voice-first — talking to a robot and having it talk back is
+> the whole magic. But v1 is built **text-first**: the full see-think-move loop is proven over
+> typed commands before a mic and speaker are bolted on. Voice is a real goal, deliberately
+> deferred to a later track so the audio rabbit hole (mic quality, STT/TTS latency, wake-words)
+> never blocks the core loop. See `roadmap.md` and `product-spec.md`.
+
+> **THESIS —** The thing worth being proud of in v1 is the *interaction*, not the hardware:
+> a robot you address in plain English that genuinely sees and moves. A cardboard chassis that
+> nails that beats a beautiful chassis that only does keyword tricks.
+
+---
+
+## 3. Audience & the two horizons
+
+yalp has two distinct users separated in time. Conflating them is the fastest way to over-build
+v1, so they are scoped separately and explicitly.
+
+| | **v1 — the learning build** | **Long-term — the robot pet** |
+|---|---|---|
+| **Primary user** | The builder (an adult, hands-on) | The son, age 5–8 |
+| **Their role** | Operator *and* developer | Audience / co-pilot — never the mechanic |
+| **What matters most** | The core loop works; learning happens | "It just works," safely, every time |
+| **Looks** | Out of scope — cardboard is fine | In scope — cute and characterful |
+| **Durability** | Out of scope — flaky is acceptable | In scope — survives a child's handling |
+| **Safety** | Adult-supervised bench/floor use | First-class: no small parts, safe battery, no pinch points |
+| **Reliability bar** | "Works when I babysit it" | "Works when a 6-year-old is alone with it" |
+| **Status** | **This is what we're building now** | **Post-v1, a later sturdier iteration** |
+
+> **DECISION —** v1 optimizes for the *builder's* learning, not the *son's* delight. Looks,
+> durability, and child-safety are explicit non-goals for v1 (see §5) and become first-class
+> only in the post-v1 pet. This is a scoping choice, not an oversight.
+
+> **RISK —** The two horizons can quietly merge — "since I'm building it anyway, let me make
+> it cute and kid-proof now." That doubles the v1 surface area and stalls the core loop. Resist.
+> The kid version is a *second* build that reuses v1's brain, not a polished v1.
+
+---
+
+## 4. The guiding principle — what "do whatever I tell it" really means
+
+The AI can *understand* almost any request. The robot can only *do* what its body and the code
+allow. The honest envelope for a small wheeled bot sorts every request into three product-level
+tiers — framed here by how the experience *feels*, not by how it's implemented (the fast-local /
+slow-cloud split that delivers these tiers is `architecture.md`'s job).
+
+| Tier | What it feels like | Example requests | v1 verdict |
+|---|---|---|---|
+| **In scope & satisfying** | Snappy, alive, reliable | "follow me," "come here," "back up," "spin," "stop," react to a face; *and* "what do you see?", "what color is this?", "read this sign," "is that a cat or a dog?", tell a story, play a game | **Ship it** |
+| **In scope but clumsy** | Works, but halting — thinks for a few seconds per step | "go around the corner and tell me what's there," "explore this room and describe it" | **Ship it, good-enough** |
+| **Out of scope for v1** | Needs sensors, hands, or terrain yalp doesn't have | "go to the kitchen" (named-place navigation), "pick up that toy / bring me the remote" (manipulation), stairs / rough terrain / outdoors far from WiFi | **Explicitly cut** |
+
+### 4.1 In scope & satisfying
+
+Two flavors, both of which feel good in v1:
+
+- **Reactive movement** — following, coming, backing up, spinning, stopping, reacting to faces
+  and gestures, not driving into walls. This feels *snappy and alive* because it doesn't wait on
+  the cloud to think.
+- **Talk & visual Q&A** — answering spoken (eventually) or typed questions, describing a scene,
+  reading a sign, identifying an object, telling stories, playing games. It's a camera and an
+  LLM with a voice; this isn't time-critical, so a little latency doesn't hurt.
+
+> **DECISION —** These two are the heart of v1. If yalp does *only* reactive movement plus talk
+> and visual Q&A — and nothing in the lower tiers — v1 is already a success.
+
+### 4.2 In scope but clumsy (good enough for v1)
+
+"Go around the corner and report" / "explore this room and describe it." This genuinely works,
+but it moves haltingly — a few seconds of "thinking" between each small step.
+
+> **DECISION —** Explore-and-report ships in v1 in its *clumsy* form. Halting, bursty motion is
+> an accepted v1 trade-off, not a bug to fix before launch. Making it *smooth* (continuous
+> narration and decisions) is a named post-v1 stretch goal — see `roadmap.md`.
+
+### 4.3 Out of scope for v1
+
+> **DECISION —** Three capabilities are cut from v1 because cheap rolling hardware can't do them
+> well, and faking them produces a frustrating toy:
+> - **Reliable named-place navigation** ("go to the kitchen") — needs real mapping/SLAM and
+>   better sensors than a single ultrasonic. Out.
+> - **Manipulation / grasping** ("pick up that toy," "bring me the remote") — needs an arm and
+>   gripper and far more control. Out.
+> - **Stairs, rough terrain, and going outside far from WiFi** — wrong drivetrain, wrong
+>   connectivity assumptions. Out.
+
+> **RISK —** Because the AI *talks* as if it can do anything, users (especially a child later)
+> will ask for out-of-scope things and believe yalp simply failed. The product must **decline
+> gracefully and honestly** — "I can't pick things up, but I can go look" — rather than try and
+> flail. Graceful refusal is a product requirement, not a nicety. (Behavior detailed in
+> `product-spec.md`.)
+
+---
+
+## 5. Success criteria for v1
+
+v1 is "done enough to be proud of" when, on the bench and the living-room floor, yalp can:
+
+1. **See and tell.** Point it at a scene, ask "what do you see?", and get a correct, spoken-style
+   description back. *(This is the magic moment — and it arrives early.)*
+2. **Take plain-language commands.** Give it an intent in natural language and watch it pick the
+   right high-level action — no fixed keyword list.
+3. **Move and react safely.** Drive, turn, and follow a person, with a collision-stop reflex that
+   never lets it drive into a wall — even mid-"thought."
+4. **Explore and report.** Send it "around the corner" and have it come back with a description of
+   what was there, clumsy-but-working.
+5. **Decline gracefully.** When asked for something out of scope, say so plainly instead of
+   flailing.
+
+> **THESIS —** Hitting items 1–3 alone already justifies the build as a learning project. Items
+> 4–5 are what make it feel like *yalp* and not a demo.
+
+### 5.1 Explicit non-goals for v1
+
+To protect the core loop, v1 deliberately does **not** aim for:
+
+- **A nice-looking or durable body.** Cardboard, hot glue, and zip ties are fine.
+- **Child-readiness.** No child-safety hardening, no small-parts/battery childproofing yet — v1 is
+  adult-supervised. (These become first-class in the post-v1 pet — §3.)
+- **Voice in v1's critical path.** Text-first; mic and speaker are a separate later track.
+- **Smooth, continuous motion.** Halting explore-and-report is accepted (§4.2).
+- **Named-place navigation, manipulation, or off-road/outdoor operation.** Cut (§4.3).
+- **On-device AI / zero cloud dependency.** v1 leans on cloud vision-language models; local
+  inference is a post-v1 consideration. (Rationale in `architecture.md`.)
+- **Long battery life or unattended operation.** ~1–1.5 hours per charge, supervised, is fine.
+
+---
+
+## 6. Open product questions
+
+> **OPEN —** How much should the v1 learning build *anticipate* the eventual kid version? Picking
+> reusable abstractions (the brain, the command vocabulary) is cheap foresight; building cute or
+> child-proof hardware now is the over-build §3 warns against. Where exactly is the line? Leaning
+> toward: design the *software/brain* to carry forward, treat the *body* as fully throwaway.
+
+> **OPEN —** Voice is deferred but the *dream* is voice-first. Do we frame and message yalp as a
+> voice product from day one (text is just scaffolding), or as a text product that later grows a
+> voice? This shapes how the command surface and persona are designed even before audio exists.
+> See `roadmap.md` and `product-spec.md`.
+
+> **OPEN —** What is yalp's *personality*? "A clever talking pet" implies a character — name,
+> voice, how it refers to itself, how it reacts. Deferred until the loop works, but the eventual
+> kid version lives or dies on it, and early choices (how it phrases descriptions and refusals)
+> quietly set the tone. Owned here once §5's core loop is proven.
+
+> **OPEN —** What's the single demo that proves v1 to *the builder* — and later, the moment that
+> makes *the son* light up? They may be different (a clean "explore-and-report" run vs. "it
+> followed me and said hello"). Naming both sharpens what each horizon is really optimizing for.
+
+</script>
+<script type="text/markdown" data-name="product-spec.md">
+# yalp — Product Spec
+
+> What yalp does from the user's seat: the commands it understands, how it behaves, how fast it feels, and where it honestly falls short in v1. Behavior, not implementation.
+
+---
+
+## 1. Interaction Model
+
+yalp is a talking, seeing, rolling robot you drive with plain language. The loop is always the same three beats:
+
+1. **You say something** — in v1 you *type* it from a laptop over the network.
+2. **It works out what you mean** — not a fixed keyword list; it interprets intent ("follow me," "what's around the corner?," "read this sign").
+3. **It acts and/or reports back** — it moves, looks, answers, or some combination, then waits for the next thing.
+
+There is no app to learn and no command syntax to memorize. The mental model for the user is a **clever talking pet that sees, chats, and moves toward things** — not a butler that fetches named objects from named rooms. See `product-vision.md` for why that framing is the whole point.
+
+### A turn, end to end
+
+Interaction is turn-based, like a chat: you send one thing, yalp does it and replies, then waits. A turn can be pure talk (*"tell me a joke"*), pure motion (*"spin"*), or **both at once** — *"go forward and tell me what you see"* mixes a Tier-1 move with a Tier-2 report in a single command, and yalp handles the blend without you having to split it up. There is no always-listening mode in v1; nothing happens until you send a command, and `stop` ends whatever is in flight.
+
+> **DECISION —** v1 is **text-first**. You type commands from your laptop and read its replies as text. Voice — speech-to-text in, text-to-speech out — is a **deferred, separate track**, bolted on only after the full typed loop works end to end. Treating voice as its own project (mic quality, audio over USB, STT/TTS latency, wake-words) keeps the voice rabbit hole from blocking the core magic. See `roadmap.md`.
+
+> **THESIS —** yalp has **two speeds**, and the user feels both. Reflexes (stop, follow, don't-hit-things) are **instant** because they run locally; thinking (understanding a request, describing a scene) takes **a beat** because it goes to the cloud. Every expectation in this doc flows from that split. The mechanism lives in `architecture.md`; here we only describe how it *feels*.
+
+---
+
+## 2. Capability Catalog
+
+Capabilities come in three tiers, ordered by how snappy and reliable they feel. Tier 1 is the fast local layer; Tier 2 is cloud conversation; Tier 3 is cloud deliberation driving the body, which is real but clumsy in v1.
+
+For every capability: the **user-facing behavior**, the **latency feel**, and the **v1 quality bar** (what "good enough" means for the first build).
+
+### Tier 1 — Reactive movement (fast, local, feels alive)
+
+These respond immediately and keep responding without waiting on the network.
+
+| Capability | User-facing behavior | Latency feel | v1 quality bar |
+|---|---|---|---|
+| **Stop** | Halts the wheels at once, mid-command if needed. | Instant — top priority. | Always works, every time, even while doing something else. |
+| **Forward / left / right** | Drives or steers the named way until told to stop or something blocks it. | Instant. | Direct and responsive; collision-stop always underneath. |
+| **Back up** | Reverses a short, timed distance. | Instant. | Short and controlled; not guarded by a rear sensor (v1 senses forward only). |
+| **Spin / turn in place** | Rotates left or right on the spot. | Instant. | Turns reliably; angle is approximate, not degree-accurate. |
+| **Dance** | Runs a short, canned playful motion. | Instant. | A fixed fun routine — purely for delight. |
+| **Come here** | Drives toward the person it sees until close, then stops. | Instant start, continuous. | Reaches you across a clear room in decent light; needs line of sight, not a homing beacon. |
+| **Follow me** | Locks onto the nearest person and drives to keep them centered and at distance. | Instant and continuous — tracks a *moving* target without lag. | Keeps up with a walking person in good light; in clutter or low light it loses the lock and stops rather than chasing the wrong thing. |
+| **React to faces / gestures** | Notices a face or simple gesture and responds (orients, acknowledges). | Near-instant. | Detects faces in good light; gesture vocabulary is small and best-effort. |
+| **Basic obstacle avoidance** | Won't drive into what's directly ahead; stops or refuses. | Instant reflex. | Reliably stops for obstacles in the forward cone; **not** 360° aware. |
+
+### Tier 2 — Talk & visual Q&A (cloud, latency is fine)
+
+These take a beat but the wait doesn't hurt — you're asking, not steering.
+
+| Capability | User-facing behavior | Latency feel | v1 quality bar |
+|---|---|---|---|
+| **Answer questions** | You ask anything; it answers conversationally. | A beat (one cloud round-trip). | It's a language model with a speaker — answers are as good as the model. |
+| **Tell stories / play games** | Open-ended chat, storytelling, simple word games. | A beat per turn. | Engaging back-and-forth; no guarantee of memory across separate sessions in v1. |
+| **"What do you see?"** | Snaps a photo and describes the scene back. | A beat. | A solid one-to-two-sentence description of what's actually in frame. |
+| **"What color is this?" / "is that a cat or a dog?"** | Answers a specific visual question about what's in front of it. | A beat. | Reliable on clear, well-lit subjects close to the camera. |
+| **"Read this sign"** | Reads legible text it can see. | A beat (may escalate to a stronger model). | Reads clear, printed text held steady in frame; struggles with small, skewed, or faint text. |
+
+### Tier 3 — Explore-and-report (cloud-in-the-loop, works but halting)
+
+| Capability | User-facing behavior | Latency feel | v1 quality bar |
+|---|---|---|---|
+| **"Go around the corner and tell me what's there"** | Drives a short exploration, looks as it goes, then reports what it found. | **Stop-go** — moves a step, thinks a few seconds, moves again. | It works and returns a real description. It is *halting, not smooth*, and it does **not** promise to reach a named place. |
+
+> **THESIS —** Tier 3 is the headline demo *and* the honest weak spot. It proves "go look and tell me" is possible on cheap hardware — and it visibly stutters while doing it. Sell it as "watch it think," not "watch it glide."
+
+---
+
+## 3. Acceptance Scenarios
+
+Concrete "when I do X, it does Y / says Z" cases that define success. Each one pins down a capability.
+
+- **Stop wins.** When I type `stop` while it's mid-drive, the wheels halt within a fraction of a second. *(Tier 1: Stop.)*
+- **It follows a moving me.** When I type `follow me` and walk across a lit room, it pivots and drives to stay pointed at me at a roughly constant distance; when I stand still, it stops. *(Tier 1: Follow me.)*
+- **It refuses to crash.** When I type `go forward` while it faces a wall, it drives, then stops on its own before contact and tells me it's blocked — it never pushes into the wall. *(Tier 1: Obstacle avoidance / safety.)*
+- **It describes the room.** When I type `what do you see?`, within a few seconds it replies with a sentence or two naming the main things in front of it. *(Tier 2: VQA.)*
+- **It reads a sign.** When I hold a hand-printed sign reading `HELLO` in front of it and type `read this sign`, it replies `HELLO`. *(Tier 2: Read text.)*
+- **It tells a story.** When I type `tell me a story about a robot`, it tells one. *(Tier 2: Talk.)*
+- **It comes to me.** When I type `come here` from across a clear, lit room, it turns toward me and drives over until it's close, then stops on its own. *(Tier 1: Come here.)*
+- **It handles a combined command.** When I type `go forward and tell me what you see`, it drives forward and, a beat later, reports what's now in front of it — one command, both a move and a description. *(Tier 1 + Tier 2.)*
+- **It explores, haltingly.** When I type `go around the corner and tell me what's there`, it drives in halting steps, pauses to think, and finally reports something like *"I see a couch and a doorway"* — taking maybe a minute, not a smooth glide. *(Tier 3: Explore-and-report.)*
+
+If all of these pass, v1 has hit its product bar. See `roadmap.md` for the build order that gets here.
+
+---
+
+## 4. UX & Latency Expectations
+
+yalp deliberately feels like two different things at once, and that's a feature, not a bug.
+
+| Tier | What you're doing | How it should feel | If it feels wrong |
+|---|---|---|---|
+| **1 — Reactive** | Steering, stopping, following | Immediate, like a toy | Any lag here is a bug — Tier 1 must never wait on the cloud. |
+| **2 — Talk & VQA** | Asking, chatting, "what's this?" | A short, unremarkable pause | A multi-second wait is expected and fine — you're conversing, not driving. |
+| **3 — Explore** | "Go look and report" | Visibly stop-go | Smooth motion would be *nice* but isn't promised in v1 (see below). |
+
+### Why some things feel instant
+
+Reflexes — stop, follow, steer, don't-hit-things — run **on the robot itself**, with no network in the path. They respond as fast as you'd expect a toy to. This is what keeps yalp feeling *alive* rather than laggy. The "how" is in `architecture.md`; from the user's side, just expect Tier 1 to be immediate.
+
+### Why some things take a beat
+
+Anything that requires *understanding* — a question, a scene description, a high-level command — makes a round trip to a cloud model. That's a few seconds. For asking and answering, the wait is unremarkable. The trade is intentional: it buys real intelligence on cheap hardware.
+
+### Why explore-and-report stutters
+
+Tier 3 chains many "think" steps together while the robot moves, so the delays stack up into visible stop-go motion.
+
+> **RISK —** Explore-and-report is **stop-go by nature** in v1: drive a little, freeze a few seconds to think, drive a little more. A user expecting a smooth roving robot will be underwhelmed. Set expectations up front — *"it's thinking out loud with its feet"* — or the feature reads as broken. The smooth, continuously-narrating version is a deferred upgrade; see `roadmap.md`.
+
+> **RISK —** Between thinking bursts, the robot is steering on local reflexes alone, not fresh cloud judgment. That's safe (the collision-stop reflex never sleeps — see §5), but it means yalp can pause facing the "wrong" way or describe a scene a beat after it's changed. Acceptable for v1; worth saying out loud so it doesn't feel like a bug.
+
+---
+
+## 5. Safety — from the user's point of view
+
+The one promise yalp makes about its body: **it should never drive into things.**
+
+- **Collision-stop overrides commands.** If something is too close ahead, the wheels stop — even if you just told it to go forward. A movement command is a *request*; the don't-crash reflex is *not* negotiable and is never gated behind the thinking layer.
+- **It fails safe, not wild.** If the network drops or the cloud is slow, yalp simply stops taking new high-level commands. It does not lurch, spin, or keep driving blind — the reflex layer just holds it still.
+- **You can always stop it.** `stop` is the highest-priority command and works at any time.
+
+The user only needs to trust those three things. *How* they're guaranteed — the always-on local reflex loop and the forward distance sensor — lives in `architecture.md` and `hardware.md`.
+
+> **RISK —** v1 senses obstacles in a **forward cone only**. It can still back into or clip something to its side or rear, because there's no sensor there yet. Don't oversell "it won't hit anything" — the honest claim is "it won't drive *forward* into things." Wider awareness is a post-v1 sensor upgrade in `roadmap.md`.
+
+---
+
+## 6. Out of Scope for v1 — and Open Questions
+
+The capability tiers cut both ways: the same line that says what's *in* says what's *out*. v1 deliberately does **not** promise:
+
+| Not in v1 | Why | Where it lives |
+|---|---|---|
+| Navigation to *named* places — "go to the kitchen" | Needs real mapping/SLAM and better sensors than cheap rolling hardware has. | `roadmap.md` |
+| Manipulation — "pick up that toy," "bring me the remote" | Needs an arm and gripper; yalp has wheels and a camera, nothing to grasp with. | out of project scope for v1 |
+| Stairs, rough terrain, roaming far from WiFi | Differential-drive-on-a-flat-floor robot; the thinking layer needs the network. | `roadmap.md` |
+| Smooth, continuously-narrating exploration | Real-time streaming multimodal is a heavier, pricier integration. | `roadmap.md` |
+| Degree-accurate or distance-accurate motion | v1 motion is approximate and un-odometered by design. | `architecture.md` |
+| 360° / rear / side obstacle awareness | One forward sensor in v1 (see §5). | `hardware.md` |
+| Voice in and out | Deferred separate track; v1 is text-first (§1). | `roadmap.md` |
+
+Promising any of these would set the user up to be disappointed. The honest pitch is the Tier 1–3 catalog above and nothing beyond it.
+
+### Open questions
+
+> **OPEN —** How kid-friendly should the v1 *command set* be? v1's operator is the builder (me), so terse, literal commands are fine — but the long-term audience is a 5–8-year-old who's a co-pilot, not an operator. Do we shape the v1 vocabulary toward that now, or keep v1 developer-facing and design the kid command set fresh later? Leaning toward the latter; revisit in `product-vision.md`.
+
+> **OPEN —** Far-field voice on a noisy floor is genuinely hard — a kid talking across a room with a TV on is a tough audio problem, not a quick add-on. v1 sidesteps it by being text-first, but the kid version can't. Defer the detail (mic array vs. single mic, wake-word, noise handling) to `roadmap.md` and `software-spec.md` rather than pretending it's solved.
+
+> **OPEN —** Should yalp remember anything between sessions — names, preferences, past games — or start fresh each time? v1 assumes stateless. Persistence is a personality question worth settling before the kid version; see `product-vision.md`.
+
+</script>
+<script type="text/markdown" data-name="architecture.md">
+# yalp — Technical Architecture
+
+> The conceptual backbone of yalp: how a cloud "brain" and an on-board "spinal cord" split the work so the robot stays smart, responsive, and safe at the same time. The two-loop split, the agent/tool model, and the contract between thinking and reflexes. Interface schemas live in `software-spec.md`.
+
+---
+
+This document defines the **concepts and boundaries** of yalp's control system. It is deliberately schema-free: the exact tool list, message formats, and intent payloads live in `software-spec.md`. Read this first to understand *why* the system is shaped the way it is, then read `software-spec.md` for the concrete contract. Hardware choices that this design leans on are in `hardware.md`; build sequencing is in `roadmap.md`; the scope envelope is in `product-spec.md`.
+
+## 1. The Core Idea: Two Loops, Not One
+
+yalp runs on **two control loops with different clocks**, not a single pipeline. They are different because the two halves of the job have fundamentally different time budgets.
+
+- **The fast reactive layer** lives entirely on the Pi, runs at **~10–30 Hz**, and never touches the network. It is reflex and habit: stop before you hit something, keep the person centered, keep driving until a condition flips. It is dumb on purpose, and it is always running.
+- **The slow deliberative layer** lives in the **cloud** and runs at **~seconds per step**. It calls a cloud vision-language model to turn speech and a photo into a high-level intent, pick a mode/goal, describe what the camera sees, and talk back. It is smart, expensive, and laggy.
+
+The deliberative layer decides *what to do*. The reactive layer decides *how to keep doing it safely right now*. The cloud sets the goal; the local loop drives the body and refuses to hurt it.
+
+> **DECISION —** Split control into a local fast reactive layer (~10–30 Hz, no network) and a cloud slow deliberative layer (~seconds/step). The reactive layer owns the motors and safety in real time; the deliberative layer only sets goals and modes. This split is the single most important architectural decision in v1 and everything else follows from it.
+
+### Why the split is non-negotiable
+
+A single cloud-routed loop has a fatal flaw: every decision takes a 2–3 second round trip (capture → upload → model → response). During those seconds the robot would be **blind and uncontrolled** — coasting on its last command with nothing watching the ultrasonic. The photo was taken before the robot moved, the answer arrives after it has already coasted forward, and there is no reflex in between. That is precisely how hobby bots drive into walls. Keeping reflexes local closes that window: the body is *never* waiting on the cloud to avoid a collision or to keep tracking a moving target. The thinking happens in bursts; the body keeps moving and stays safe *between* the bursts.
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │  SLOW DELIBERATIVE LAYER — cloud, ~seconds per step            │
+  │                                                                │
+  │   voice/text ─► speech-to-text                                 │
+  │              ─► LLM/VLM  (my words + ONE still photo)          │
+  │              ─► picks intent, sets a MODE/GOAL  ───────────┐   │
+  │              ─► describes scene ─► text-to-speech ─► reply │   │
+  └───────────────────────────────────────────────────────────┼───┘
+              ▲ state reports (mode, progress, distance)       │ goal / mode
+              │                                                 ▼
+  ┌───────────┴────────────────────────────────────────────────────┐
+  │  FAST REACTIVE LAYER — local, on the Pi, ~10–30 Hz, no cloud     │
+  │                                                                  │
+  │   camera frames + ultrasonic ─► reflexes ─► motors               │
+  │     • collision-stop          (overrides EVERYTHING)             │
+  │     • person-tracking / centering   (in follow mode)             │
+  │     • "keep doing X until a condition flips"                     │
+  └──────────────────────────────────────────────────────────────────┘
+
+      The LLM sets intent. The reactive layer executes it and keeps it safe.
+```
+
+The two layers map cleanly onto the project's "what can it really do" buckets: snappy/reliable things (follow, stop, avoid) are **local reflexes**; clumsy things (explore-and-describe, visual Q&A) are **cloud thinking** that tolerates latency because they are not time-critical.
+
+---
+
+## 2. The Agent / Tool-Use Model
+
+yalp does not hand-code a keyword table ("if user says 'forward' then drive"). Instead the deliberative layer is an **LLM agent given a menu of robot abilities** plus the user's request, and it *chains* those abilities to satisfy intent. A representative menu:
+
+| Ability | Kind | Who actually executes it |
+|---|---|---|
+| `drive(distance)` / `turn(angle)` | one-shot motion | reactive layer, guarded by collision-stop |
+| `look(direction)` | orient camera/body | reactive layer |
+| `check_distance()` | read ultrasonic | reactive layer (returns now) |
+| `enter_follow_mode(target)` | **mode** | reactive tracker runs until told to stop |
+| `describe_scene()` | capture + reason | deliberative layer (bigger model) |
+| `speak(text)` | text-to-speech out | deliberative layer |
+
+The crucial point: **most abilities are modes for the reactive layer, not direct motor twitches.** The model says *"follow that person"*; it does not micro-steer. It sets the goal, and the local tracker does the second-by-second following. The model conducts; the fast layer plays the instrument.
+
+> **THESIS —** The LLM sets high-level INTENT; the reactive layer EXECUTES and ENFORCES SAFETY. Most abilities the model calls are **modes for the reactive layer**, not direct actuator commands. The agent's job is to choose and sequence goals, never to drive the motors directly. I build the toolbox, the AI sequences it, the fast layer plays it — and the AI's freedom is bounded by a small, safe toolbox, which is what makes "do whatever I tell it" tractable on cheap hardware.
+
+This keeps the cloud out of any tight control loop: even a multi-step plan like *"go around the corner and tell me what's there"* decomposes into a few goal-setting tool calls, each handed down to the reactive layer to carry out safely while the model waits for the next still.
+
+> The **concrete tool names, parameters, return shapes, and the intent JSON schema** — the exact ability list — are defined in `software-spec.md`, not here. This doc only fixes the *idea*: a bounded menu, chained by the model, executed by the reactive layer.
+
+---
+
+## 3. The Contract Between the Loops (the crux)
+
+This is the crux of the whole design — the seam where a slow planner meets a fast executor. Three concerns define it: **goal hand-down**, **state report-up**, and **preemption**.
+
+### Goal hand-down (down the seam)
+
+The deliberative layer never streams motor commands. It hands the reactive layer a single **active goal/mode**, not a motor command. Examples of the *kind* of thing it sets (exact schema → `software-spec.md`):
+
+- a **mode**: `FOLLOW`, `EXPLORE`, `IDLE`.
+- a **bounded action**: `drive_until(clear=false)`, "drive forward up to 1 m or until blocked," "turn right ~90°."
+- a **terminating condition**: keep going *until* X (an obstacle, a timeout, a target lost).
+
+A goal is a *standing intention with a stop condition*, not a one-shot pulse — something the reactive layer can pursue **autonomously for seconds** without further cloud contact. That property is what lets the cloud be slow, and it keeps the robot behaving sensibly during the seconds before the next cloud reply.
+
+### State report-up (back up the seam)
+
+The reactive layer continuously publishes a small **status snapshot** back up so the next deliberative step has fresh ground truth: current mode, whether the last goal **completed / is in-progress / was blocked**, latest ultrasonic distance, and whether a target is still locked / a collision-stop fired. The deliberative layer reads this (plus a fresh still) before it decides the next step. This is how the model learns *"I tried to drive forward but stopped 20 cm from a wall"* and can re-plan or narrate honestly instead of hallucinating success. It does **not** stream raw frames up — see §6.
+
+### Preemption and priority
+
+A new command must be able to **interrupt** one already in flight (you say "stop, come here" while it's mid-explore), and safety must override both. The model is the arbiter of *deliberative* intent, but the reactive layer resolves every tick by a fixed **priority order**, highest first:
+
+```
+  PRIORITY  (highest wins, evaluated every reactive tick)
+  ┌─────────────────────────────────────────────────────────┐
+  │ 1. COLLISION-STOP   reflex — halts wheels, ungated        │
+  │ 2. NEW GOAL         latest deliberative goal preempts old │
+  │ 3. ACTIVE GOAL      keep executing current mode           │
+  │ 4. IDLE / SAFE-STOP  default when no goal is set          │
+  └─────────────────────────────────────────────────────────┘
+```
+
+A fresh goal from the cloud atomically replaces the current one (last-write wins) — the reactive layer does not queue goals deep; there is no queue in v1, and the user's freshest instruction is always the truth. Collision-stop sits above all of it and cannot be out-voted by any command, new or old: nothing can drive the robot into something the ultrasonic sees.
+
+The hard question is **what happens after a collision-stop fires** mid-goal:
+
+> **DECISION —** After a collision-stop interrupts an active motion goal, the reactive layer halts and holds, marks the goal `BLOCKED`, and **surfaces that state up to the deliberative layer rather than silently resuming or silently aborting.** The robot does not blindly retry into the same obstacle, and it does not freeze forever — it kicks the decision back to the brain, which can re-plan ("there's a wall, turn and go around?"), turn away, or ask the user. For v1, auto-resume is explicitly *off*; resuming requires a fresh deliberative decision, because auto-resume risks grinding into the obstacle the instant the path looks clear.
+
+> **OPEN —** Whether a *follow* goal should auto-resume after the obstacle clears (likely yes — the human stepped between robot and target) while a *drive/explore* goal should not. Per-mode resume policy is unresolved and deferred to `software-spec.md`.
+
+> **OPEN —** Should a *blocked* state auto-prompt the user ("I'm stuck — what now?") via voice, or wait silently for the next command? Leaning toward a short spoken nudge once voice exists, but the trigger threshold (how long blocked before speaking) is unsettled. Revisit when Phase 3 voice lands.
+
+> The **precise wire format** of goals, status, and preemption signals — field names, enums, timeouts — is `software-spec.md`'s job. This section fixes only the *semantics*: goals down, status up, freshest-human-intent-wins, collision-stop on top.
+
+---
+
+## 4. Safety Override Design
+
+Collision-stop is the one behavior that must work even when everything else is broken — it may never be gated behind the AI or the network. Three implementation models were considered:
+
+| Model | What it is | Verdict for v1 |
+|---|---|---|
+| **Software priority in the reactive loop** | top-priority distance check each tick; zeroes motors if too close | **Chosen** — simple, fast enough at 10–30 Hz, lives where motors are commanded, no extra parts |
+| Watchdog timer / process | independent timer/process safe-stops motors on a stale heartbeat | Adopted as a **lightweight v1 safeguard** against a hung loop |
+| Hardware kill path | sensor wired to driver enable / physically cut motor power, no CPU | Overkill for a cardboard v1; revisit for the kid version |
+
+> **DECISION —** Collision-stop is a **software priority at the top of the reactive loop** for v1: every tick reads the ultrasonic, and a too-close reading zeroes the motor outputs before any drive command is applied. It is structurally impossible for a deliberative command to bypass it because the check runs *after* commands are accepted and *before* they reach the motors. Add a lightweight **software watchdog** that safe-stops if the reactive loop itself stalls. Defer any hardware cutoff path to the sturdier kid-version.
+
+Because the safety net is software running on the same Pi as the motor driver, the reactive loop must stay lean and never block — anything that could stall the tick (a synchronous network call, a heavy CV op) is banned from the reactive path.
+
+> **RISK —** A single forward-facing HC-SR04 ultrasonic has a **narrow cone and large blind spots** — side obstacles, low objects below the beam, table edges, and sound-absorbing or angled surfaces can go unseen. Collision-stop protects against head-on obstacles only and is only as good as what the sensor sees; yalp can still clip a chair leg or a wall it approaches at an angle. This is a known v1 limitation accepted for cost/simplicity. Mitigations — sensor placement, cone geometry, a possible second sensor or bumper, speed caps — are detailed in `hardware.md`.
+
+---
+
+## 5. Graceful Degradation When the Cloud Drops
+
+WiFi will hiccup mid-command, and the deliberative layer *is* the cloud. The design requirement is that a dropped connection mid-command must **never** leave the robot driving blind or frozen in a dangerous state. Because motors and safety live locally, a dropped connection degrades *capability*, not *control*: the robot stops accepting new high-level commands but keeps avoiding obstacles and finishing or safely ending its current low-level behavior. The defined behavior:
+
+- The reactive layer **keeps avoiding obstacles** — collision-stop is local and unaffected.
+- A bounded in-flight goal is allowed to **finish or safely time out**, then the robot **holds position** (safe-stop) rather than coasting.
+- Follow-mode may continue locally (the tracker is on-device) but **safe-stops if it loses the target** and can't get a new goal.
+- When connectivity returns, the deliberative layer resumes from fresh state (§3) — it re-reads status and a new still, it does not replay stale commands.
+
+> **DECISION —** On cloud/WiFi loss mid-command, yalp **degrades to a safe local-only mode**: collision-stop and any active local mode (e.g. follow) keep running, but a standing *motion* goal that depends on cloud re-planning **winds down to a safe-stop** within a short timeout rather than driving open-loop forever. It must **safe-stop, never freeze-blind and never coast indefinitely.** New high-level commands simply pause until the network returns; the body stays under reactive control the whole time.
+
+Worked example: mid-way through *"drive forward and tell me what's there,"* WiFi drops. The current `drive_until_clear` goal continues under collision-stop until its stop condition or the cloud-dependency timeout; with no new goal arriving, the robot safe-stops, holds position, and resumes taking commands when the link is back. No wall, no runaway.
+
+---
+
+## 6. Key Simplifying Decisions
+
+Two deliberate simplifications keep v1 cheap, buildable, and within a hobby budget.
+
+### Stills, not video
+
+The deliberative layer sends a **single still photo** per step, not a video stream. Models handle stills fine, stills are far cheaper, and streaming a live feed off a Pi over home WiFi *while* driving motors is a heavy, pricey integration.
+
+> **DECISION —** v1 uses **stills, not video.** One photo per deliberative step. Continuous streaming multimodal — the "smooth mode" that would make the robot narrate and decide continuously instead of in halting bursts — is a **stretch goal, explicitly out of v1**.
+
+### Tiered models
+
+Not every glance deserves a flagship model. The per-step loop ("is the path clear?", "roughly what's ahead?", centering hints) runs on a **fast/cheap VLM**; only genuinely hard requests ("describe this whole scene in detail," "read this sign") escalate to a **bigger model**.
+
+> **DECISION —** The deliberative layer is **tiered**: a fast/cheap vision model for the routine per-step loop, a larger model only for hard scene-understanding requests. Paying flagship latency and cost on every step is wasteful and would make the bursts even slower. Specific model picks and the escalation trigger belong in `software-spec.md`.
+
+These two together keep the deliberative layer **cheap and fast enough to be fun**: small payloads, small models, and only occasional escalation.
+
+---
+
+## 7. Development Architecture: Build the Brain on the Laptop First
+
+Only **two things genuinely require the Pi**: driving the motors and capturing from the robot's camera. Everything else — the agent loop, the tool menu, prompt design, the VLM calls, the tracker, the goal/status contract, scene description — is plain Python that runs anywhere.
+
+So the brain is built and iterated **on the laptop first**, using the laptop's webcam as a stand-in camera. This decouples software iteration from hardware in a way that matters enormously:
+
+- The laptop edit-test cycle is **instant**; iterating over SSH on a headless Pi is painfully slow.
+- You debug **one thing at a time** — Python logic on the laptop, *then* hardware/wiring/Linux gremlins on the Pi — instead of all three at once.
+- The whole deliberative path and most of the contract can be exercised **before any motors arrive** (which matters given the body parts ship after the brain).
+- The cloud calls and agent logic are identical on laptop and Pi, so almost nothing is throwaway. The reactive layer is designed against a **hardware-abstraction seam**: a fake motor/sensor backend on the laptop, the real `gpiozero`/ultrasonic backend on the Pi, same interface. The marry-to-body step swaps the thin motor/camera adapters, not the logic.
+
+> **DECISION —** Build and iterate the entire vision/agent loop **on the laptop** using the laptop webcam as a stand-in camera. Marry it to the Pi body only at the end. The C270 doubling as a laptop cam makes the stand-in faithful.
+
+```
+  LAPTOP (fast iteration)              PI (hardware truth)
+  ┌────────────────────────┐          ┌────────────────────────┐
+  │ agent loop + tool menu  │  same    │ same agent loop         │
+  │ cloud VLM calls         │  code    │ cloud VLM calls         │
+  │ webcam (stand-in)       │ ───────► │ C270 capture (real)     │
+  │ FAKE motor adapter      │          │ gpiozero motors + HC-SR04│
+  └────────────────────────┘          └────────────────────────┘
+```
+
+> **THESIS —** Treat the Pi as an **I/O endpoint, not a development environment.** Build the brain on the laptop behind a hardware-abstraction seam; only motor-control and camera-capture cross over to the Pi at the end. This is the cheapest way to keep iteration fast and isolate hardware bugs from logic bugs.
+
+Milestone sequencing — which capability comes online when, and what hardware each step needs relative to part arrivals — is owned by `roadmap.md`. The architectural point here is only that the seam *exists* and the brain lives above it.
+
+---
+
+## 8. Prior Art to Study (and the Trap)
+
+Two open-source robots already solve big chunks of this and are worth a day of reading before writing the conversation loop and the tracker from scratch.
+
+- **LeKiwi** (Hugging Face's LeRobot) — a wheeled mobile base that installs and runs directly on a Raspberry Pi. The closest existing reference for yalp's chassis-and-Pi setup; study how they structure the **Pi-side motor/control code** and their reactive loop.
+- **Reachy Mini** (Hugging Face) — a Pi-based robot with camera, mics, and speaker, plus an SDK that integrates with LLMs. It ships a **Conversation App** and a **real-time tracker** — basically the talking/seeing half of yalp's eventual kid version, already built and open. It doesn't roam, so it won't help the explore-the-room half.
+
+The value is in **reading the patterns**, not adopting the stacks wholesale.
+
+> **RISK —** There is a strong temptation to **over-adopt a heavy framework** (the full LeRobot stack) for what is a cardboard v1. A large framework brings dependencies, abstractions, and hardware assumptions that can outweigh the whole build — and it buries the learning that v1 exists to produce. **Steal the patterns (motor control, the follow-me tracker, the conversation loop); do not inherit the framework.** Keep yalp's own code small enough to understand end to end. Re-evaluate adopting a framework only at the sturdier kid version.
+
+---
+
+## Where the rest is specified
+
+- Concrete tool/intent schema, goal and status message shapes → `software-spec.md`
+- Sensor placement, blind-spot mitigation, power and wiring → `hardware.md`
+- Milestone sequencing and part-arrival ordering → `roadmap.md`
+- User-facing behaviors and scope of "do whatever I tell it" → `product-spec.md`
+
+> **OPEN —** This doc fixes concepts and boundaries; the concrete interface contract — tool/intent schema, goal & status wire formats, model picks, timeouts — is deferred to `software-spec.md`. Where the two disagree, `software-spec.md` wins on *mechanism* and this doc wins on *intent*.
+
+</script>
+<script type="text/markdown" data-name="hardware.md">
+# Hardware — the physical build spec
+
+> Bill of materials, power architecture, drivetrain, sensing, and pin planning for yalp v1. The body that the brain drives.
+
+---
+
+## 1. Bill of Materials
+
+This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
+
+| Component | Selected part | ~Cost | Rationale (one line) |
+|---|---|---|---|
+| **Brain** | Raspberry Pi 5 4GB via **CanaKit Starter Kit PRO** | ~$180 | RAM headroom + multiple real USB ports = fewer first-build gremlins; kit bundles 27W PD wall PSU, fan case, 128GB OS card. |
+| microSD | 128GB card (in the kit) | have | OS + code; re-flash with Pi OS Lite + WiFi/SSH for headless. |
+| **Eyes** | Logitech C270 USB webcam | ~$22 | UVC plug-and-play, no driver fuss; doubles as a laptop dev cam while building the brain. |
+| **Motors** | 2× TT DC gear motors + wheels (4-pack) | ~$15 | Differential drive; the textbook cheap hobby drivetrain. Spares in the pack. |
+| Balance | 1–2× ball caster | ~$3 ea | Passive roller, no power; the third contact point that makes two-wheel drive stable. |
+| **Motor driver** | DRV8833 **or** TB6612FNG breakout | ~$5 | Cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). Get the pre-soldered version. |
+| Motor power | 4×AA holder (or 18650 pack) | ~$2–12 | **Separate** supply from the Pi; AA + common ground for v1 — simple, no lithium yet. |
+| **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
+| Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
+| Chassis | Cardboard / hot glue / zip ties / foam tape | ~$19 | v1 — looks don't matter. Hot glue gun is the one tool worth buying. |
+| **Voice** *(deferred)* | USB mini mic + small USB speaker | ~$15 | Voice I/O is a separate, later track — get the whole loop working text-first. |
+
+> **DECISION —** Brain = Raspberry Pi 5 4GB via the CanaKit Starter Kit PRO. **Ordered.** Skip the AI HAT / NPU — local models on a Pi accelerator are a known hobbyist trap; CPU + cloud is the v1 move.
+
+> **DECISION —** Eyes = Logitech C270 USB webcam. **Ordered.** UVC means zero driver work. Pi Camera Module 3 stays a possible later swap (needs a Pi-5 camera cable) only if autofocus is wanted.
+
+> **DECISION —** Locomotion = differential drive: 2× TT gear motors + 1 ball caster. Approach locked; parts are in the Phase 2 order, not yet bought.
+
+> **DECISION —** Motor driver = DRV8833 / TB6612FNG, **not** L298N. Cooler and more efficient; only fall back to an L298N if one is already in the parts bin.
+
+> **THESIS —** The Pi is an I/O hub in v1, not a compute engine. Every dollar buys debugging time (real USB ports, plug-and-play camera, pre-soldered modules), not FLOPS. Spend accordingly.
+
+### Deliberately NOT bought
+
+These are tempting but wrong for v1, and naming them keeps the budget honest:
+
+- **Monitor / keyboard / mouse** — headless; everything is over SSH from the laptop.
+- **Separate Active Cooler / heatsink** — the CanaKit case fan already covers cooling.
+- **AI HAT / NPU accelerator** — the heavy AI runs in the cloud; on-device models on a Pi accelerator are a known hobbyist trap for build #1.
+- **Depth camera / LiDAR** — that's the post-v1 navigation upgrade, not a v1 part.
+- **Soldering iron** — every module is bought pre-headered; ~$20 nice-to-have, not a must.
+
+---
+
+## 2. Power architecture — treat this as a first-class hazard
+
+Two independent supplies, one shared ground. This is the single most failure-prone part of the build and deserves more care than anything else here.
+
+```
+   ┌─────────────────────┐         ┌──────────────────────────┐
+   │  Pi supply           │         │  Motor supply             │
+   │  27W USB-C PD wall    │        │  4×AA holder (~6V)        │
+   │  (bench) / PD bank    │        │  (or 18650 pack)          │
+   │  → Pi 5 wants 5V/5A   │        │  → DRV8833 VM (motors)    │
+   └─────────┬────────────┘         └────────────┬─────────────┘
+             │                                    │
+          Pi 5V/GND                          driver VM/GND
+             │                                    │
+             └──────────── COMMON GROUND ─────────┘
+                    (GND tied together — REQUIRED)
+```
+
+**Why this matters.** The Pi 5 wants a proper 5V/5A PD source. TT motors draw a modest ~150mA running but **spike to ~1A+ at stall** (and every direction-change is a brief stall). If the motors and the Pi share a single supply, those spikes sag the rail and the Pi **browns out and reboots** — the #1 cause of "why did my robot restart when it turned." Separate supplies fix the sag; a common ground is non-negotiable because the driver's logic inputs are referenced to the Pi's ground.
+
+**Mitigations to build in from the start:**
+- **Common ground.** Tie the motor-supply GND to a Pi GND pin. Without it the driver sees garbage logic levels.
+- **Bulk capacitance.** A large electrolytic (~470–1000µF) across the motor supply (VM↔GND) at the driver to absorb stall spikes; a small ceramic (~0.1µF) for high-frequency decoupling.
+- **Flyback handling.** Motors are inductive; the DRV8833/TB6612FNG have internal protection diodes — good. Do **not** substitute a bare H-bridge without flyback diodes, and keep motor leads twisted/short to cut noise.
+- **Never back-power the Pi from the motor rail**, and never run motors off the Pi's 5V pin.
+
+> **RISK —** Shared-ground noise + TT stall spikes browning out the Pi is the most likely "ghost reboot" bug in the whole build. Budget the caps and the separate supply now; retrofitting after chasing phantom crashes is miserable.
+
+**Power bring-up checklist (run in order, do not skip ahead):**
+
+1. **Pi alone** on the PD supply — boot, confirm stable, check `vcgencmd get_throttled` reads `0x0` under a CPU load.
+2. **Motor supply alone** — driver powered from AA pack, Pi powered separately, **logic inputs disconnected**; confirm the driver spins both motors by jumpering inputs by hand.
+3. **Join common ground** — tie the grounds, connect the 4 logic GPIOs, and drive motors from Python while watching for Pi resets and re-checking `get_throttled`. Add caps if any sag/reset appears.
+4. **Only past step 3** do motors + brain run as one trusted system.
+
+> **DECISION —** Gate motors-with-Pi behind the bring-up checklist above. No autonomous driving until step 3 passes clean (no resets, `get_throttled` stays `0x0`). This gate sits in sequence in `roadmap.md` — it stands between "Hello motors" and everything after it.
+
+---
+
+## 3. Drivetrain reality — open-loop, and honest about it
+
+Differential drive with TT motors and **no encoders** means **open-loop control**: there is no feedback on how far a wheel actually turned.
+
+- **"Turn left"** = spin the wheels in opposite directions for *N milliseconds and hope*. The angle is a guess calibrated by eye.
+- **Drift.** Two TT motors are never identical — same PWM gives slightly different speeds — so "drive straight" curves, and the curve changes with battery voltage and floor surface.
+- **"Back up"** is equally a guess — distance is open-loop too.
+- **Vision closes the loop only in follow mode**, where the on-device tracker re-centers on the target each frame and corrects course. Outside follow mode, the robot is dead-reckoning blind.
+
+This is *fine for v1*. The design leans into it: high-level intent comes from the slow cloud layer, but motion is "modes for the reactive layer," and the only tight feedback loop that matters (person-following) is closed by the camera, not by wheel odometry. See `architecture.md` for how the fast reactive layer wraps these open-loop primitives.
+
+> **RISK —** Open-loop drive means no repeatability: the same command travels a different distance/angle run-to-run, worse as the battery drains. Any behavior that assumes precise dead reckoning ("go forward exactly 1m, turn exactly 90°") will not work reliably. Keep movement coarse and vision-corrected.
+
+> **OPEN —** Encoders are cheap (~$2–4 for a pair of slotted/Hall wheel encoders) and would add closed-loop speed matching + real odometry if repeatability ever becomes necessary. Not in v1; revisit if open-loop drift becomes the limiting factor.
+
+---
+
+## 4. Sensing & safety coverage
+
+v1 ships **one** front-facing HC-SR04. That is enough to prove the collision-stop reflex, but it is not enough coverage for a robot that turns, follows, and will eventually be near a child.
+
+Honest limitations of a single front ultrasonic:
+- **Narrow cone** (~15–30°) — it sees a pencil-beam straight ahead, not a wide field. A table leg just off-axis is invisible.
+- **No side or rear coverage** — the robot is blind to anything it's turning into or backing toward.
+- **Fails on hard cases** — glass and smooth angled surfaces deflect the ping away (no echo → "clear"); soft/fuzzy surfaces absorb it. Cliffs/stairs are invisible entirely (no downward sensing).
+
+For a bot that *turns and follows* — and a future version near a 5–8-year-old — one forward cone is thin. Plan to grow to **2–3 sensors** (e.g. front + two angled front-corners, or front + rear) so turning and backing aren't blind.
+
+> **RISK —** A single front HC-SR04 leaves the robot blind to the sides, the rear, glass, and drop-offs. It validates the reflex but is not adequate collision coverage for autonomous turning/following, and definitely not for the kid version.
+
+> **OPEN —** Final sensor count and placement undecided. Leading candidate: 2–3 HC-SR04s (front + corners) for v1.x, with an IR cliff sensor considered before the bot is ever left running near stairs or a child. Decide once the chassis geometry is real.
+
+---
+
+## 5. GPIO / pin planning
+
+A DRV8833 needs **4 logic inputs** (2 per motor: AIN1/AIN2, BIN1/BIN2) driven by PWM-capable GPIOs. The HC-SR04 needs a **TRIG** output and an **ECHO** input — and ECHO swings to **5V**, which would damage the Pi's **3.3V-only GPIO**, so it must pass through a resistor divider.
+
+Pin map (BCM numbering — adjust to taste, keep PWM-capable pins for motor inputs):
+
+| Signal | Pi GPIO (BCM) | Notes |
+|---|---|---|
+| Motor A IN1 | GPIO 17 | left motor direction/PWM |
+| Motor A IN2 | GPIO 27 | left motor direction/PWM |
+| Motor B IN1 | GPIO 22 | right motor direction/PWM |
+| Motor B IN2 | GPIO 23 | right motor direction/PWM |
+| Driver STBY/EN | GPIO 24 | (TB6612FNG only; tie DRV8833 nSLEEP high) |
+| Ultrasonic TRIG | GPIO 5 | 3.3V out → HC-SR04 trigger (fine as-is) |
+| Ultrasonic ECHO | GPIO 6 | **via divider** — 5V echo → 3.3V GPIO |
+| Common ground | any GND pin | shared with motor supply (see §2) |
+
+ASCII wiring sketch:
+
+```
+   Raspberry Pi 5 (3.3V GPIO)            DRV8833 driver            Motors
+   ┌──────────────────────┐          ┌────────────────┐
+   │ GPIO17 ─────────────────────────► AIN1            │        ┌────────┐
+   │ GPIO27 ─────────────────────────► AIN2   AOUT1/2 ─┼───────►│ Motor A│ (left)
+   │ GPIO22 ─────────────────────────► BIN1            │        └────────┘
+   │ GPIO23 ─────────────────────────► BIN2   BOUT1/2 ─┼───────►┌────────┐
+   │ GND    ────────────┬────────────► GND             │        │ Motor B│ (right)
+   └────────────────────┼────────────┴───── VM ◄── motor supply └────────┘
+                        │                    (4×AA, separate; see §2)
+                        │  COMMON GROUND
+                        │
+   HC-SR04 ultrasonic   │
+   ┌──────────────┐     │
+   │ VCC ◄── 5V    │     │
+   │ GND ──────────┼─────┘
+   │ TRIG ◄──────── GPIO5  (3.3V drive — OK)
+   │ ECHO ──┐                  voltage divider (5V → ~3.3V)
+   │        │   ECHO ──[ R1 1kΩ ]──┬──[ R2 2kΩ ]── GND
+   │        └────────────────────►─┘
+   │                            tap ───► GPIO6  (safe 3.3V)
+   └──────────────┘
+```
+
+> **RISK —** Wiring HC-SR04 ECHO straight to a Pi GPIO feeds 5V into a 3.3V pin and can fry it. The 1kΩ/2kΩ divider (or any ~2:1 ratio dropping 5V to ~3.3V) is mandatory, not optional.
+
+---
+
+## 6. Budget
+
+| Phase | What it covers | Status | ~Cost |
+|---|---|---|---|
+| **Phase 1 — Brain** | CanaKit Pi 5 4GB Starter Kit PRO (~$180) + Logitech C270 (~$22) | ✅ Ordered | ~$200 |
+| **Phase 2 — Body** | Card reader, PD power bank, TT motors, driver, ball caster, HC-SR04, AA power, wiring, glue/chassis | 🛒 To buy | ~$115 |
+| **Phase 3 — Voice** | USB mic + small speaker (deferred) | 🛒 Later | ~$20 |
+| | | **Total** | **~$335** |
+
+- **Spent so far (~$200):** the entire brain — Pi kit + webcam — is ordered.
+- **Remaining (~$135):** Phase 2 body + Phase 3 voice.
+- **Total project (~$335):** low-hundreds, not thousands.
+
+> **THESIS —** The brain was the expensive, lumpy buy (and the one hit by the 2026 DRAM/NAND price crunch — the Pi 5 4GB is ~$110 standalone now vs $60 at launch). Everything left is small, cheap, stable, and incremental. The financial risk is already behind us. See `roadmap.md` for how the phases sequence in time.
+
+---
+
+## 7. Prior art — hardware side
+
+- **LeKiwi** (Hugging Face's LeRobot) — a wheeled mobile base that installs and runs directly on a Raspberry Pi. It's the closest existing reference to this chassis-and-Pi setup; study **how they structure the Pi-side motor/control wiring and code** before writing our own driver layer. Don't reinvent the motor-control patterns.
+
+Software-side prior art (Reachy Mini's conversation loop and tracker) lives in `software-spec.md` and `architecture.md` — this section is hardware/wiring only.
+
+> **DECISION —** Spend time reading LeKiwi's Pi-side motor/control code *before* wiring our own driver and writing the drive primitives. Borrow the patterns; adapt the parts.
+
+</script>
+<script type="text/markdown" data-name="software-spec.md">
+# Software Spec
+
+> The detailed software design for yalp: the two-layer runtime, the contract between the fast on-Pi reactive loop and the slow cloud deliberative loop, person-tracking, degradation, and config. Build against this.
+
+---
+
+`architecture.md` makes the case for *why* yalp runs on two loops; this doc specifies *what* the two loops actually exchange and how each is built. If you only read one section, read §2 — the loop-to-loop contract is the spine of the system, and everything else hangs off it. Siblings: `architecture.md` (the framing), `hardware.md` (the body this code drives), `roadmap.md` (the build order and the gates that this doc declares).
+
+## 1. Software Stack & Where Each Piece Runs
+
+The single organizing principle: **only motor control and camera capture genuinely need the Pi.** Everything else — the agent loop, prompt building, the model calls — is plain Python you develop on your laptop with its webcam standing in for the robot's eyes, then marry to the body at the end. The reactive layer is the *only* code that must run on the Pi at robot-speed.
+
+| Layer | Component | Library / Service | Runs on | Notes |
+|---|---|---|---|---|
+| Reactive | Motor drive (differential) | `gpiozero` (`Motor`, `Robot`) | **Pi only** | PWM to the DRV8833/TB6612; see `hardware.md` for pinout. |
+| Reactive | Obstacle sensing | `gpiozero` (`DistanceSensor`) | **Pi only** | HC-SR04 ultrasonic; powers collision-stop. |
+| Reactive | Lightweight tracker | `opencv-python` | Pi (prod) / laptop (dev) | Centering + follow-mode. See §4 — this is the contested piece. |
+| Reactive | Camera capture | `picamera2` (Pi cam) **or** OpenCV UVC capture (USB webcam) | Pi (prod) / laptop (dev) | v1 ships the C270 USB/UVC path; `picamera2` is a later swap if we move to the Pi Camera Module. |
+| Deliberative | Cloud VLM/LLM agent | `anthropic` SDK (primary) / `openai` SDK (alt) | Laptop (dev), Pi or laptop (later) | Tool-use / vision; tiered models — see §3. |
+| Deliberative | Prompt + dispatch glue | Plain Python (`stdlib` + SDK) | Anywhere | The "brain" you iterate on the laptop. |
+| Voice *(deferred)* | Speech-to-text / text-to-speech | STT/TTS lib or cloud service (TBD) | Pi + cloud | Separate track; see §7 and `roadmap.md`. |
+| OS | Base image | **Raspberry Pi OS Lite (64-bit)** | Pi | Headless. Develop over SSH/WiFi; enable SSH, camera, I2C at flash time. No desktop. |
+
+> **DECISION —** The reactive layer is a standalone Python process on the Pi that owns GPIO and the camera, and runs whether or not the cloud is reachable. The deliberative layer is a *separate* process (laptop in dev) that talks to it over a local IPC channel (a localhost socket / small HTTP endpoint, or a shared in-process queue once co-located). The two never share Python objects across the network — they exchange the message shapes in §2 only.
+
+> **THESIS —** Build the deliberative loop on the laptop first with the laptop webcam as the camera, stub the reactive layer with a fake that just prints `drive(...)`/`set_mode(...)`, and only swap in the real Pi reactive process once the agent loop is fun to use. Debugging Python, Linux, *and* hardware simultaneously is the main way hobby builds stall.
+
+## 2. The Crux — The Loop-to-Loop Interface Contract
+
+The model never twitches a motor. It picks **intents**, expressed as **tool calls** against a fixed ability menu. Each tool call sets (or adjusts) a **mode + goal** on the reactive layer, or asks a question the reactive layer can answer from its latest state. The reactive layer executes the mode at 10–30 Hz, keeps the robot safe, and publishes a small **state object** back up. That is the entire contract.
+
+### 2.1 The ability menu (what the LLM can call)
+
+| Tool | Parameters | Effect (one line) |
+|---|---|---|
+| `drive` | `distance_m: float` (signed; −=back), `speed: 0..1` | Enter `DRIVE_GOAL`: drive straight until distance covered, blocked, or preempted. |
+| `turn` | `angle_deg: float` (signed; +=left/CCW), `speed: 0..1` | Enter `DRIVE_GOAL` (rotate variant): turn in place by angle. |
+| `stop` | — | Enter `IDLE`: cancel current goal, wheels halt. |
+| `look` / `capture` | `save: bool=false` | Grab one still from the camera; return a frame handle for the next model turn. |
+| `check_distance` | — | Return the latest ultrasonic reading (meters) from shared state. |
+| `describe_scene` | `detail: "quick"\|"full"` | Capture a still and (deliberative side) escalate to a model tier for a scene description. |
+| `enter_follow_mode` | `target: "nearest_person"` | Enter `FOLLOW`: local tracker centers + approaches the target. No cloud in the loop. |
+| `explore` | `goal_text: str` | Enter `EXPLORE`: step-wise "go look around and report" — reactive drives short legs; deliberative re-decides each step. |
+| `speak` | `text: str` | Say/print `text` (TTS later; `print` for v1). |
+| `set_speed_limit` | `max_speed: 0..1` | Clamp all subsequent motion (safety / "go slow"). |
+
+> **DECISION —** This menu is the stable contract. Abilities are *mostly modes for the reactive layer*, not direct actuation — `enter_follow_mode` hands the job to the local tracker; the model does not stream steering. Adding a new ability = adding a row here + a mode/handler below. The menu is small on purpose: every tool must map to something the body can reliably do (see the in-scope envelope in `architecture.md`).
+
+Illustrative tool schema as handed to the model (Anthropic tool-use shape; the OpenAI function-calling shape is a mechanical translation):
+
+```json
+[
+  {
+    "name": "drive",
+    "description": "Drive straight a signed distance in meters (negative = backward). Collision-stop overrides this at all times.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "distance_m": { "type": "number", "description": "Signed meters; negative drives backward." },
+        "speed":      { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 }
+      },
+      "required": ["distance_m"]
+    }
+  },
+  {
+    "name": "enter_follow_mode",
+    "description": "Hand control to the on-Pi tracker to center on and approach a target. Returns immediately; the robot follows without further model calls until told to stop.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "enum": ["nearest_person"], "default": "nearest_person" }
+      }
+    }
+  },
+  {
+    "name": "describe_scene",
+    "description": "Capture a still and describe what is visible. Use detail='full' only when the user explicitly wants a rich description or to read text.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "detail": { "type": "string", "enum": ["quick", "full"], "default": "quick" } }
+    }
+  }
+]
+```
+
+> **OPEN —** Whether `explore` is a first-class reactive mode or just sugar the deliberative layer implements as a loop of `drive`/`turn`/`describe_scene`. Leaning toward the latter for v1 (keeps the reactive layer dumb), but it's not settled — revisit once step latency is measured.
+
+### 2.2 The intent / mode model
+
+The reactive layer is a small state machine. At any instant it is in exactly one **mode**, each carrying a typed **goal payload**:
+
+| Mode | Goal payload | Reactive behavior |
+|---|---|---|
+| `IDLE` | — | Wheels stopped. Sensors still read. Default and safe resting state. |
+| `DRIVE_GOAL` | `{kind: "straight"\|"rotate", target, speed, progress}` | Execute until target met (distance/angle), blocked, or preempted. |
+| `FOLLOW` | `{target, last_seen_bbox, last_seen_ts}` | Tracker centers + approaches; coasts/searches briefly if target lost. |
+| `EXPLORE` | `{goal_text, leg}` | Drive a short bounded leg, then signal "step done" so deliberative re-decides. |
+| `SAFE_STOP` | `{reason, distance}` | Hard stop, motion latched off, until obstacle clears AND a new intent arrives. |
+
+The two loops communicate only through one shared **state object**, owned and written by the reactive layer, read by both; the deliberative layer writes *intents* (never reactive state) through `set_intent`:
+
+```python
+# Written by reactive loop every tick; read by deliberative loop on demand.
+@dataclass
+class RobotState:
+    mode: str                 # "IDLE" | "DRIVE_GOAL" | "FOLLOW" | "EXPLORE" | "SAFE_STOP"
+    goal: dict | None         # the active mode's payload (see table)
+    goal_status: str          # "running" | "completed" | "blocked" | "preempted" | "none"
+    distance_m: float         # latest ultrasonic reading
+    obstacle: bool            # distance_m < SAFE_STOP_THRESHOLD
+    target_visible: bool      # tracker currently sees the follow target
+    target_bbox: tuple | None # (x, y, w, h) in frame px, or None
+    last_frame_id: str | None # handle to most recent capture
+    speed_limit: float        # current clamp, 0..1
+    ts: float                 # monotonic timestamp of this snapshot
+
+# Written by deliberative loop; consumed by reactive loop at the top of each tick.
+@dataclass
+class Intent:
+    mode: str                 # requested mode
+    goal: dict | None         # requested goal payload
+    seq: int                  # monotonically increasing; newer seq wins
+```
+
+> **DECISION —** `RobotState` and `Intent` are the *only* two shapes crossing the boundary. The reactive layer publishes `RobotState` every tick (last-write-wins; no history). The deliberative layer pushes an `Intent` with a monotonically increasing `seq`; the reactive layer adopts the highest `seq` it has seen. This makes the channel stateless and tolerant of drops — a lost `RobotState` is replaced by the next tick; a lost `Intent` is simply not adopted and the model can re-issue.
+
+### 2.3 Preemption semantics
+
+There is a strict priority order. Higher always wins, immediately:
+
+1. **Collision-stop (SAFE_STOP)** — a reflex, *never* gated behind the AI. If `distance_m < SAFE_STOP_THRESHOLD`, the wheels stop this tick, full stop, regardless of mode or any in-flight intent.
+2. **Newest intent** — a new `Intent` (higher `seq`) replaces whatever mode/goal is in progress. "Follow me" mid-drive abandons the drive and enters `FOLLOW`. No queueing, no "finish the current move first."
+3. **Current mode execution** — only if neither of the above fired does the active mode get to advance its goal this tick.
+
+> **DECISION —** New intents *replace*, they do not *queue*. The robot always reflects the operator's most recent instruction. If the user wants a sequence, the deliberative layer issues it step by step (waiting for `goal_status == "completed"` between steps), rather than the reactive layer buffering a plan.
+
+> **DECISION —** `SAFE_STOP` is sticky. Clearing the obstacle is necessary but not sufficient to resume — the robot waits in `SAFE_STOP` until the obstacle clears **and** a fresh intent arrives. This prevents a robot that's been nosed into a wall from lurching forward the instant someone moves out of the way.
+
+The reactive loop tick, in full:
+
+```python
+def reactive_tick(state, intent_inbox, motors, sensor):
+    # 1. READ SENSORS
+    dist = sensor.distance          # meters, blocking-free read
+    state.distance_m = dist
+    state.obstacle = dist < SAFE_STOP_THRESHOLD
+
+    # 2. SAFETY OVERRIDE — beats everything, every tick
+    if state.obstacle:
+        motors.stop()
+        state.mode, state.goal_status = "SAFE_STOP", "blocked"
+        state.goal = {"reason": "obstacle", "distance": dist}
+        publish(state)
+        return                      # nothing else runs this tick
+
+    # 3. ADOPT NEWEST INTENT (preempt in-progress mode)
+    new = intent_inbox.take_highest_seq()      # None if nothing newer
+    if new is not None:
+        if state.mode == "SAFE_STOP" and not state.obstacle:
+            pass                    # allowed to leave SAFE_STOP now
+        state.mode, state.goal = new.mode, new.goal
+        state.goal_status = "running"
+
+    # 4. EXECUTE CURRENT MODE
+    if state.mode == "IDLE" or state.mode == "SAFE_STOP":
+        motors.stop()
+    elif state.mode == "DRIVE_GOAL":
+        done = step_drive_goal(state, motors)          # advances progress
+        state.goal_status = "completed" if done else "running"
+        if done: state.mode = "IDLE"
+    elif state.mode == "FOLLOW":
+        step_follow(state, motors)                     # tracker centers + approaches
+    elif state.mode == "EXPLORE":
+        leg_done = step_explore_leg(state, motors)
+        state.goal_status = "completed" if leg_done else "running"
+
+    # 5. PUBLISH STATE upward
+    publish(state)
+```
+
+Every branch in step 4 clamps commanded speed to `state.speed_limit` before touching `motors`. The loop is designed to never block: sensor reads, tracker steps, and motor writes are all non-blocking, so the tick rate stays in the 10–30 Hz band even when the cloud is mid-think.
+
+### 2.4 How the reactive layer reports up
+
+The deliberative layer reads `RobotState` whenever it builds a prompt or polls a goal. The fields that matter to the model:
+
+- `goal_status` — `"completed"` lets a multi-step plan advance; `"blocked"` tells the model the last move hit something; `"preempted"` explains why a goal vanished.
+- `obstacle` / `distance_m` — answers `check_distance`, and lets the model narrate ("something's right in front of me, I stopped").
+- `target_visible` / `target_bbox` — during `FOLLOW`, lets the model know whether the tracker still has the person, so it can say "I lost you" or re-engage.
+- `mode` — so the model knows what the body is currently doing without re-deciding.
+
+> **DECISION —** Reporting is **pull, not push**: the deliberative layer reads the latest `RobotState` snapshot when it needs it (every step, and when waiting on a goal). There is no event stream from reactive → deliberative for v1. Polling a last-write-wins snapshot is simpler, drop-tolerant, and fast enough given that deliberative steps are already seconds apart.
+
+## 3. The Deliberative Step Loop
+
+One deliberative "step" is: perceive → think → act → report. **Stills, not video, for v1** — each step sends one fresh photo. The reactive layer keeps the robot safe and responsive *between* steps, so the bursty cadence is fine.
+
+```python
+def deliberative_step(user_text, history, client, reactive):
+    state = reactive.read_state()                 # latest RobotState snapshot
+    frame = reactive.capture_still()              # one JPEG, not a stream
+    # (voice track, later) user_text = stt.transcribe(mic_audio)
+
+    model = pick_model(user_text, history)        # tiered — see below
+    msg = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        thinking={"type": "adaptive"},            # let it reason on hard asks
+        tools=ABILITY_MENU,                       # the §2.1 schema
+        messages=history + [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": build_context(user_text, state)},
+                {"type": "image", "source": image_block(frame)},
+            ],
+        }],
+    )
+
+    for block in msg.content:
+        if block.type == "tool_use":
+            intent_or_answer = dispatch(block.name, block.input, reactive)
+            # drive/turn/follow/explore -> reactive.set_intent(...)
+            # check_distance/look/describe_scene -> read/answer, feed back next turn
+        elif block.type == "text":
+            speak(block.text)                     # TTS later; print for v1
+
+    return msg                                    # append to history for the next step
+```
+
+`build_context` stitches the user's words together with a compact rendering of `RobotState` (current mode, last goal status, distance, whether a person is visible) and the ability menu's intent. The image is the still. That's the whole prompt.
+
+**Tiered models.** Don't pay flagship latency/cost on every frame:
+
+| Tier | When | Model |
+|---|---|---|
+| Cheap per-step VLM | Centering sanity, "is the path clear?", "what's roughly ahead?", routine tool-picking | `claude-haiku-4-5` |
+| Mid | Ambiguous requests, multi-step `explore` reasoning | `claude-sonnet-4-6` |
+| Big | "Describe this whole scene in detail", "read this sign", genuinely hard asks (often triggered by `describe_scene` detail="full") | `claude-opus-4-8` |
+
+> **DECISION —** Default every step to the cheap tier and **escalate only on signal** — an explicit `describe_scene(detail="full")`, a request the cheap tier flags as beyond it, or a user ask that obviously needs reading/reasoning. `pick_model` encodes this routing; it is the main cost lever. Adaptive thinking stays on so the chosen tier can spend more reasoning on the hard turns and little on the easy ones.
+
+> **RISK —** Each step is photo → API call → response → new intent, so high-level decisions arrive in 2–3s bursts. This is inherent to a stills-in-the-loop design and is acceptable *because* the reactive layer fills the gaps. The smooth upgrade (streaming multimodal) is explicitly out of scope for v1 — see `architecture.md` and `roadmap.md`.
+
+## 4. Person-Tracking — Confronting the Physics
+
+"Lightweight OpenCV tracker" hides a real fork, and getting it wrong wrecks follow-mode:
+
+- A **blob/color tracker** (e.g. CamShift / a KCF/CSRT box seeded once) is cheap — easily 30 Hz on the Pi 5's CPU — but **fragile**: it drifts with lighting changes, similar clothing, and occlusion, and has no notion of "person," so once it loses the target it locks onto whatever it last looked like.
+- A **real person detector** (YOLO-nano, MobileNet-SSD) is **robust** — it actually knows what a person is and re-acquires after occlusion — but the Pi 5 has **no NPU**, so on CPU it may only manage a **few fps**. That collides head-on with the 10–30 Hz reactive target: you cannot run detection every tick.
+
+> **THESIS —** Use **track-by-detection**. Run the cheap tracker every reactive tick to keep follow-mode at full rate, and run the slow person detector at whatever fps the Pi sustains (say 2–5 Hz, ideally on a separate thread) purely to **re-seed and validate** the tracker's box. The fast tracker provides smoothness; the slow detector provides the "it's actually a person, and here's where they really are now" correction. This is the hobby version of how real trackers are built, and it's the only design that satisfies both robustness and the reactive frame budget on a no-NPU Pi.
+
+Concretely, inside `step_follow`:
+
+```python
+def step_follow(state, motors):
+    ok, bbox = tracker.update(latest_frame)        # cheap, every tick
+    if detector_thread.has_fresh_result():         # arrives a few times/sec
+        det = detector_thread.take()               # person boxes
+        bbox = reconcile(bbox, det)                 # re-seed tracker if it drifted/lost
+        tracker.reinit(latest_frame, bbox)
+    if bbox is None:
+        coast_or_search(state, motors)             # brief search, then report lost
+        state.target_visible = False
+        return
+    state.target_visible, state.target_bbox = True, bbox
+    err_x = bbox_center_x(bbox) - frame_center_x   # centering error
+    turn_cmd, fwd_cmd = follow_controller(err_x, bbox_area(bbox))
+    motors.drive(fwd_cmd, turn_cmd)                # collision-stop still overrides upstream
+```
+
+> **OPEN —** Which detector and which tracker. Candidates: detector ∈ {YOLO-nano, MobileNet-SSD}; tracker ∈ {CSRT (accurate, slower), KCF (faster, less robust), color-histogram CamShift (cheapest)}. The choice is **data-dependent** and not decidable from a desk — it depends on the actual sustained fps on *this* Pi 5 with *this* camera.
+
+> **OPEN / RISK —** Run an early **FPS spike** before committing to the follow-mode design: measure sustained person-detector fps on the Pi 5 (CPU only) at the camera resolution we intend to use. This is an explicit **GO/NO-GO gate**:
+> - **GO (≳3–5 Hz sustained):** track-by-detection as specified — detector re-seeds, tracker fills.
+> - **NO-GO (≲1–2 Hz):** fall back to a **blob/color tracker only** for v1 follow-mode (accept the fragility, constrain the demo to good lighting / distinct clothing), and push robust person-following to post-v1 — possibly behind dedicated hardware (NPU/Jetson).
+> The spike de-risks the single hardest piece of software in the build. The **RISK** if skipped: building all of follow-mode around a detector cadence the Pi can't actually hit, and discovering it only when a moving person walks the robot into a wall. The spike is scheduled in `roadmap.md`.
+
+## 5. Graceful Degradation & Connectivity
+
+The deliberative layer needs WiFi; the reactive layer never does. The system is designed so a network hiccup degrades capability, not safety.
+
+```python
+# Deliberative side — retry with backoff, never block the body.
+def safe_step(...):
+    try:
+        return deliberative_step(...)
+    except (APIConnectionError, RateLimitError, APITimeoutError) as e:
+        backoff.sleep()                 # exponential, capped
+        return None                     # no new intent issued this step
+```
+
+> **DECISION —** On WiFi/cloud loss mid-command: the **reactive layer keeps running unchanged** — it finishes any bounded in-progress goal, keeps obstacle-avoiding, keeps follow-mode (which is fully local), and safe-stops on obstacles. It just stops receiving *new* high-level intents. The **deliberative layer retries with exponential backoff** and resumes issuing intents when the cloud returns. The robot "stops taking new orders," it does not go haywire. A long deliberative outage with no active goal simply leaves the robot in `IDLE` — a safe resting state.
+
+The SDK already retries 429/5xx/connection errors with backoff; we wrap the step so a failed call yields "no intent this step" rather than a crash, and the next step retries naturally.
+
+## 6. Secrets & Config
+
+> **DECISION —** Cloud API keys live in the **environment**, never in source. The deliberative process reads `ANTHROPIC_API_KEY` (and/or `OPENAI_API_KEY`) from the environment / a git-ignored `.env`; the SDK's default `anthropic.Anthropic()` constructor picks it up. No key is ever committed, logged, embedded in a prompt, or written to a memory/state file. Model selection (the per-tier IDs from §3), speed limits, `SAFE_STOP_THRESHOLD`, tick rate, and the IPC endpoint live in one small `config.py` / `config.toml` checked into the repo — config in source, **secrets in the environment**. On the Pi, the key lives in a `0600` env file sourced by the deliberative service unit; on the laptop, in the shell environment.
+
+## 7. Voice — Later Track (High-Level Only)
+
+Voice is a deliberately separate track, bolted on only after the full **text** loop works end to end. The deliberative step loop already has the seams for it (`stt.transcribe(...)` before `build_context`, `tts.say(...)` in place of `print`), so wiring it in is mechanical — but the hard part is not the wiring.
+
+> **RISK —** Far-field speech-to-text on a noisy floor, from a robot that is *also playing audio through its own speaker*, is a real project, not an afternoon bolt-on. It drags in wake-word detection, voice-activity detection, and acoustic echo cancellation (so the robot doesn't transcribe itself), plus mic quality and USB-audio latency. Treating "add a mic and a speaker" as a quick final step is the classic way to stall the whole build. Keep it isolated so its rabbit holes never block the core text-driven magic. Sequencing and the specific STT/TTS choices live in `roadmap.md`.
+
+</script>
+<script type="text/markdown" data-name="roadmap.md">
+# Roadmap
+
+> Build sequencing, the risk register, and the consolidated open questions for yalp v1 — the one place where every DECISION, RISK, and OPEN call lives.
+
+---
+
+This doc is the project's spine. It orders the work smallest-win-first, inserts the
+go/no-go gates the raw milestone list hides, ranks what will actually bite, and
+collects every pending decision so nothing rots in a side conversation. For *what*
+each layer does see `architecture.md`; for *how* the code is shaped see
+`software-spec.md`; for the parts and power see `hardware.md`; for who it's for see
+`product-spec.md`.
+
+> **THESIS —** The hard part of this robot is not the motors, the camera, or the
+> cloud model — each of those is a solved, well-trodden hobby problem. The hard part
+> is the *seam* between the fast local loop and the slow cloud loop. The sequencing
+> below is built to de-risk that seam first and earliest, on the laptop, before any
+> hardware can hide it.
+
+---
+
+## 1. The build path (smallest win first)
+
+The milestones, ordered so each step stands alone and you can stop and play at any
+point. The **magic moment** — the first time the thing feels alive — lands at step 4,
+which is reachable on the bench with only the Phase 1 hardware already in hand.
+
+| # | Milestone | What "done" looks like | Needs hardware | Magic? |
+|---|---|---|---|---|
+| 1 | **Hello motors** | Drive the wheels from Python: forward, turn, stop | Phase 2 (motors, driver, battery) | |
+| 2 | **Safety reflex** | Ultrasonic collision-stop — a fast local loop that overrides any drive command when something's too close | Phase 2 (HC-SR04) | |
+| 3 | **Hello eyes** | Capture a photo and save it | Phase 1 only (C270) | |
+| 4 | **It sees and talks** | Photo → vision model "what do you see?" → print the answer | Phase 1 only | ⭐ **the magic moment** |
+| 5 | **It acts** | Agent loop: command + ability menu → model picks high-level intent → sets a goal for the reactive layer | Phase 1 to build, Phase 2 to drive | |
+| 6 | **It follows / explores** | Person-following as a **local** tracker (no cloud round-trip), obstacle-stop still underneath | Phase 2 + a passing fps gate | |
+| 7 | **It listens and speaks** *(separate track)* | STT + TTS bolted on **after** the text loop works end-to-end | Phase 3 (mic + speaker) | |
+
+> **DECISION —** Voice (step 7) is a *separate track*, not step 7-of-7-in-sequence.
+> It starts only after the full text loop (steps 1–6) works, and it is allowed to lag
+> indefinitely. The voice rabbit hole — mic quality, audio over USB, STT/TTS latency,
+> wake-words — must never block the core magic.
+
+> **DECISION —** The magic moment is step 4, and step 4 needs *no body*. Bench the
+> vision path first. This is what keeps motivation high while the Phase 2 parts ship.
+
+---
+
+## 2. Sequencing refinements
+
+The raw milestone list is correct but incomplete: it hides three things that will
+sink the project if discovered late. Two are *gates* (go/no-go checks) and one is a
+*parallel track* that costs nothing to start now.
+
+### 2.1 Design the loop-to-loop contract in parallel (steps 1–4)
+
+> **DECISION —** Start the loop-to-loop *contract* — the intent/mode schema, the
+> safety-preemption rules, and the shared-state shape — on the laptop **immediately**,
+> in parallel with steps 1–4. It is pure software, needs zero hardware, and it
+> dictates what the motor API (step 1) and the vision/agent API (steps 4–5) must
+> expose. Define the contract *before* building to it, not after.
+
+The contract is the artifact that the whole two-loop architecture stands on. If the
+motor code and the agent loop are built against two different mental models of "what
+is a mode," step 5 becomes a rewrite. Writing it first turns steps 1, 2, 5, and 6
+into implementations of an agreed interface instead of negotiations. See
+`software-spec.md` for the schema and `architecture.md` for the preemption model.
+
+### 2.2 Person-detector fps spike — a GO/NO-GO gate before step 6
+
+> **DECISION —** Before committing to follow-mode (step 6) as imagined, run an early
+> **person-detector fps spike** on the actual Pi 5: how many frames per second can it
+> sustain detecting/tracking a person with no NPU? This is a gate. If the number is
+> too low for a moving target, follow-mode forks to a cheaper blob/color tracker or a
+> track-by-detection scheme *before* any follow code is written — not after it stutters.
+
+The Pi 5 has no NPU (the AI HAT is deliberately skipped). Whether a real person
+*detector* runs fast enough, or whether follow-mode must fall back to a lightweight
+blob tracker, is the single biggest unknown in the reactive layer. Find out cheaply,
+early, on real hardware. See `software-spec.md`.
+
+### 2.3 Power / brownout bring-up — a gate before motors + Pi run together
+
+> **RISK —** Motors and a Pi 5 sharing a power story is the #1 cause of mysterious
+> reboots in hobby robots. Motor inrush and flyback drag the rail down and the Pi
+> brownouts mid-command.
+
+> **DECISION —** Insert a **power bring-up gate** before steps 1–2 ever run with the
+> Pi attached: separate motor and Pi supplies, common ground, decoupling caps, flyback
+> protection, and a deliberate "drive the motors hard while watching for under-voltage
+> warnings" smoke test. Motors do not move under the Pi's control until this passes.
+> See `hardware.md`.
+
+### 2.4 The refined sequence
+
+Original milestones with the gates and the parallel track woven in:
+
+| Order | Item | Type | Where |
+|---|---|---|---|
+| A | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | Parallel track — starts now, laptop-only | `software-spec.md`, `architecture.md` |
+| B | Step 3 — Hello eyes (capture a photo) | Milestone — bench, Phase 1 | `software-spec.md` |
+| C | Step 4 — **It sees and talks** ⭐ | Milestone — bench, Phase 1 | `software-spec.md` |
+| D | Step 5 — It acts (agent loop) | Milestone — built on laptop with webcam stand-in | `software-spec.md` |
+| E | **Power / brownout bring-up** | 🚦 Gate — blocks motors-under-Pi | `hardware.md` |
+| F | Step 1 — Hello motors | Milestone — needs Phase 2 + gate E | `hardware.md` |
+| G | Step 2 — Safety reflex (collision-stop) | Milestone — in *before* autonomous driving | `architecture.md`, `hardware.md` |
+| H | **Person-detector fps spike** | 🚦 Gate — decides step 6's shape | `software-spec.md` |
+| I | Step 6 — It follows / explores | Milestone — gated by H | `software-spec.md` |
+| J | Step 7 — It listens and speaks | Separate track — after I | `software-spec.md`, `product-spec.md` |
+
+Note the order: the contract (A) and the vision path (B–D) run on the laptop while
+Phase 2 parts ship; the body steps (F–G) only begin once parts arrive *and* the power
+gate (E) passes; follow-mode (I) waits behind its fps gate (H).
+
+---
+
+## 3. Current status
+
+> **Status as of this writing:** Phase 1 (the brain) is in hand; the body and voice
+> are not yet bought.
+
+- **Spent (~$200):** the CanaKit Raspberry Pi 5 4GB Starter Kit PRO (board, 27W PD
+  wall supply, active-cooling case, 128GB OS card) plus the Logitech C270 webcam.
+- **Remaining (~$135):** microSD card reader (if no laptop SD slot), Phase 2 body
+  parts (~$105), Phase 3 voice (~$20). Total project ~$335.
+- **Phase 2 deferred:** motors, driver, ball caster, HC-SR04, battery + holder,
+  breadboard/wiring, glue/zip-ties — not yet ordered.
+- **Phase 3 deferred:** USB mic + small speaker.
+
+**What the first sessions actually are:**
+
+1. Flash the kit's card headless (WiFi + SSH baked in), bring the Pi up over SSH.
+2. **Bench steps 3–4** — capture a photo → "it sees and talks." This is reachable
+   today with only Phase 1 hardware, and it's the magic moment.
+3. **In parallel on the laptop:** design the loop-to-loop contract (§2.1) and build
+   the agent loop (step 5) using the laptop webcam as a stand-in camera.
+4. **When Phase 2 arrives:** run the power gate (§2.3), then steps 1–2 (motors, then
+   the safety reflex *before* any autonomous driving).
+
+> **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
+> camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
+> headless Pi is painfully slow — and there's no reason to debug Python *and* hardware
+> *and* Linux all at once. See `software-spec.md`.
+
+---
+
+## 4. Risk register
+
+Ranked by how much each will actually bite — top of the table is where to spend worry.
+
+| # | Risk | Why it bites | Severity | Mitigation / where addressed |
+|---|---|---|---|---|
+| 1 | **The loop-to-loop interface is the hard part and the least specified** | Intent/mode schema, safety preemption, and shared state are the seam the whole two-loop design rests on. If motors and the agent loop are built against different mental models, step 5 becomes a rewrite. | 🔴 Critical | Design the contract first, in parallel, laptop-only (§2.1). `software-spec.md` |
+| 2 | **Person-following physics on a Pi 5 with no NPU** | A real person *detector* may not hit usable fps without an accelerator; follow-mode could stutter and lose a moving target. Forces a blob-vs-detector fork and track-by-detection. | 🔴 Critical | Early fps spike as a go/no-go gate before writing follow code (§2.2). `software-spec.md` |
+| 3 | **A single front ultrasonic is thin** | Narrow cone, side/rear blind spots, and silent failures on glass and soft/angled surfaces. One sensor can't see the obstacle it's about to clip. | 🟠 High | Define collision-stop priority + post-collision behavior; budget 2–3 sensors. `hardware.md`, `architecture.md` |
+| 4 | **No encoders = open-loop control** | Without wheel encoders, distance and heading are guesses; the robot drifts and "back up 30cm" is dead reckoning. Vision closes the loop only in follow mode. | 🟠 High | Accept open-loop for v1; lean on vision feedback in follow mode; encoders are a post-v1 upgrade. `hardware.md` |
+| 5 | **Power / brownout** | Motor inrush and flyback drag the shared rail down and the Pi reboots mid-command — the #1 cause of mysterious resets. | 🟠 High | Separate supplies + common ground, decoupling caps, flyback protection, and a bring-up gate before motors run under the Pi (§2.3). `hardware.md` |
+| 6 | **Voice is the headline goal but the most-deferred, least-specified track** | The product's whole pitch is "talk to it," yet voice is Phase 3 and barely specced. Far-field STT on a cheap mic, over USB, near motor noise is genuinely hard. | 🟡 Medium | Keep it a separate track after the text loop works; spec mic/STT/TTS only when reached. `software-spec.md`, `product-spec.md` |
+| 7 | **Graceful degradation on WiFi loss** | The deliberative layer needs WiFi; if it drops mid-roam the robot must not go haywire. The reactive layer has to safe-stop and keep collision-stop alive on its own. | 🟡 Medium | Reactive layer is network-independent by design; on cloud loss, stop taking new high-level commands and hold/safe-stop. `architecture.md`, `software-spec.md` |
+
+> **RISK —** Risks 1 and 2 are the ones that can invalidate the *design*, not just
+> cost time — which is exactly why §2 front-loads work against both before any code
+> commits to them. Everything below #2 is a known engineering cost, not an unknown.
+
+---
+
+## 5. Consolidated open questions
+
+Every pending decision, pulled into one place so the team can see the whole backlog
+at once rather than rediscovering it scattered across the sibling docs.
+
+> **OPEN —** **Final sensor count.** One front HC-SR04 for v1, or budget 2–3 from the
+> start (front + corners) to cover the blind spots in risk #3? Affects the Phase 2
+> order and the collision-stop logic. → `hardware.md`, `architecture.md`
+
+> **OPEN —** **Follow-mode tracker choice.** Pending the §2.2 fps spike: full person
+> detector, lightweight blob/color tracker, or track-by-detection hybrid? Drives the
+> whole shape of step 6. → `software-spec.md`
+
+> **OPEN —** **Model / provider choice.** Which vision-language model and provider for
+> the per-step loop vs. the escalation model, and what's the tiering threshold? Cost,
+> latency, and SDK all hang on this. → `software-spec.md`, `architecture.md`
+
+> **OPEN —** **Voice timing and approach.** When does the voice track actually start,
+> and is far-field STT in scope for v1 or punted to the kid version? → `software-spec.md`,
+> `product-spec.md`
+
+> **OPEN —** **How much should v1 anticipate the kid version?** Where do we spend now
+> to avoid a rewrite later (interfaces, modes) versus deliberately throwaway cardboard
+> scaffolding? → `product-spec.md`
+
+> **OPEN —** **Post-collision behavior.** After a collision-stop fires, what then —
+> back off, rotate to find clear space, halt and ask the deliberative layer? Open-loop
+> control (risk #4) makes "back up" a guess. → `architecture.md`, `hardware.md`
+
+> **OPEN —** **Roaming power budget.** Which PD power bank, and does the ~1–1.5h
+> runtime estimate survive motors + Pi + camera under real load? → `hardware.md`
+
+---
+
+## 6. Future / stretch (post-v1)
+
+Explicitly out of scope for v1, recorded so good ideas don't get re-litigated as if
+they were on the critical path.
+
+- **Kid-friendly enclosure** — cute, durable, safe; small parts and lithium handled
+  responsibly. This is the v1 → kid-version transition. See `product-spec.md`.
+- **Smooth mode** — real-time streaming multimodal so the deliberative layer narrates
+  and decides continuously instead of in photo-by-photo bursts. Heavier and pricier
+  over home WiFi while driving motors. See `architecture.md`.
+- **Better navigation** — depth camera or LiDAR + SLAM for reliable "go to the
+  kitchen." This is what unlocks named-place navigation, which v1 explicitly punts.
+- **A stronger on-device tracker** — smoother person-following and the beginnings of
+  room-mapping, beyond what the v1 blob/detector fork can do.
+- **Onboard AI (e.g. Jetson Orin Nano)** — move inference on-device to cut latency and
+  the cloud dependency. Directly attacks risks #1, #2, and #7.
+- **The dream: balance-on-a-ball.** A ballbot that actually balances — a hard control
+  problem deliberately saved for last, after the wheeled base is boring and reliable.
+
+> **THESIS —** Every stretch item maps to a v1 limitation we chose on purpose. v1
+> exists to make the two-loop architecture real and boring; the stretch list is what
+> gets exciting *only once that foundation holds*.
+
+</script>
+<script type="text/markdown" data-name="initial-plan.md">
+# AI Companion Robot — Project Spec & Goals
+
+## One-line summary
+
+A small, from-scratch robot with a camera and a "brain" that I can talk to in plain language — it interprets what I say, moves and looks around, and reports back what it sees. Long-term it becomes a fun toy for my son; **v1 is a personal build-and-learn project where looks and durability don't matter (cardboard is fine).**
+
+---
+
+## Vision & goals
+
+- **Talk to it naturally.** I say something like *"follow me,"* *"go check around the corner and tell me what's there,"* or *"what do you see?"* and it understands and acts — not a fixed list of keyword commands.
+- **It sees and reports.** It can look at a scene and describe it back to me out loud.
+- **It moves through the world** under its own power and reacts to what's around it.
+- **Not locked into a kit.** I want full freedom over the form and the behavior. Building from scratch on purpose — no pre-set dog/car shape, no closed repertoire.
+- **v1 is a learning project.** Aesthetics, durability, and polish are explicitly *out of scope* for the first iteration. Get the core loop working first; make it nice later.
+- **Eventual purpose:** a delightful, kid-friendly robot pet for my son (age 5–8). At that age he's the audience/co-pilot, not the operator — so "it just works reliably" matters more for *that* version than for v1.
+
+---
+
+## Guiding principle: what "do whatever I tell it" realistically means
+
+The AI can *understand* almost any request. The robot can only *do* what its body and my code allow. So here's the realistic envelope for a small wheeled/rolling bot — and notice the buckets map cleanly onto the two-layer architecture below: the snappy, reliable stuff is fast *local* reflexes; the clumsy stuff is the slow *cloud* "thinking."
+
+**In scope (reliable and satisfying)**
+- *Reactive movement — runs locally on the fast layer, so it feels snappy and alive:* follow me, come here, back up, spin, dance, go forward/left/right, stop; react to faces and gestures; basic obstacle avoidance.
+- *Talk and visual Q&A — runs through the cloud LLM, but it isn't time-critical so the latency doesn't hurt:* answer any spoken question, tell stories, play games (it's an LLM with a speaker); "what do you see?", "what color is this?", "read this sign," "is that a cat or a dog?"
+
+**In scope but clumsy (good enough for v1) — the slow deliberative layer working step by step**
+- "Go around the corner and report" / explore-and-describe a room — works via a vision-model-in-the-loop, but it moves haltingly (a few seconds of "thinking" per step).
+
+**Out of scope for v1 (or for cheap rolling hardware in general)**
+- Reliable navigation to *named* places ("go to the kitchen") — needs real mapping/SLAM + better sensors.
+- Manipulation — "pick up that toy," "bring me the remote" — needs an arm/gripper and much more.
+- Stairs, rough terrain, going outside far from WiFi.
+
+**Mental model:** a clever talking pet that *sees, chats, and moves toward things* — not a butler that fetches.
+
+---
+
+## How it works (architecture)
+
+**Core idea:** the robot runs on *two loops, not one.* A **fast reactive layer** lives entirely on the Pi and keeps the robot responsive and safe in real time. A **slow deliberative layer** calls a cloud vision-language model to understand what I want and decide high-level intent. The LLM sets the goal; the reactive layer executes it and stops the robot from hurting itself. This is the cheap, hobby version of how capable robots are actually built today — a slow model that reasons about the scene paired with a fast loop that drives the body.
+
+Splitting it this way is the single most important design decision in v1. If everything routed through the cloud loop, the robot would be **blind and uncontrolled** during the 2–3 seconds it spends "thinking" each step — which is exactly how hobby bots drive into walls. Keeping reflexes local fixes that.
+
+**Fast reactive layer** (on the Pi, ~10–30 Hz, no network):
+- **Collision-stop** — overrides every other command. If the ultrasonic sees something too close, the wheels stop, full stop. A reflex, never gated behind the AI.
+- **Person-tracking / centering** — when in "follow" mode, a lightweight on-device tracker keeps the target centered and drives toward it. No cloud in this path, so it actually keeps up with a moving person.
+- **"Keep doing X until something changes"** — drive straight / turn until a condition flips.
+
+**Slow deliberative layer** (cloud, seconds per step):
+- Speech-to-text → LLM/VLM gets my words plus a still photo → picks a high-level intent and **sets a mode/goal for the reactive layer** → describes what it sees → text-to-speech.
+
+**The "do anything" mechanism = AI agents / tool use.** Instead of hand-coding every command, I give the language model a *menu* of the robot's abilities (drive, turn, look, speak, enter-follow-mode, check-distance, describe-scene) plus my request, and the model chains the right actions itself. Crucially, the abilities it calls are mostly *modes for the reactive layer*, not direct motor twitches — the model says "follow that person," and the local tracker does the following. I build the toolbox; the AI conducts; the fast layer plays.
+
+```
+FAST REACTIVE LAYER — local, on the Pi, ~10–30 Hz, no cloud
+   camera frames + ultrasonic  →  reflexes  →  motors
+     • collision-stop  (overrides everything)
+     • person-tracking / centering  (when in follow mode)
+     • "keep doing X until something changes"
+
+SLOW DELIBERATIVE LAYER — cloud, ~seconds per step
+   voice  →  speech-to-text
+          →  LLM/VLM  (my words + a camera photo)
+          →  picks high-level intent, sets a mode/goal for the reactive layer
+          →  describes what it sees  →  text-to-speech  →  spoken answer
+
+   The LLM sets intent.  The reactive layer executes it and keeps the robot safe.
+```
+
+**Stills, not video (for v1).** The deliberative layer sends *still photos*, not a video stream — cheaper, simpler, and the model handles stills fine. The upgrade that makes this feel *smooth* instead of bursty is real-time streaming multimodal (continuous narration/decisions), but streaming a live feed from a Pi over home WiFi *while* driving motors is a heavier, pricier integration — so it's a stretch goal, not v1. (See caveats.)
+
+**Tiered models.** Use a fast/cheap vision model for the per-step loop (centering, "is the path clear?", a rough "what's ahead?") and only escalate to a bigger model for genuinely hard requests ("describe this whole scene in detail," "read this sign"). No reason to pay flagship latency and cost on every frame.
+
+---
+
+## Prior art to steal from (don't reinvent the brain)
+
+Two open-source robots already implement big chunks of what I'm building. I don't have to adopt their stacks, but reading them first will save real time — the conversation loop and the follow-me tracker are solved problems with published code.
+
+- **LeKiwi** (Hugging Face's LeRobot) — a wheeled mobile base that installs and runs directly on a Raspberry Pi. It's the closest existing reference to my chassis-and-Pi setup; worth it for how they structure the Pi-side motor/control code.
+- **Reachy Mini** (Hugging Face) — an open-source robot on a Pi with a camera, four mics, and a speaker, plus an SDK that integrates with LLMs. It ships a "Conversation App" for natural talking and a real-time tracker. It doesn't roam (head/body/antenna only), so it won't help with the explore-the-room half — but the talking-seeing-LLM half is basically my eventual kid version, already built and open.
+
+**Plan:** spend a day reading both *before* writing my own conversation loop and tracker.
+
+---
+
+## Hardware spec
+
+| Part | Pick | Approx. $ | Notes |
+|---|---|---|---|
+| **Brain** | Raspberry Pi 5 (4GB) | ~$110 | In v1 the Pi is mostly doing **I/O** — camera, motors, WiFi, audio — since the heavy AI runs in the cloud. So the Pi 5 isn't about raw compute here; it's about RAM headroom and **multiple real USB ports** (camera + mic + speaker without hub-juggling), which means far fewer gremlins on a first build. A Pi 4 (4GB) already on hand is fine. A Pi Zero 2 W (~$15) works but its single USB port and tight RAM trade money for debugging time — a false economy for build #1. **Skip the AI HAT / NPU** — running local models on it is a known hobbyist trap; CPU + cloud is the move for v1. **✓ Ordered** via the CanaKit Pi 5 4GB Starter Kit PRO (board + 27W PD wall supply + case/fan + 128GB OS card). *(The standalone board is ~$110 in the 2026 memory crunch vs $60 at launch.)* |
+| microSD | 128GB card (came in the kit) | ✓ have | OS + code; pre-loaded with Raspberry Pi OS — I'll re-flash with the Lite image + WiFi/SSH for headless. |
+| Pi power | 27W USB-C **PD** wall supply ✓ (in kit) + PD power bank (roaming — to buy) | ✓ + ~$30 | Wall PSU came with the kit (great for the bench). A PD power bank is still needed for roaming (Phase 2). Pi 5 wants a proper PD source, not any phone charger. |
+| **Eyes** | Logitech C270 USB webcam | ~$22 ✓ | **Decided & ordered.** UVC plug-and-play; doubles as my laptop cam while building the brain. Pi Camera Module 3 stays a possible later swap (needs a Pi-5 camera cable) if I want autofocus. |
+| **Motors** | 2× TT DC gear motors + wheels | ~$15 (4-pack) | Differential drive |
+| Balance | 1–2× ball caster | ~$3 ea | Passive roller; holds up the chassis |
+| Motor driver | DRV8833 *or* TB6612FNG | ~$5 | Cheaper, cooler, and more efficient than the classic L298N (which drops ~2V and runs hot, wasting battery). Use an L298N only if it's already in the parts bin. |
+| Motor power | 4×AA holder *or* 18650 pack | ~$2–12 | **Separate** from Pi power; share a common ground. |
+| **Obstacle sensor** | HC-SR04 ultrasonic | ~$3 | **Core, not optional.** This is the collision-stop reflex — in place from the moment the wheels first move. Cheapest insurance on the whole bot. |
+| Wiring | Jumper wires + mini breadboard | ~$10 | |
+| Chassis | Cardboard / hot glue / zip ties | — | v1 — whatever's on hand |
+| *Deferred* | USB mic + small speaker | ~$15 | Voice in/out. Deliberately a **separate, later track** — get the whole loop working text-first. |
+
+**Brain + camera are now ordered (~$200 — the CanaKit kit + C270).** Remaining to finish the robot: ~$135 (card reader + Phase 2 body + Phase 3 voice), for a total project of ~$335 — still low-hundreds. Full breakdown in the shopping list below.
+
+> **Locomotion is the leading approach, not a commitment.** Two driven wheels + a ball caster (cheap, robust, textbook). *Not* attempting a balance-on-a-ball "ballbot" or BB-8 sphere yet — those are hard control problems saved for later.
+
+---
+
+## Shopping list — what's ordered and what's left
+
+**Phase 1 (the brain) is ordered.** The all-in-one kit plus the camera together cover the entire brain — the Pi, its power supply, cooling, the OS card, and the eyes. Everything left to buy is the **body** (Phase 2) and **voice** (Phase 3), and those parts weren't hit by the price crisis, so the rest is small and predictable.
+
+> **Heads-up on pricing (mid-2026):** a global DRAM/NAND shortage — driven by AI-datacenter demand — pushed Raspberry Pi and memory-card prices well above MSRP (the Pi 5 4GB is ~$110 now versus its $60 launch). That's already absorbed in the kit I bought. The body parts below (motors, driver, sensor, wiring, glue) are unaffected and stable.
+
+### ✅ Already ordered (Phase 1 — the brain) — ~$200
+| Item | What it covers | ~$ |
+|---|---|---|
+| **CanaKit Raspberry Pi 5 (4GB) Starter Kit PRO** | Pi 5 4GB board · UL-listed 27W USB-C PD **wall** supply · case with **active-cooling fan** · 128GB microSD **pre-loaded with Raspberry Pi OS** | ~180 |
+| **Logitech C270 USB webcam** | the "eyes" — UVC plug-and-play; works on the Pi and doubles as my laptop cam while I build the brain | ~22 |
+
+With just these, I can reach **build step 4 ("it sees and talks")** on the bench. Two things to know about the kit:
+- Its PSU is a **wall** supply — perfect for development, but a roaming **power bank** is still on the buy list for when the robot moves.
+- Its case fan handles cooling, so **no separate Active Cooler is needed**. The case is optional for a cardboard bot: I can leave the Pi in it (for the fan) and glue/zip-tie the whole cased unit to the chassis.
+
+### 🛒 Still to buy
+
+**First, to set up headless:**
+| Item | Why | ~$ |
+|---|---|---|
+| USB microSD card reader — *skip if my laptop has an SD slot* | to re-flash the kit's card with WiFi + SSH preset (Raspberry Pi Imager) so it boots with no monitor | 8 |
+
+> The card is pre-loaded, but for headless I'll re-flash it with my WiFi + SSH baked in. (Check the kit box — some CanaKit bundles already include a reader.)
+
+**Phase 2 — the body (~$105):** adds movement, the safety reflex, and follow-mode.
+| Item | Notes | ~$ |
+|---|---|---|
+| USB-C PD power bank (≥20W, ~10,000mAh) | roaming power — the kit's supply is wall-only | 30 |
+| TT DC gear motors + wheels, 4-pack | need 2; spares are good | 15 |
+| Motor driver: DRV8833 **or** TB6612FNG breakout | *get the pre-soldered-header version* — no soldering; cheaper and cooler than an L298N | 7 |
+| Ball caster (passive roller) | holds up the chassis | 6 |
+| HC-SR04 ultrasonic sensor | the collision-stop reflex — **core, not optional**; pins pre-attached | 8 |
+| 4×AA holder + AA batteries | motor power, kept **separate** from the Pi (common ground); simple and safe — no lithium yet | 10 |
+| Breadboard + jumper wire kit | get M-M, M-F, **and** F-F wires | 12 |
+| Hot glue gun + zip ties + foam mounting tape | to build and mount the cardboard chassis | 19 |
+
+> **Zero soldering required for v1** — every module above can be bought with pre-attached header pins or screw terminals. A soldering iron is a nice-to-have, not a must (~$20 if I'd rather solder).
+
+### Phase 3 — voice (~$20)
+| Item | Notes | ~$ |
+|---|---|---|
+| USB mini microphone + small USB speaker | voice in/out; bolt on once the text loop works. A ~$5 USB audio adapter gives cleaner sound and frees a USB port if onboard audio is weak. | 15–20 |
+
+### Deliberately *not* buying
+- **Monitor / keyboard / mouse** — headless; everything's over SSH from my laptop.
+- **Separate Active Cooler / heatsink** — the kit's case fan already covers it.
+- **AI HAT / NPU accelerator** — the heavy AI runs in the cloud for v1; local models on a Pi accelerator are a known hobbyist trap.
+- **Depth camera / LiDAR** — that's the post-v1 navigation upgrade.
+
+### Where the money's gone
+- **Spent so far (the brain): ~$200** — CanaKit kit + C270 webcam.
+- **Left to finish the whole robot: ~$135** — card reader + Phase 2 body + Phase 3 voice.
+- **Total project: ~$335.** Still low-hundreds, not thousands.
+
+---
+
+## Software stack
+
+- **OS:** Raspberry Pi OS Lite (headless — no monitor; develop over SSH/WiFi from my laptop).
+- **Enable:** SSH, camera, I2C.
+- **Reactive layer (local, on the Pi):** `gpiozero` for motors and the ultrasonic; `opencv` for the lightweight person/blob tracker that powers follow-mode and centering. This loop runs on-device with no network call.
+- **Deliberative layer (cloud):** OpenAI / Anthropic SDK (or plain HTTP) to call a vision-language model. **Tiered** — a fast/cheap model for the per-step loop, a bigger one only for hard scene descriptions.
+- **Camera:** `picamera2` (Pi cam) or standard capture (USB webcam).
+- **Voice (separate, later track):** a speech-to-text + text-to-speech library or service, bolted on only *after* the text loop works end-to-end.
+- **Develop the brain on my laptop, not the Pi.** Only motor-control and camera-capture genuinely need the Pi. The whole vision/agent loop gets built and iterated on my laptop (using the laptop webcam as a stand-in camera), where the edit-test cycle is instant — then married to the body at the end. Iterating that loop over SSH on a headless Pi is painfully slow, and there's no reason to debug Python *and* hardware *and* Linux all at once.
+
+---
+
+## Build path (milestones — smallest win first)
+
+1. **Hello motors** — drive the wheels from Python (forward, turn, stop). *(From here on, develop the brain on the laptop — only motors + camera capture need the Pi.)*
+2. **Safety reflex** — wire up the ultrasonic and build the collision-stop: a fast local loop that overrides any drive command when something's too close. This goes in *before* the robot ever drives on its own — it's the foundation of the reactive layer.
+3. **Hello eyes** — capture a photo and save it.
+4. **It sees and talks** — send the photo to a vision model ("what do you see?"), print the answer. ← *the magic moment, and it's only step 4.*
+5. **It acts** — wire up the agent loop: command + action menu → the model picks high-level intent and sets a goal for the reactive layer. Now *"go forward and tell me what's there"* works, with the collision-stop running underneath the whole time.
+6. **It follows / explores** — person-following as a **local tracker** (not a cloud round-trip, so it keeps up with a moving target), with obstacle-stop still underneath.
+7. **(separate track) It listens and speaks** — add speech-to-text and text-to-speech once the full text-based loop works. Kept deliberately separate so the voice rabbit hole (mic quality, audio over USB, STT/TTS latency, wake-words) doesn't block the core magic.
+
+Each step stands alone — I can stop and play at any point.
+
+**Where I am now:** the brain (kit + webcam) is in hand but the body parts aren't yet, so my first sessions are the *vision path* — set up the Pi headless, then run steps **3–4** (capture a photo → "it sees and talks") on the bench. Steps **1–2** (motors, safety reflex) begin when the Phase 2 order arrives; meanwhile I can build the agent loop (step 5) on my laptop with the webcam standing in.
+
+---
+
+## Known constraints & honest caveats
+
+- **Latency (and why the robot still feels alive):** each *deliberative* step is photo → API call → response → new goal, so high-level decisions arrive in halting bursts (a few seconds each). But the **reactive layer runs locally at full speed** — collision-stop, following, and centering don't wait on the cloud — so the robot stays responsive and safe *between* those bursts instead of freezing. The bursts are the thinking; the body keeps moving.
+- **Smooth mode (the streaming upgrade):** real-time streaming multimodal (continuous narration/decisions instead of photo-by-photo) is what would make the deliberative layer feel smooth. Over home WiFi while driving motors it's a heavier, pricier integration — parked as a stretch goal, not v1.
+- **Cost:** cloud API calls are pennies-to-dollars for hobby use, and tiering models keeps it cheap. A local model avoids fees but needs beefier hardware and is less capable.
+- **Connectivity:** the deliberative layer needs WiFi wherever it roams (fine indoors). The reactive layer keeps working even if the network hiccups — the robot just stops taking new high-level commands, it doesn't go haywire.
+- **Battery:** expect ~1–1.5 hours of runtime per charge.
+- **Reliability:** this is a flaky hobby build, not a polished product — totally fine for v1, but it's why the *kid* version is a later, sturdier iteration.
+- **Learning curve:** ~4–8 hours for a basic from-scratch build, plus debugging (loose jumpers, wrong pins, Linux/Python gremlins) — which is where most of the learning happens. Developing the brain on the laptop cuts a good chunk of this.
+
+---
+
+## Future / stretch (post-v1)
+
+- Kid-friendly enclosure (cute, durable, safe — small parts & lithium battery handled responsibly).
+- **Smooth mode:** real-time streaming multimodal so the deliberative layer narrates and decides continuously instead of in bursts.
+- Better navigation: depth camera or LiDAR + SLAM for reliable "go to X."
+- A stronger on-device tracker for smoother person-following and room-mapping.
+- Onboard AI (e.g. a Jetson Orin Nano) to cut latency and the cloud dependency.
+- The dream: a robot that actually balances on a ball.
+
+---
+
+## Decisions — now settled
+
+- **Brain** — Raspberry Pi 5 4GB, via the CanaKit Starter Kit PRO. **Ordered.**
+- **Camera** — Logitech C270 USB webcam. **Ordered.** (Pi Camera Module 3 stays a possible later swap — it'd need a Pi-5 camera cable — if I want autofocus.)
+- **Locomotion** — differential drive: two TT gear motors + a ball caster. Approach locked; parts are in the Phase 2 order, not yet bought.
+- **Voice** — a separate, later track; text-first.
+
+</script>
+<!--DOCS:END-->
+</div>
+
+<script>
+(function(){
+  function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function inline(s){
+    var parts=s.split('`');
+    for(var i=0;i<parts.length;i++){ if(i%2===1){ parts[i]='@@CO@@'+parts[i]+'@@CC@@'; } }
+    s=parts.join('');
+    s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    s=s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1<em>$2</em>');
+    s=s.split('@@CO@@').join('<code>').split('@@CC@@').join('</code>');
+    return s;
+  }
+  function renderList(block){
+    var first=null,k;
+    for(k=0;k<block.length;k++){ if(/^(\s*)([-*]|\d+\.)\s+/.test(block[k])){ first=block[k]; break; } }
+    var ordered=/^\s*\d+\.\s+/.test(first||'');
+    var html=ordered?'<ol>':'<ul>'; var i=0;
+    while(i<block.length){
+      var m=block[i].match(/^(\s*)([-*]|\d+\.)\s+([\s\S]*)$/);
+      if(!m){ i++; continue; }
+      var indent=m[1].length; var item=m[3]; var sub=[]; i++;
+      while(i<block.length){
+        var ind2=block[i].match(/^(\s*)/)[1].length;
+        var isItem=/^(\s*)([-*]|\d+\.)\s+/.test(block[i]);
+        if(isItem && ind2>indent){ sub.push(block[i]); i++; }
+        else if(!isItem && block[i].trim()!=='' && ind2>indent){ item+=' '+block[i].trim(); i++; }
+        else break;
+      }
+      html+='<li>'+inline(esc(item))+(sub.length?renderList(sub):'')+'</li>';
+    }
+    return html+(ordered?'</ol>':'</ul>');
+  }
+  // detect an opinionated marker as the leading bold token of a blockquote
+  var MARKERS={DECISION:'decision',THESIS:'thesis',RISK:'risk',OPEN:'open'};
+  function calloutClass(inner){
+    var m=inner.match(/^\s*\*\*\s*([A-Z]+)/);
+    if(m && MARKERS[m[1]]) return MARKERS[m[1]];
+    return null;
+  }
+  function render(md){
+    var lines=md.replace(/\r\n/g,'\n').split('\n'); var html=''; var i=0;
+    while(i<lines.length){
+      var line=lines[i];
+      if(/^```/.test(line)){ var buf=[]; i++; while(i<lines.length && !/^```/.test(lines[i])){ buf.push(lines[i]); i++; } i++; html+='<pre><code>'+esc(buf.join('\n'))+'</code></pre>'; continue; }
+      if(/^\s*(---|\*\*\*)\s*$/.test(line)){ html+='<hr>'; i++; continue; }
+      var h=line.match(/^(#{1,6})\s+(.*)$/);
+      if(h){ var n=h[1].length; html+='<h'+n+'>'+inline(esc(h[2]))+'</h'+n+'>'; i++; continue; }
+      if(/\|/.test(line) && i+1<lines.length && /^[\s|:-]+$/.test(lines[i+1]) && /-/.test(lines[i+1]) && /\|/.test(lines[i+1])){
+        var pr=function(r){return r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(function(c){return c.trim();});};
+        var headers=pr(line); i+=2; var rows=[];
+        while(i<lines.length && /\|/.test(lines[i]) && lines[i].trim()!==''){ rows.push(pr(lines[i])); i++; }
+        html+='<table><thead><tr>'+headers.map(function(c){return '<th>'+inline(esc(c))+'</th>';}).join('')+'</tr></thead><tbody>';
+        rows.forEach(function(r){ html+='<tr>'+r.map(function(c){return '<td>'+inline(esc(c))+'</td>';}).join('')+'</tr>'; });
+        html+='</tbody></table>'; continue;
+      }
+      if(/^\s*>\s?/.test(line)){
+        var bq=[]; while(i<lines.length && /^\s*>\s?/.test(lines[i])){ bq.push(lines[i].replace(/^\s*>\s?/,'')); i++; }
+        var inner=bq.join('\n');
+        var cl=calloutClass(inner);
+        if(cl){
+          // pull the marker word out into a colored tag, render the rest as the body
+          var mm=inner.match(/^\s*\*\*\s*([A-Z]+)\s*(—|-|–)?\s*\*\*\s*/);
+          var rest=inner, tag=cl.toUpperCase();
+          if(mm){ rest=inner.slice(mm[0].length); }
+          else { var mm2=inner.match(/^\s*\*\*\s*([A-Z]+[^*]*)\*\*\s*/); if(mm2){ tag=mm2[1].replace(/[—–-]\s*$/,'').trim(); rest=inner.slice(mm2[0].length); } }
+          html+='<blockquote class="cl-'+cl+'"><span class="cl-tag">'+esc(tag)+'</span>'+render(rest)+'</blockquote>';
+        } else {
+          html+='<blockquote>'+render(inner)+'</blockquote>';
+        }
+        continue;
+      }
+      if(/^(\s*)([-*]|\d+\.)\s+/.test(line)){
+        var blk=[];
+        while(i<lines.length){
+          if(/^(\s*)([-*]|\d+\.)\s+/.test(lines[i])){ blk.push(lines[i]); i++; }
+          else if(lines[i].trim()!=='' && /^\s+\S/.test(lines[i]) && blk.length){ blk.push(lines[i]); i++; }
+          else break;
+        }
+        html+=renderList(blk); continue;
+      }
+      if(line.trim()===''){ i++; continue; }
+      var pbuf=[line]; i++;
+      while(i<lines.length && lines[i].trim()!=='' && !/^(#{1,6}\s|```|\s*>\s?|\s*(---|\*\*\*)\s*$|(\s*)([-*]|\d+\.)\s+)/.test(lines[i])){ pbuf.push(lines[i]); i++; }
+      html+='<p>'+inline(esc(pbuf.join(' ')))+'</p>';
+    }
+    return html;
+  }
+
+  // load embedded markdown into a dict keyed by data-name
+  var store=document.getElementById('docstore'); var docs={};
+  if(store){ store.querySelectorAll('script[type="text/markdown"]').forEach(function(s){ docs[s.getAttribute('data-name')]=s.textContent.split('<\\/script').join('</script'); }); }
+
+  var view=document.getElementById('docview'), body=document.getElementById('docbody'), fname=document.getElementById('docname');
+  function openDoc(name){ if(!docs[name]||!view)return; body.innerHTML=render(docs[name]); fname.textContent=name; wireDocLinks(body); view.classList.add('open'); view.setAttribute('aria-hidden','false'); window.scrollTo(0,0); view.scrollTop=0; document.documentElement.style.overflow='hidden'; }
+  function closeDoc(){ if(!view)return; view.classList.remove('open'); view.setAttribute('aria-hidden','true'); document.documentElement.style.overflow=''; }
+  function route(){ var m=(location.hash||'').match(/^#doc\/(.+)$/); var name=m?decodeURIComponent(m[1]):null; if(name && docs[name]) openDoc(name); else closeDoc(); }
+  function go(name){ location.hash='#doc/'+encodeURIComponent(name); }
+
+  // auto-link any backticked filename that matches an embedded doc, within a root element
+  function wireDocLinks(root){
+    root.querySelectorAll('code').forEach(function(c){
+      var t=c.textContent.trim();
+      if(docs[t] && !c.classList.contains('doc-link')){
+        c.classList.add('doc-link'); c.title='Open '+t;
+        c.addEventListener('click',function(){ go(t); });
+      }
+    });
+  }
+
+  // sidebar doc links
+  document.querySelectorAll('nav.side a.doc').forEach(function(a){ a.style.cursor='pointer'; a.addEventListener('click',function(e){ e.preventDefault(); go(a.getAttribute('data-doc')); }); });
+  // backticked filenames in the consolidated overview
+  wireDocLinks(document.querySelector('.col'));
+
+  var back=document.getElementById('docback'); if(back){ back.addEventListener('click',function(){ location.hash=''; }); }
+  window.addEventListener('hashchange',route);
+  window.addEventListener('keydown',function(e){ if(e.key==='Escape' && view && view.classList.contains('open')) location.hash=''; });
+  route();
+
+  // active-section highlighting for the overview anchors
+  var nav=Array.prototype.slice.call(document.querySelectorAll('nav.side a[href^="#"]'));
+  var map={}; nav.forEach(function(a){ map[a.getAttribute('href').slice(1)]=a; });
+  if('IntersectionObserver' in window){
+    var obs=new IntersectionObserver(function(entries){ entries.forEach(function(e){ if(e.isIntersecting){ nav.forEach(function(l){ l.classList.remove('active'); }); var a=map[e.target.id]; if(a) a.classList.add('active'); } }); }, { rootMargin:'-45% 0px -50% 0px', threshold:0 });
+    document.querySelectorAll('main section[id]').forEach(function(s){ obs.observe(s); });
+  }
+})();
+</script>
+</body>
+</html>
