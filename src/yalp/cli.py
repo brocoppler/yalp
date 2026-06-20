@@ -28,6 +28,7 @@ from . import __version__
 # Populated by later waves, e.g. "yalp.deliberative.agent".
 FEATURE_MODULES: list[str] = [
     "yalp.deliberative.see",
+    "yalp.deliberative.agent_cli",
 ]
 
 

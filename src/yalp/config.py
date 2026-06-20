@@ -71,6 +71,15 @@ REACTIVE_TICK_HZ: float = 20.0
 # tick's heartbeat is older than this (software-spec.md §2.6).
 WATCHDOG_TIMEOUT_MS: int = 100
 
+# Hard per-session deliberative budget (software-spec.md §3). A WiFi retry-storm
+# or a runaway model escalation must not silently run up cost: the agent tracks
+# cumulative model calls and tokens for a session and, once either cap is hit,
+# **stops issuing model calls** and falls back to IDLE/local behavior (exactly
+# the §5 outage path) rather than retrying forever. This is a ceiling the
+# operator sets here, separate from any per-call ``max_tokens``. Env-overridable.
+BUDGET_MAX_CALLS: int = int(os.environ.get("YALP_BUDGET_MAX_CALLS", "40"))
+BUDGET_MAX_TOKENS: int = int(os.environ.get("YALP_BUDGET_MAX_TOKENS", "200000"))
+
 
 @dataclass(frozen=True)
 class Config:
@@ -91,6 +100,8 @@ class Config:
     safe_stop_threshold_m: float = SAFE_STOP_THRESHOLD_M
     reactive_tick_hz: float = REACTIVE_TICK_HZ
     watchdog_timeout_ms: int = WATCHDOG_TIMEOUT_MS
+    budget_max_calls: int = BUDGET_MAX_CALLS
+    budget_max_tokens: int = BUDGET_MAX_TOKENS
 
 
 def get_api_key() -> str | None:
@@ -127,6 +138,8 @@ __all__ = [
     "SAFE_STOP_THRESHOLD_M",
     "REACTIVE_TICK_HZ",
     "WATCHDOG_TIMEOUT_MS",
+    "BUDGET_MAX_CALLS",
+    "BUDGET_MAX_TOKENS",
     "Config",
     "get_api_key",
     "require_api_key",

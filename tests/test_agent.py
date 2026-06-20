@@ -1,0 +1,256 @@
+"""Agent-loop tests — no network, key, camera, or SDK.
+
+The Anthropic client is *injected* as a scripted stub, the reactive layer is the
+real :class:`FakeReactiveBackend` behind a real ``ReactiveServer`` /
+``DeliberativeClient`` over a localhost socket (the same machinery the contract
+tests exercise), and the vision callable is a recording stub. So these run the
+*real* agent loop with only the cloud mocked.
+
+Coverage (software-spec.md §3):
+  1. a mocked drive tool_use → the Agent sends the right Intent to the fake
+     backend and reads RobotState back.
+  2. model_router: haiku by default, sonnet on multi-step explore, opus on
+     describe_scene(detail='full').
+  3. the hard per-session budget cap stops the loop cleanly when exceeded.
+  4. explore() expands into a drive/turn/describe sugar loop (no EXPLORE mode).
+  5. a collision/BLOCKED state is surfaced to the agent and it does not blindly
+     reverse.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from yalp import config
+from yalp.contract.ipc import DeliberativeClient, ReactiveServer
+from yalp.contract.messages import GoalStatus, Mode
+from yalp.deliberative import model_router
+from yalp.deliberative.agent import Agent, build_context
+from yalp.deliberative.model_router import Budget, RoutingContext
+from yalp.reactive.fake_backend import FakeReactiveBackend
+
+
+# --- scripted, no-network stand-in for the Anthropic client -----------------
+def _text(text):
+    return SimpleNamespace(type="text", text=text)
+
+
+def _tool(name, **inp):
+    return SimpleNamespace(type="tool_use", name=name, input=inp, id=f"toolu_{name}")
+
+
+class ScriptedClient:
+    """Returns one canned assistant turn per ``messages.create`` call.
+
+    Once the script is exhausted it keeps returning the final turn (so a runaway
+    loop keeps "calling tools" — used by the budget test).
+    """
+
+    def __init__(self, script):
+        self._script = list(script)
+        self._i = 0
+        self.calls = 0
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        self.calls += 1
+        blocks = self._script[min(self._i, len(self._script) - 1)]
+        self._i += 1
+        stop = "tool_use" if any(b.type == "tool_use" for b in blocks) else "end_turn"
+        return SimpleNamespace(
+            content=blocks,
+            stop_reason=stop,
+            usage=SimpleNamespace(input_tokens=1000, output_tokens=50),
+        )
+
+
+class RecordingDescribe:
+    """A stub describe_scene callable that records its calls."""
+
+    def __init__(self, reply="A plain room with a chair."):
+        self.reply = reply
+        self.calls = []
+
+    def __call__(self, detail="quick", question=None, model=None):
+        self.calls.append({"detail": detail, "question": question, "model": model})
+        return self.reply
+
+
+class _Harness:
+    """A real fake-backend + server + client, ticking on a thread."""
+
+    def __init__(self, backend=None, tick_hz=50.0):
+        self.backend = backend or FakeReactiveBackend(tick_hz=tick_hz)
+        self.server = ReactiveServer(host="127.0.0.1", port=0, mailbox=self.backend.mailbox)
+        self.server.start()
+        self.stop = threading.Event()
+        self.runner = threading.Thread(
+            target=self.backend.run,
+            kwargs={"server": self.server, "stop_event": self.stop},
+            daemon=True,
+        )
+        self.runner.start()
+        self.client = DeliberativeClient("127.0.0.1", self.server.port)
+        self.client.connect()
+        self.server.wait_for_client(2.0)
+
+    def close(self):
+        self.stop.set()
+        self.runner.join(timeout=2.0)
+        self.client.close()
+        self.server.stop()
+
+
+@pytest.fixture
+def harness():
+    h = _Harness()
+    try:
+        yield h
+    finally:
+        h.close()
+
+
+# --- 1. drive tool_use -> Intent sent + RobotState read back ----------------
+def test_agent_dispatches_drive_intent_and_reads_state(harness):
+    client = ScriptedClient([
+        [_text("Driving forward."), _tool("drive", distance_m=0.5, speed=1.0)],
+        [_text("Done.")],  # no tool_use -> loop ends
+    ])
+    describe = RecordingDescribe()
+    agent = Agent(client=client, reactive=harness.client, describe_scene=describe)
+
+    transcript = agent.run_turn("drive forward half a meter")
+
+    # The model was consulted, the tool was dispatched, and a state came back.
+    tools = [e for e in transcript if e.kind == "tool"]
+    assert any(e.data.get("name") == "drive" for e in tools)
+    states = [e for e in transcript if e.kind == "state"]
+    assert states, "the agent must read a RobotState back after the intent"
+    # A timed/unverified completion is surfaced (open-loop, no encoders).
+    assert any("completed (timed, unverified)" in e.text for e in states)
+    # The intent actually reached the reactive backend.
+    assert harness.backend.get_state().mode in (Mode.IDLE, Mode.DRIVE_GOAL)
+
+
+# --- 2. model router table ---------------------------------------------------
+def test_router_defaults_to_haiku():
+    assert model_router.pick_model(RoutingContext(user_text="what's ahead?")) == config.MODEL_FAST
+
+
+def test_router_escalates_to_sonnet_on_multistep_explore():
+    ctx = RoutingContext(user_text="explore the room and tell me what's there")
+    assert model_router.pick_model(ctx) == config.MODEL_MID
+    assert model_router.is_multi_step_explore_request("go look around the house")
+
+
+def test_router_escalates_to_opus_on_describe_scene_full():
+    ctx = RoutingContext(intent_name="describe_scene", intent_detail="full")
+    decision = model_router.route(ctx)
+    assert decision.model == config.MODEL_BIG
+    assert "describe_scene(detail=full)" in decision.reason
+
+
+def test_router_escalates_to_opus_on_read_text():
+    ctx = RoutingContext(user_text="read the sign on the door")
+    assert model_router.pick_model(ctx) == config.MODEL_BIG
+
+
+def test_router_escalates_to_sonnet_on_need_more_reasoning():
+    ctx = RoutingContext(user_text="hmm", need_more_reasoning=True)
+    assert model_router.pick_model(ctx) == config.MODEL_MID
+
+
+# --- 3. budget cap stops the loop cleanly ------------------------------------
+def test_budget_cap_stops_loop_cleanly(harness):
+    # The model would keep issuing drive intents forever...
+    client = ScriptedClient([[_tool("drive", distance_m=0.1, speed=1.0)]])
+    describe = RecordingDescribe()
+    # ...but a one-call budget halts after the first model call.
+    budget = Budget(max_calls=1, max_tokens=10_000_000)
+    agent = Agent(client=client, reactive=harness.client, describe_scene=describe,
+                  budget=budget, max_steps=50)
+
+    transcript = agent.run_turn("drive drive drive")
+
+    # Exactly one model call was made; the loop did not run away.
+    assert client.calls == 1
+    assert budget.exhausted()
+    # The stop is surfaced and the robot is told to fall back to IDLE.
+    assert any(e.kind == "note" and "budget" in e.text.lower() for e in transcript)
+
+
+# --- 4. explore() is deliberative sugar (no reactive EXPLORE mode) -----------
+def test_explore_expands_to_drive_turn_describe_loop(harness):
+    # explore() needs no model calls — it is pure agent-level sugar.
+    client = ScriptedClient([[_text("(unused)")]])
+    describe = RecordingDescribe(reply="An open hallway ahead.")
+    agent = Agent(client=client, reactive=harness.client, describe_scene=describe)
+
+    entries = agent.explore("find the kitchen", legs=2)
+
+    # It described the scene on each leg...
+    assert len(describe.calls) == 2
+    # ...and issued drive + turn intents (DRIVE_GOAL), never an EXPLORE mode.
+    tool_states = [e for e in entries if e.kind == "state"]
+    assert tool_states, "explore must dispatch motion intents and read state back"
+    # The reactive contract has no EXPLORE mode at all.
+    assert not hasattr(Mode, "EXPLORE")
+    assert "EXPLORE" not in {m.value for m in Mode}
+    # The scene description is folded into the transcript (the 'report').
+    assert any("hallway" in e.text.lower() for e in entries)
+
+
+def test_explore_sends_only_drive_goal_intents(harness):
+    client = ScriptedClient([[_text("(unused)")]])
+    agent = Agent(client=client, reactive=harness.client, describe_scene=RecordingDescribe())
+
+    agent.explore("scout the area", legs=1)
+    # After an explore leg the backend has only ever seen DRIVE_GOAL / IDLE
+    # modes — never anything resembling an EXPLORE reactive mode.
+    assert harness.backend.get_state().mode in (Mode.IDLE, Mode.DRIVE_GOAL, Mode.SAFE_STOP)
+
+
+# --- 5. collision / BLOCKED is surfaced; the agent does not reverse ----------
+def test_blocked_state_surfaced_and_no_blind_reverse():
+    backend = FakeReactiveBackend(tick_hz=50.0)
+    backend.trigger_collision()  # obstacle is inside the safe-stop threshold
+    harness = _Harness(backend=backend)
+    try:
+        # The model issues a single forward drive, then stops.
+        client = ScriptedClient([
+            [_text("Trying to move forward."), _tool("drive", distance_m=0.5, speed=1.0)],
+            [_text("I'm blocked; holding position.")],  # no reverse drive
+        ])
+        agent = Agent(client=client, reactive=harness.client,
+                      describe_scene=RecordingDescribe(), settle_timeout=2.0)
+
+        transcript = agent.run_turn("drive forward")
+
+        # The BLOCKED stop is surfaced back to the agent...
+        state_entries = [e for e in transcript if e.kind == "state"]
+        assert any("BLOCKED" in e.text for e in state_entries)
+        # ...with an explicit "did not reverse" framing.
+        assert any("did not reverse" in e.text.lower() for e in state_entries)
+
+        # The agent never synthesized a backward (negative-distance) drive on its
+        # own — it only dispatched the model's forward drive.
+        drives = [e for e in transcript if e.kind == "tool" and e.data.get("name") == "drive"]
+        assert drives, "the forward drive should have been attempted"
+        assert all(d.data["params"].get("distance_m", 0) >= 0 for d in drives)
+    finally:
+        harness.close()
+
+
+# --- build_context carries the honest open-loop caveats ----------------------
+def test_build_context_states_open_loop_caveats():
+    from yalp.contract.messages import RobotState
+
+    ctx = build_context("go to the kitchen", RobotState(distance_known=False))
+    assert "no encoders" in ctx.lower() or "timed" in ctx.lower()
+    assert "blocked" in ctx.lower()
+    assert "reverse" in ctx.lower()
+    assert "unknown" in ctx.lower()  # distance UNKNOWN surfaced
