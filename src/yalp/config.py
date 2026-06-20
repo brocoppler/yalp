@@ -58,6 +58,19 @@ TICK_BUDGET_MS: int = 33
 IPC_HOST: str = "127.0.0.1"
 IPC_PORT: int = 8765
 
+# Reactive safety / timing (software-spec.md §2.3, §2.6; hardware.md §4).
+# Distance (m) below which collision-stop fires this tick. A missed/timed-out
+# HC-SR04 echo is treated as "unknown" and also stops (bias to STOP — never
+# decay a missed echo into "clear").
+SAFE_STOP_THRESHOLD_M: float = 0.30
+
+# Default reactive tick rate (Hz). The spec target band is 10–30 Hz.
+REACTIVE_TICK_HZ: float = 20.0
+
+# Independent watchdog timeout (ms): the motor GPIO is zeroed if the reactive
+# tick's heartbeat is older than this (software-spec.md §2.6).
+WATCHDOG_TIMEOUT_MS: int = 100
+
 
 @dataclass(frozen=True)
 class Config:
@@ -75,6 +88,9 @@ class Config:
     tick_budget_ms: int = TICK_BUDGET_MS
     ipc_host: str = IPC_HOST
     ipc_port: int = IPC_PORT
+    safe_stop_threshold_m: float = SAFE_STOP_THRESHOLD_M
+    reactive_tick_hz: float = REACTIVE_TICK_HZ
+    watchdog_timeout_ms: int = WATCHDOG_TIMEOUT_MS
 
 
 def get_api_key() -> str | None:
@@ -108,6 +124,9 @@ __all__ = [
     "TICK_BUDGET_MS",
     "IPC_HOST",
     "IPC_PORT",
+    "SAFE_STOP_THRESHOLD_M",
+    "REACTIVE_TICK_HZ",
+    "WATCHDOG_TIMEOUT_MS",
     "Config",
     "get_api_key",
     "require_api_key",
