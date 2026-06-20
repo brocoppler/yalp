@@ -28,6 +28,7 @@ DOCS = [
     "technical/hardware.md",
     "technical/software-spec.md",
     "technical/roadmap.md",
+    "technical/hardware-runbook.md",
     "archive/initial-plan.md",
 ]
 
