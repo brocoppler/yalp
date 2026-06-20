@@ -25,8 +25,10 @@ from typing import Optional, Sequence
 from . import __version__
 
 # Dotted module paths for feature modules that expose ``add_parser(subparsers)``.
-# Populated by later waves, e.g. "yalp.deliberative.see", "yalp.deliberative.agent".
-FEATURE_MODULES: list[str] = []
+# Populated by later waves, e.g. "yalp.deliberative.agent".
+FEATURE_MODULES: list[str] = [
+    "yalp.deliberative.see",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
