@@ -88,6 +88,18 @@ def add_parser(subparsers) -> None:
             "is additive. Default off so nothing makes surprise noise."
         ),
     )
+    parser.add_argument(
+        "--listen",
+        action="store_true",
+        help=(
+            "Capture ONE spoken command via the microphone (push-to-talk: records "
+            "~VOICE_RECORD_SECONDS seconds), transcribe it locally, and run the "
+            "transcript through the agent. Only used when no positional words / "
+            "--command are given (a typed command always wins). Best-effort and "
+            "silent-friendly: it auto-falls back to synthetic/file audio for "
+            "dev/CI and never crashes the CLI if capture or STT fails."
+        ),
+    )
     parser.set_defaults(handler=run)
 
 
@@ -147,6 +159,14 @@ def run(args) -> int:
     # Resolve the command: positional words take precedence over --command.
     command = " ".join(getattr(args, "words", []) or []).strip() or args.command or None
 
+    # Spoken INPUT (default OFF): with --listen and NO typed command, capture one
+    # spoken utterance and transcribe it, then feed the transcript through the
+    # SAME path into Agent.run_turn (a typed command always wins over the mic).
+    # Best-effort: _listen_for_command never raises and returns None on failure,
+    # so an empty result simply falls through to the interactive loop as before.
+    if not command and getattr(args, "listen", False):
+        command = _listen_for_command()
+
     try:
         if command:
             _run_one(agent, command, format_transcript)
@@ -185,6 +205,49 @@ def _interactive(agent, fmt) -> None:
         if not command or command.lower() in {"quit", "exit"}:
             break
         _run_one(agent, command, fmt)
+
+
+def _listen_for_command() -> Optional[str]:
+    """Capture ONE spoken command via the microphone and transcribe it.
+
+    Push-to-talk: opens a :class:`~yalp.voice.Microphone` using the configured
+    defaults (``config.VOICE_SOURCE``, honoring ``config.VOICE_AUDIO_FILE`` for
+    the ``"file"`` source), records a single chunk, encodes it to WAV bytes, and
+    runs it through :func:`yalp.voice.transcribe` (backend from
+    ``config.STT_BACKEND``). Prints a friendly ``>>> [heard: ...]`` line and
+    returns the stripped transcript, or ``None`` if nothing was heard.
+
+    Best-effort by design — mirrors the never-raises ethos of ``voice.speak``:
+    ANY capture/STT failure is logged and yields ``None`` so the CLI never
+    crashes (it simply falls through to the interactive loop as today).
+    """
+    # Heavy imports stay local so importing this module stays light.
+    from .. import voice
+    from ..voice import Microphone
+    from ..voice.microphone import to_wav_bytes
+
+    print(">>> [listening… speak your command]")
+    try:
+        # Honor the configured source; only the 'file' source needs an explicit
+        # path (the Microphone auto-falls back to synthetic audio otherwise).
+        kwargs = {}
+        if config.VOICE_SOURCE == "file" and config.VOICE_AUDIO_FILE:
+            kwargs["path"] = config.VOICE_AUDIO_FILE
+        with Microphone(source=config.VOICE_SOURCE, **kwargs) as mic:
+            audio = mic.record_once()
+        wav_bytes = to_wav_bytes(audio, mic.sample_rate)
+        transcript = (voice.transcribe(wav_bytes) or "").strip()
+    except Exception as exc:  # never crash the CLI on capture/STT failure
+        import logging
+
+        logging.getLogger(__name__).warning("voice capture/STT failed: %s", exc)
+        return None
+
+    if not transcript:
+        print(">>> [heard nothing]")
+        return None
+    print(f">>> [heard: {transcript}]")
+    return transcript
 
 
 def _camera_source(args) -> str:
