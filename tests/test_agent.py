@@ -86,7 +86,10 @@ class _Harness:
     """A real fake-backend + server + client, ticking on a thread."""
 
     def __init__(self, backend=None, tick_hz=50.0):
-        self.backend = backend or FakeReactiveBackend(tick_hz=tick_hz)
+        # Tests must never touch hardware: force the synthetic camera source.
+        self.backend = backend or FakeReactiveBackend(
+            tick_hz=tick_hz, camera_source="synthetic"
+        )
         self.server = ReactiveServer(host="127.0.0.1", port=0, mailbox=self.backend.mailbox)
         self.server.start()
         self.stop = threading.Event()
@@ -218,7 +221,7 @@ def test_explore_sends_only_drive_goal_intents(harness):
 
 # --- 5. collision / BLOCKED is surfaced; the agent does not reverse ----------
 def test_blocked_state_surfaced_and_no_blind_reverse():
-    backend = FakeReactiveBackend(tick_hz=50.0)
+    backend = FakeReactiveBackend(tick_hz=50.0, camera_source="synthetic")
     backend.trigger_collision()  # obstacle is inside the safe-stop threshold
     harness = _Harness(backend=backend)
     try:
@@ -297,6 +300,79 @@ def test_agent_cli_steps_flag_unchanged():
     args = parser.parse_args(["agent", "--steps", "5", "go", "forward"])
     assert args.steps == 5
     assert args.words == ["go", "forward"]
+
+
+def test_agent_cli_synthetic_flag_defaults_false():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "look", "around"])
+    assert args.synthetic is False
+    args = parser.parse_args(["agent", "--synthetic", "look", "around"])
+    assert args.synthetic is True
+
+
+# --- REAL EYES + FAKE WHEELS: camera source & one shared camera --------------
+def test_agent_default_constructs_real_webcam_camera():
+    """By default (no --synthetic) the backend owns a REAL-webcam-backed Camera.
+
+    The webcam Camera only opens the device on .start(); constructing it merely
+    records the source, so this asserts the wiring with no hardware.
+    """
+    from yalp.deliberative.agent_cli import _make_backend
+
+    backend = _make_backend(synthetic=False)
+    cam = backend.camera()
+    assert cam.source == "webcam"  # real eyes by default (auto-falls-back)
+
+
+def test_agent_synthetic_forces_synthetic_camera():
+    from yalp.deliberative.agent_cli import _make_backend
+
+    backend = _make_backend(synthetic=True)
+    assert backend.camera().source == "synthetic"
+
+
+def test_backend_uses_monkeypatched_camera_factory(monkeypatch):
+    """The backend builds its Camera from the selected source via the factory."""
+    import yalp.reactive.fake_backend as fb
+
+    built = []
+
+    class FakeCamera:
+        def __init__(self, source="webcam", **kwargs):
+            self.source = source
+            built.append(self)
+
+    monkeypatch.setattr(fb, "Camera", FakeCamera)
+
+    fb.FakeReactiveBackend()  # default
+    fb.FakeReactiveBackend(camera_source="synthetic")
+    assert [c.source for c in built] == ["webcam", "synthetic"]
+
+
+def test_describe_scene_reads_from_backend_shared_camera(monkeypatch):
+    """describe_scene pulls from the backend's ONE shared camera (not a fresh one)."""
+    from yalp.deliberative import agent_cli, vision
+
+    shared_camera = object()
+    backend = SimpleNamespace(camera=lambda: shared_camera)
+
+    captured = {}
+
+    def fake_describe_scene(frame=None, question=None, *, model=None, camera=None, **kwargs):
+        captured["frame"] = frame
+        captured["camera"] = camera
+        return "ok"
+
+    monkeypatch.setattr(vision, "describe_scene", fake_describe_scene)
+
+    describe = agent_cli._make_describe(backend)
+    out = describe(detail="quick")
+
+    assert out == "ok"
+    # It read the latest frame FROM the backend's shared camera, not by opening
+    # a new/synthetic one (frame is None => pull latest from the passed camera).
+    assert captured["camera"] is shared_camera
+    assert captured["frame"] is None
 
 
 # --- build_context carries the honest open-loop caveats ----------------------

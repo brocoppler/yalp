@@ -8,7 +8,14 @@ exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
     yalp agent "drive forward a bit and tell me what you see"
     yalp agent --command "drive forward a bit and tell me what you see"
     yalp agent --steps 6 --command "explore the room and report"
-    yalp agent                         # interactive prompt loop
+    yalp agent --synthetic "look around"  # force the synthetic test pattern
+    yalp agent                         # interactive prompt loop (real webcam)
+
+Vision (REAL EYES + FAKE WHEELS): the body is simulated but, by default, the
+agent's ``describe_scene`` sees through the REAL webcam — the reactive backend
+owns one camera per run (webcam with an automatic synthetic fallback) and
+``describe_scene`` reads frames from that same camera. ``--synthetic`` forces the
+synthetic source for a no-camera demo / reproducible runs.
 
 It spins up a :class:`~yalp.reactive.fake_backend.FakeReactiveBackend` behind a
 :class:`~yalp.contract.ipc.ReactiveServer` on a background thread (the simulated
@@ -59,6 +66,16 @@ def add_parser(subparsers) -> None:
         metavar="N",
         help="Max deliberative steps per command (default: 12).",
     )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help=(
+            "Force the synthetic camera test-pattern instead of the real webcam "
+            "(useful for a no-camera demo / reproducible runs). By default the "
+            "agent uses the real webcam, auto-falling back to synthetic if none "
+            "can be opened."
+        ),
+    )
     parser.set_defaults(handler=run)
 
 
@@ -73,10 +90,9 @@ def run(args) -> int:
 
     # Heavy imports are local so importing this module stays light.
     from ..contract.ipc import DeliberativeClient, ReactiveServer
-    from ..reactive.fake_backend import FakeReactiveBackend
     from .agent import Agent, format_transcript
 
-    backend = FakeReactiveBackend(tick_hz=50.0)
+    backend = _make_backend(synthetic=bool(getattr(args, "synthetic", False)))
     server = ReactiveServer(host="127.0.0.1", port=0, mailbox=backend.mailbox)
     server.start()
     stop = threading.Event()
@@ -135,12 +151,29 @@ def _interactive(agent, fmt) -> None:
         _run_one(agent, command, fmt)
 
 
+def _make_backend(synthetic: bool):
+    """Build the run's single FakeReactiveBackend, choosing the camera source.
+
+    The reactive layer owns the camera, so the SOURCE is decided here, once: the
+    real webcam by default (REAL EYES + FAKE WHEELS — Camera auto-falls-back to
+    synthetic if no device opens), or the synthetic test-pattern when
+    ``--synthetic`` is passed. ``describe_scene`` later reads frames from *this*
+    same camera, so the webcam is opened at most once per run.
+    """
+    from ..reactive.fake_backend import FakeReactiveBackend
+
+    source = "synthetic" if synthetic else "webcam"
+    return FakeReactiveBackend(tick_hz=50.0, camera_source=source)
+
+
 def _make_describe(backend):
     """Build the agent's describe_scene callable bound to the backend camera.
 
     Routes nothing itself — the agent picks the model tier and passes it in; we
-    just grab the latest still from the (synthetic) camera and ask the vision
-    path. The real Anthropic client is built lazily (a key is present here).
+    just grab the latest still from the backend's OWNED camera (real webcam by
+    default, synthetic with ``--synthetic``) and ask the vision path. Reading the
+    shared camera here is what keeps us from opening the webcam a second time.
+    The real Anthropic client is built lazily (a key is present here).
     """
     from . import vision
 

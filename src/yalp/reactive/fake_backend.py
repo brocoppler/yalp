@@ -12,7 +12,11 @@ so the entire deliberative path and the loop-to-loop seam can be exercised with
   * simulates a configurable obstacle that fires collision-stop → ``SAFE_STOP`` /
     ``BLOCKED`` (sticky: clears only when the obstacle is gone **and** a fresh
     intent arrives), and never open-loop reverses;
-  * uses ``yalp.camera.Camera`` (synthetic source by default) so it runs headless.
+  * **owns the camera** (the reactive layer owns the camera, per the contract):
+    it holds a single ``yalp.camera.Camera`` for the run, defaulting to the real
+    webcam with an automatic synthetic fallback so it still runs headless / in
+    CI. The deliberative ``describe_scene`` reads the latest frame from *this*
+    same camera — one device, opened once.
 
 It also provides a ``run`` loop that ticks at a target rate and publishes state
 through a ``ReactiveServer``.
@@ -37,8 +41,14 @@ class FakeReactiveBackend(ReactiveBackend):
     Parameters
     ----------
     camera:
-        A ``Camera`` to read frames from; defaults to a synthetic-source camera
-        so it runs with no hardware.
+        An explicit ``Camera`` to read frames from (highest precedence). Tests
+        and headless callers pass a synthetic/mock camera so they never touch
+        hardware.
+    camera_source:
+        Source string used to build the owned ``Camera`` when ``camera`` is not
+        given: ``"webcam"`` (the default — real webcam with an automatic
+        synthetic fallback), ``"synthetic"`` to force the test pattern, or
+        ``"image"``.
     safe_stop_threshold_m:
         Distance (m) under which collision-stop fires.
     max_speed_mps / turn_rate_dps:
@@ -52,6 +62,7 @@ class FakeReactiveBackend(ReactiveBackend):
         self,
         *,
         camera: Optional[Camera] = None,
+        camera_source: str = "webcam",
         mailbox: Optional[IntentMailbox] = None,
         safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
         max_speed_mps: float = 0.5,
@@ -64,7 +75,10 @@ class FakeReactiveBackend(ReactiveBackend):
         self.turn_rate_dps = max(1e-3, turn_rate_dps)
         self.tick_hz = max(1.0, tick_hz)
 
-        self._camera = camera if camera is not None else Camera(source="synthetic")
+        # The reactive layer owns ONE camera for the run. Default to the real
+        # webcam (Camera auto-falls-back to synthetic if it can't open), so a
+        # real `yalp agent` gets real eyes while CI/headless stays hardware-free.
+        self._camera = camera if camera is not None else Camera(source=camera_source)
         self._camera_started = False
 
         self._state = RobotState(mode=Mode.IDLE, goal_status=GoalStatus.NONE)
