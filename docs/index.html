@@ -72,6 +72,16 @@
   .b-thesis{color:var(--thesis); background:var(--thesis-bg)}
   .b-risk{color:var(--risk); background:var(--risk-bg)}
   .b-open{color:var(--open); background:var(--open-bg)}
+  .b-done{color:var(--thesis); background:var(--thesis-bg)}
+  .b-next{color:var(--dec); background:var(--dec-bg)}
+
+  /* current-status panel — prominent, opens with the page */
+  .status{border:1px solid var(--line); border-left:4px solid var(--accent);
+    background:linear-gradient(180deg,var(--accent-soft),var(--panel) 70%);
+    border-radius:var(--radius); padding:20px 22px; margin:18px 0 4px}
+  .status h3{margin:18px 0 6px}
+  .status h3:first-of-type{margin-top:6px}
+  .status .now{font-size:13px; color:var(--muted); margin:0 0 10px}
 
   .legend{display:flex; flex-wrap:wrap; gap:14px; margin:14px 0 0}
   .legend span.item{font-size:13px; color:var(--muted); display:inline-flex; align-items:center; gap:7px}
@@ -159,6 +169,7 @@
 
     <div class="grp">Overview</div>
     <a href="#overview">The Project</a>
+    <a href="#status">Status &amp; Next Steps</a>
     <a href="#product">Product Track</a>
     <a href="#technical">Technical Track</a>
     <a href="#risks">Top Risks &amp; Open Questions</a>
@@ -200,6 +211,33 @@
         <span class="item"><span class="badge b-thesis">THESIS</span> a guiding conviction</span>
         <span class="item"><span class="badge b-risk">RISK</span> a known hazard</span>
         <span class="item"><span class="badge b-open">OPEN</span> still undecided</span>
+      </div>
+    </section>
+
+    <!-- CURRENT STATUS & NEXT STEPS -->
+    <section id="status">
+      <h2>Current status &amp; next steps</h2>
+      <p class="sub">The live status home is <code>roadmap.md</code>; the hardware bring-up bench session is
+      <code>hardware-runbook.md</code>.</p>
+      <div class="status">
+        <p class="now"><span class="badge b-done">DONE</span> &nbsp;Laptop brain <strong>complete &amp; laptop-tested
+        (134 tests)</strong> — running on the laptop with <strong>real eyes / fake wheels</strong>.</p>
+        <h3>Working on the laptop now</h3>
+        <ul class="badged">
+          <li><span class="badge b-done">DONE</span> <code>yalp see</code> — vision Q&amp;A (with <code>--speak</code>).</li>
+          <li><span class="badge b-done">DONE</span> <code>yalp agent</code> — tool-use deliberative loop (narrates; <code>--speak</code>).</li>
+          <li><span class="badge b-done">DONE</span> <code>yalp follow</code> — track-by-detection follow (face / hog / person&nbsp;[<code>cv2.dnn</code>, any-angle] / auto; <code>--preview</code>, <code>--benchmark</code>).</li>
+          <li><span class="badge b-done">DONE</span> Voice <strong>OUTPUT</strong> shipped (macOS <code>say</code>, <code>--speak</code>). Voice <strong>INPUT</strong> (STT) <strong>not yet built</strong>.</li>
+          <li><span class="badge b-open">NOTE</span> Phase&nbsp;2 hardware <strong>ordered 2026-06-20</strong>, inbound. <code>real_backend.py</code> is still a stub.</li>
+        </ul>
+        <h3>Next</h3>
+        <ul class="badged">
+          <li><span class="badge b-next">NEXT</span> <em>(optional, laptop)</em> Voice <strong>INPUT</strong> (STT) — talk to it hands-free.</li>
+          <li><span class="badge b-next">NEXT</span> <em>(when the Pi + Phase&nbsp;2 arrive)</em> the hardware gate sequence in <code>hardware-runbook.md</code>:
+            GPIO first light → <strong>Gate&nbsp;E</strong> (power/brownout) → Hello&nbsp;motors → Safety&nbsp;reflex →
+            <strong>Gate&nbsp;H</strong> (Pi person-detector fps benchmark) → follow on hardware. The follow brain is
+            already built/benchmarked on the laptop; Gate&nbsp;H just confirms the Pi fps.</li>
+        </ul>
       </div>
     </section>
 
@@ -265,7 +303,7 @@
       <h3>Risks ranked by what will actually bite</h3>
       <ul class="badged">
         <li><span class="badge b-risk">RISK</span> <span class="sev">🔴 Critical —</span> <strong>The loop-to-loop interface is the hard part and the least specified.</strong> If motors and the agent loop are built against different mental models of "a mode," step&nbsp;5 becomes a rewrite. Mitigation: design the contract first, laptop-only, in parallel. <code>architecture.md</code> · <code>software-spec.md</code></li>
-        <li><span class="badge b-risk">RISK</span> <span class="sev">🔴 Critical —</span> <strong>Person-following on a Pi&nbsp;5 with no NPU.</strong> A real person detector may not hit usable fps on CPU, so follow-mode could stutter and lose a moving target. Mitigation: an early fps spike as a go/no-go gate before any follow code. <code>software-spec.md</code></li>
+        <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>Person-following fps on a Pi&nbsp;5 with no NPU.</strong> The follow brain is now <strong>built and benchmarked on the laptop</strong> (track-by-detection); the open question is whether the Pi hits usable fps on CPU. Mitigation: <strong>Gate&nbsp;H</strong> in <code>hardware-runbook.md</code> is now a fps benchmark-confirmation before follow runs on hardware. <code>software-spec.md</code></li>
         <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>A single front ultrasonic is thin.</strong> Narrow cone, side/rear blind spots, silent failure on glass and angled surfaces. Mitigation: define collision-stop priority + post-collision behavior; budget 2–3 sensors. <code>hardware.md</code></li>
         <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>No encoders = open-loop control.</strong> Distance and heading are guesses; the robot drifts and "back up 30&nbsp;cm" is dead reckoning. Mitigation: accept open-loop for v1; lean on vision feedback in follow mode. <code>hardware.md</code></li>
         <li><span class="badge b-risk">RISK</span> <span class="sev">🟠 High —</span> <strong>Power / brownout.</strong> Motor inrush and flyback drag the shared rail down and the Pi reboots — the #1 cause of mysterious resets. Mitigation: separate supplies + common ground, caps, and a bring-up gate before motors run under the Pi. <code>hardware.md</code></li>
@@ -274,7 +312,7 @@
       <h3>Open questions on the critical path</h3>
       <ul class="badged">
         <li><span class="badge b-open">OPEN</span> <strong>Final sensor count</strong> — one front HC-SR04 for v1, or budget 2–3 (front + corners) to cover the blind spots from the start? <code>hardware.md</code></li>
-        <li><span class="badge b-open">OPEN</span> <strong>Follow-mode tracker choice</strong> — full person detector, lightweight blob/color tracker, or track-by-detection hybrid? Pending the fps spike. <code>software-spec.md</code></li>
+        <li><span class="badge b-dec">DECISION</span> <strong>Follow-mode tracker — settled.</strong> Track-by-detection (face / hog / person&nbsp;[<code>cv2.dnn</code>] / auto), built and benchmarked on the laptop; remaining question is only the Pi fps at <strong>Gate&nbsp;H</strong>. <code>software-spec.md</code></li>
         <li><span class="badge b-open">OPEN</span> <strong>Model / provider choice</strong> — which VLM for the per-step loop vs. the escalation model, and what's the tiering threshold? <code>software-spec.md</code></li>
         <li><span class="badge b-open">OPEN</span> <strong>Voice timing &amp; far-field STT</strong> — when does the voice track start, and is noisy far-field speech in scope for v1 or punted to the kid version? <code>product-spec.md</code></li>
         <li><span class="badge b-open">OPEN</span> <strong>How much should v1 anticipate the kid version?</strong> Carry the software/brain forward, treat the body as throwaway — but where exactly is the line? <code>product-vision.md</code></li>
@@ -374,9 +412,12 @@ The dream, stated plainly:
 
 > **DECISION —** The "dream" is voice-first — talking to a robot and having it talk back is
 > the whole magic. But v1 is built **text-first**: the full see-think-move loop is proven over
-> typed commands before a mic and speaker are bolted on. Voice is a real goal, deliberately
-> deferred to a later track so the audio rabbit hole (mic quality, STT/TTS latency, wake-words)
-> never blocks the core loop. See `roadmap.md` and `product-spec.md`.
+> typed commands. The two halves of voice ship separately, though. Voice **output** (text-to-
+> speech) is already here as an optional flag — `yalp see --speak` and `yalp agent --speak`
+> read the robot's answers aloud via macOS `say` — so it can already talk back when asked.
+> Voice **input** (speech-to-text) is the part still deliberately deferred to a later track,
+> so the audio rabbit hole (mic quality, STT latency, wake-words) never blocks the core loop.
+> See `roadmap.md` for the full DONE-vs-NEXT and `product-spec.md`.
 
 > **THESIS —** The thing worth being proud of in v1 is the *interaction*, not the hardware:
 > a robot you address in plain English that genuinely sees and moves. A cardboard chassis that
@@ -430,9 +471,11 @@ Two flavors, both of which feel good in v1:
 - **Reactive movement** — following, coming, backing up, spinning, stopping, reacting to faces
   and gestures, not driving into walls. This feels *snappy and alive* because it doesn't wait on
   the cloud to think.
-- **Talk & visual Q&A** — answering spoken (eventually) or typed questions, describing a scene,
-  reading a sign, identifying an object, telling stories, playing games. It's a camera and an
-  LLM with a voice; this isn't time-critical, so a little latency doesn't hurt.
+- **Talk & visual Q&A** — answering typed questions (spoken questions are the deferred
+  speech-to-text track), describing a scene, reading a sign, identifying an object, telling
+  stories, playing games. Answers can already be **spoken back aloud** via the optional
+  `--speak` flag (text-to-speech is shipped). It's a camera and an LLM with a voice; this
+  isn't time-critical, so a little latency doesn't hurt.
 
 > **DECISION —** These two are the heart of v1. If yalp does *only* reactive movement plus talk
 > and visual Q&A — and nothing in the lower tiers — v1 is already a success.
@@ -483,6 +526,14 @@ v1 is "done enough to be proud of" when, on the bench and the living-room floor,
 > **THESIS —** Hitting items 1–3 alone already justifies the build as a learning project. Items
 > 4–5 are what make it feel like *yalp* and not a demo.
 
+> **STATUS —** These criteria span two phases, and only the second is gated on parts arriving.
+> The **LAPTOP phase is done**: the brain — `see`, `agent`, and `follow` (including an
+> orientation-agnostic person detector) — is built and laptop-tested against a fake robot
+> backend, and answers can already be spoken aloud via `--speak`. The **HARDWARE phase** —
+> proving these same behaviors on the real chassis once the Raspberry Pi and motors arrive — is
+> what remains. Read the success criteria above against that split: the *intelligence* is real
+> today; the *embodiment* is the next milestone. See `roadmap.md` for the full DONE-vs-NEXT.
+
 ### 5.1 Explicit non-goals for v1
 
 To protect the core loop, v1 deliberately does **not** aim for:
@@ -490,7 +541,9 @@ To protect the core loop, v1 deliberately does **not** aim for:
 - **A nice-looking or durable body.** Cardboard, hot glue, and zip ties are fine.
 - **Child-readiness.** No child-safety hardening, no small-parts/battery childproofing yet — v1 is
   adult-supervised. (These become first-class in the post-v1 pet — §3.)
-- **Voice in v1's critical path.** Text-first; mic and speaker are a separate later track.
+- **Voice *input* in v1's critical path.** Text-first for commands; speech-to-text (the mic
+  side) is a separate later track. Voice *output* (text-to-speech) already ships as an optional
+  `--speak` flag, so this non-goal is about listening, not talking back.
 - **Smooth, continuous motion.** Halting explore-and-report is accepted (§4.2).
 - **Named-place navigation, manipulation, or off-road/outdoor operation.** Cut (§4.3).
 - **On-device AI / zero cloud dependency.** v1 leans on cloud vision-language models; local
@@ -542,7 +595,7 @@ There is no app to learn and no command syntax to memorize. The mental model for
 
 Interaction is turn-based, like a chat: you send one thing, yalp does it and replies, then waits. A turn can be pure talk (*"tell me a joke"*), pure motion (*"spin"*), or **both at once** — *"go forward and tell me what you see"* mixes a Tier-1 move with a Tier-2 report in a single command, and yalp handles the blend without you having to split it up. There is no always-listening mode in v1; nothing happens until you send a command, and `stop` ends whatever is in flight.
 
-> **DECISION —** v1 is **text-first**. You type commands from your laptop and read its replies as text. Voice — speech-to-text in, text-to-speech out — is a **deferred, separate track**, bolted on only after the full typed loop works end to end. Treating voice as its own project (mic quality, audio over USB, STT/TTS latency, wake-words) keeps the voice rabbit hole from blocking the core magic. See `roadmap.md`.
+> **DECISION —** v1 is **text-first** for input: you type commands from your laptop. Replies, though, can already be **spoken aloud** — text-to-speech (TTS) is shipped as an optional `--speak` flag (`yalp see --speak`, `yalp agent --speak`, via macOS `say`), so the robot can read its answers out loud now. Voice *input* — speech-to-text (STT), the mic side — is the part still **deferred to a separate track**, bolted on only after the full typed loop works end to end. Treating STT as its own project (mic quality, audio over USB, latency, wake-words) keeps the voice rabbit hole from blocking the core magic. See `roadmap.md` for the full DONE-vs-NEXT.
 
 > **THESIS —** yalp has **two speeds**, and the user feels both. Reflexes (stop, steer, come-here, don't-hit-things) are **instant** because they run locally; thinking (understanding a request, describing a scene) takes **a beat** because it goes to the cloud. Every expectation in this doc flows from that split. One caveat the reflex framing hides: vision-driven moves can only react as often as the camera spots a person, and on v1 hardware that cadence is slow — which is exactly why continuous follow is a stretch and come-here is the safe bet. The mechanism lives in `architecture.md`; here we only describe how it *feels*.
 
@@ -587,6 +640,7 @@ These take a beat but the wait doesn't hurt — you're asking, not steering.
 | **"What do you see?"** | Snaps a photo and describes the scene back. | A beat. | A solid one-to-two-sentence description of what's actually in frame. |
 | **"What color is this?" / "is that a cat or a dog?"** | Answers a specific visual question about what's in front of it. | A beat. | Reliable on clear, well-lit subjects close to the camera. |
 | **"Read this sign"** | Reads legible text it can see. | A beat (may escalate to a stronger model). | Reads clear, printed text held steady in frame; struggles with small, skewed, or faint text. |
+| **Speak its answers aloud** | Reads its replies out loud instead of only printing them — the `speak` tool plus `see`/`agent` narration, enabled with the optional `--speak` flag. | Instant once the answer is ready (local TTS). | Available now via `--speak` (macOS `say`); off by default, so output stays text unless asked. This is voice *output* only — voice *input* (STT) is still deferred (§1). |
 
 ### Tier 3 — Explore-and-report (cloud-in-the-loop, works but halting)
 
@@ -693,6 +747,8 @@ Promising any of these would set the user up to be disappointed. The honest pitc
 
 This document defines the **concepts and boundaries** of yalp's control system. It is deliberately schema-free: the exact tool list, message formats, and intent payloads live in `software-spec.md`. Read this first to understand *why* the system is shaped the way it is, then read `software-spec.md` for the concrete contract. Hardware choices that this design leans on are in `hardware.md`; build sequencing is in `roadmap.md`; the scope envelope is in `product-spec.md`.
 
+> **STATUS —** The laptop "brain" (see/agent/follow, including the pluggable-detector follow loop and voice OUTPUT) is built and tested; the on-Pi reactive body is the remaining work. This doc fixes *concepts*; the canonical, up-to-date build status and gate ledger live in **`roadmap.md`** — treat it as the single status home.
+
 ## 1. The Core Idea: Two Loops, Not One
 
 yalp runs on **two control loops with different clocks**, not a single pipeline. They are different because the two halves of the job have fundamentally different time budgets.
@@ -744,9 +800,9 @@ yalp does not hand-code a keyword table ("if user says 'forward' then drive"). I
 | `drive(distance)` / `turn(angle)` | one-shot motion | reactive layer, guarded by collision-stop |
 | `look(direction)` | orient camera/body | reactive layer |
 | `check_distance()` | read ultrasonic | reactive layer (returns now) |
-| `enter_follow_mode(target)` | **mode** | reactive tracker runs until told to stop |
+| `enter_follow_mode(target)` | **mode** | reactive tracker (track-by-detection, **pluggable detector**) runs until told to stop |
 | `describe_scene()` | capture + reason | deliberative layer (bigger model) |
-| `speak(text)` | text-to-speech out | deliberative layer |
+| `speak(text)` | text-to-speech out (**OUTPUT shipped** — macOS `say`, opt-in `--speak`) | deliberative layer |
 
 The crucial point: **most abilities are modes for the reactive layer, not direct motor twitches.** The model says *"follow that person"*; it does not micro-steer. It sets the goal, and the local tracker does the second-by-second following. The model conducts; the fast layer plays the instrument.
 
@@ -794,7 +850,7 @@ A fresh goal from the cloud atomically replaces the current one (last-write wins
 
 The hard question is **what happens after a collision-stop fires** mid-goal:
 
-> **DECISION —** After a collision-stop interrupts an active motion goal, the reactive layer halts and holds, marks the goal `BLOCKED`, and **surfaces that state up to the deliberative layer rather than silently resuming or silently aborting.** The robot does not blindly retry into the same obstacle, and it does not freeze forever — it kicks the decision back to the brain, which can re-plan ("there's a wall, turn and go around?"), turn away, or ask the user. For v1, auto-resume is explicitly *off*; resuming requires a fresh deliberative decision, because auto-resume risks grinding into the obstacle the instant the path looks clear.
+> **DECISION —** After a collision-stop interrupts an active motion goal, the reactive layer halts and holds, marks the goal `BLOCKED`, and **surfaces that state up to the deliberative layer rather than silently resuming or silently aborting.** The robot does not blindly retry into the same obstacle, and it does not freeze forever — it kicks the decision back to the brain, which can re-plan ("there's a wall, turn and go around?"), turn away, or ask the user. For v1, auto-resume is explicitly *off*; resuming requires a fresh deliberative decision, because auto-resume risks grinding into the obstacle the instant the path looks clear. Concretely, **`SAFE_STOP` is sticky**: clearing the obstacle is necessary but not sufficient — the robot stays stopped until the obstacle is gone **and** a fresh intent arrives (see `software-spec.md` §2.3).
 
 > **OPEN —** Whether a *follow* goal should auto-resume after the obstacle clears (likely yes — the human stepped between robot and target) while a *drive/explore* goal should not. Per-mode resume policy is unresolved and deferred to `software-spec.md`.
 
@@ -851,7 +907,7 @@ The deliberative layer sends a **single still photo** per step, not a video stre
 
 Not every glance deserves a flagship model. The per-step loop ("is the path clear?", "roughly what's ahead?", centering hints) runs on a **fast/cheap VLM**; only genuinely hard requests ("describe this whole scene in detail," "read this sign") escalate to a **bigger model**.
 
-> **DECISION —** The deliberative layer is **tiered**: a fast/cheap vision model for the routine per-step loop, a larger model only for hard scene-understanding requests. Paying flagship latency and cost on every step is wasteful and would make the bursts even slower. Specific model picks and the escalation trigger belong in `software-spec.md`.
+> **DECISION —** The deliberative layer is **tiered across three rungs**, routed by an explicit, auditable table (not a vibe): a fast/cheap model (Haiku) is the **default** for routine per-step VQA / tool-picking; a mid model (Sonnet) handles multi-step `explore` reasoning or a `need_more_reasoning` flag from the cheap tier; a big model (Opus) handles only genuinely hard vision/reading (`describe_scene(detail=full)`, read-text). Paying flagship latency and cost on every step is wasteful and would make the bursts even slower. **Extended/adaptive thinking is capability-gated**: it is attached only on the mid/big tiers that support it — the fast Haiku tier does **not** support it (sending it 400s), so the per-step loop runs without it. Specific (env-overridable) model IDs and the exact escalation triggers belong in `software-spec.md`.
 
 These two together keep the deliberative layer **cheap and fast enough to be fun**: small payloads, small models, and only occasional escalation.
 
@@ -920,6 +976,8 @@ The value is in **reading the patterns**, not adopting the stacks wholesale.
 
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
+> **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is today a **Step-A stub** (`RealReactiveBackend` raises `NotImplementedError`) carrying the on-Pi hardware TODO — motor control via `gpiozero` phase/enable on the §5 pins, the HC-SR04 read, and collision-stop — behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
+
 | Component | Selected part | ~Cost | Rationale (one line) |
 |---|---|---|---|
 | **Brain** | Raspberry Pi 5 4GB via **CanaKit Starter Kit PRO** | ~$180 | RAM headroom + multiple real USB ports = fewer first-build gremlins; kit bundles 27W PD wall PSU, fan case, 128GB OS card. |
@@ -932,7 +990,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
 | Chassis | Cardboard / hot glue / zip ties / foam tape | ~$19 | v1 — looks don't matter. Hot glue gun is the one tool worth buying. |
-| **Voice** *(deferred)* | USB mini mic + small USB speaker | ~$15 | Voice I/O is a separate, later track — get the whole loop working text-first. |
+| **Voice INPUT** *(deferred)* | USB mini mic (+ small USB speaker) | ~$15 | Only the **INPUT** half (mic + STT) needs hardware and is deferred. Voice **OUTPUT** (TTS) is **already shipped in software** (macOS `say`, opt-in `--speak`) and needs **no hardware** on the laptop; on the Pi it reuses this same small speaker once present. Get the rest of the loop working text-first. |
 
 > **DECISION —** Brain = Raspberry Pi 5 4GB via the CanaKit Starter Kit PRO. **Ordered.** Skip the AI HAT / NPU — local models on a Pi accelerator are a known hobbyist trap; CPU + cloud is the v1 move.
 
@@ -957,6 +1015,7 @@ These are tempting but wrong for v1, and naming them keeps the budget honest:
 - **AI HAT / NPU accelerator** — the heavy AI runs in the cloud; on-device models on a Pi accelerator are a known hobbyist trap for build #1.
 - **Depth camera / LiDAR** — that's the post-v1 navigation upgrade, not a v1 part.
 - **Soldering iron** — every module is bought pre-headered; ~$20 nice-to-have, not a must.
+- **Mic/speaker for voice OUTPUT** — not needed: spoken **OUTPUT** (TTS) already ships as software (macOS `say`, opt-in `--speak`) with **zero hardware** — proof that the brain is cloud/software and the Pi is just I/O. Only voice **INPUT** (a USB mic + STT) is a real future buy, and it stays deferred until the text loop is solid (`software-spec.md` §7, `roadmap.md` milestone **O**).
 
 ---
 
@@ -1101,7 +1160,7 @@ ASCII wiring sketch:
 |---|---|---|---|
 | **Phase 1 — Brain** | CanaKit Pi 5 4GB Starter Kit PRO (~$180) + Logitech C270 (~$22) | ✅ Ordered | ~$200 |
 | **Phase 2 — Body** | Card reader, PD power bank, TT motors, driver, ball caster, HC-SR04, AA power, wiring, glue/chassis | ✅ ORDERED 2026-06-20 (inbound) | ~$115 |
-| **Phase 3 — Voice** | USB mic + small speaker (deferred) | 🛒 Later | ~$20 |
+| **Phase 3 — Voice INPUT** | USB mic (+ small speaker) — deferred. Voice **OUTPUT** (TTS) already ships in software, **$0 hardware** | 🛒 Later | ~$20 |
 | | | **Total** | **~$335** |
 
 - **Spent so far (~$200):** the entire brain — Pi kit + webcam — is ordered.
@@ -1142,7 +1201,8 @@ The single organizing principle: **only motor control and camera capture genuine
 | Reactive | Camera capture | `picamera2` (Pi cam) **or** OpenCV UVC capture (USB webcam) | Pi (prod) / laptop (dev) | v1 ships the C270 USB/UVC path; its blocking `read()` runs in a dedicated capture thread (§2.5). `picamera2` is a later swap if we move to the Pi Camera Module. |
 | Deliberative | Cloud VLM/LLM agent | `anthropic` SDK (primary) / `openai` SDK (alt) | Laptop (dev), Pi or laptop (later) | Tool-use / vision; tiered models — see §3. |
 | Deliberative | Prompt + dispatch glue | Plain Python (`stdlib` + SDK) | Anywhere | The "brain" you iterate on the laptop. |
-| Voice *(deferred)* | Speech-to-text / text-to-speech | STT/TTS lib or cloud service (TBD) | Pi + cloud | Separate track; see §7 and `roadmap.md`. |
+| Voice | Text-to-speech (**OUTPUT, shipped**) | macOS `say` via `subprocess` (no dep) | Laptop now / Pi later | `voice.speak()`, opt-in `--speak`, additive + headless-safe; see §7. |
+| Voice *(deferred)* | Speech-to-text (**INPUT**) | STT lib or cloud service (TBD) | Pi + cloud | The remaining half; separate track — see §7 and `roadmap.md`. |
 | OS | Base image | **Raspberry Pi OS Lite (64-bit)** | Pi | Headless. Develop over SSH/WiFi; enable SSH, camera, I2C at flash time. No desktop. |
 
 > **DECISION —** The reactive layer and the deliberative layer are **two separate OS processes**, always — never threads in one interpreter, never a shared in-process queue. They talk over a **localhost socket** (TCP `127.0.0.1` in dev; a Unix-domain socket once co-located on the Pi), framed as **JSON lines — one JSON object per line, `\n`-terminated** (see §2.2 for the wire format). The reactive process **owns GPIO and the camera** and runs whether or not the cloud is reachable; it **publishes** the latest frame and `RobotState` non-blocking. The deliberative process (laptop in dev) **never reaches into the reactive tick** — it cannot make the reactive tick block on a network read or a camera read. There is **no shared-dataclass model**: `RobotState` and `Intent` are *serialized* across the socket as JSON and reconstructed on the far side; the two processes never share a live Python object. This supersedes any earlier "shared in-process queue once co-located" framing — co-location swaps TCP for a Unix socket, nothing more.
@@ -1160,12 +1220,12 @@ The model never twitches a motor. It picks **intents**, expressed as **tool call
 | `drive` | `distance_m: float` (signed; −=back), `speed: 0..1` | Enter `DRIVE_GOAL`: drive straight until the **timed** distance estimate elapses, blocked, or preempted. Reports `"completed (timed, unverified)"` — there are no encoders. |
 | `turn` | `angle_deg: float` (signed; +=left/CCW), `speed: 0..1` | Enter `DRIVE_GOAL` (rotate variant): turn in place for the **timed** angle estimate. Reports `"completed (timed, unverified)"` — no encoders, no IMU. |
 | `stop` | — | Enter `IDLE`: cancel current goal, wheels halt. |
-| `look` / `capture` | `save: bool=false` | Grab one still from the camera; return a frame handle for the next model turn. |
+| `look` | `save: bool=false` | Grab one still from the camera; return a frame handle for the next model turn. |
 | `check_distance` | — | Return the latest ultrasonic reading (meters) from shared state. |
 | `describe_scene` | `detail: "quick"\|"full"` | Capture a still and (deliberative side) escalate to a model tier for a scene description. |
 | `enter_follow_mode` | `target: "nearest_person"` | Enter `FOLLOW`: local tracker centers + approaches the target. No cloud in the loop. |
 | `explore` | `goal_text: str` | **Deliberative sugar** (v1): the deliberative layer runs a loop of `drive`/`turn`/`describe_scene` itself. There is **no** `EXPLORE` reactive mode — see §2.2 and the EXPLORE decision below. |
-| `speak` | `text: str` | Say/print `text` (TTS later; `print` for v1). |
+| `speak` | `text: str` | Say `text` out loud — voice **OUTPUT is implemented** (macOS `say`, opt-in via `--speak`; silent no-op without it) and additive to the printed transcript. Spoken INPUT (STT) is the deferred half (§7). |
 | `set_speed_limit` | `max_speed: 0..1` | Clamp all subsequent motion (safety / "go slow"). |
 
 > **DECISION —** This menu is the stable contract. Abilities are *mostly modes for the reactive layer*, not direct actuation — `enter_follow_mode` hands the job to the local tracker; the model does not stream steering. Adding a new ability = adding a row here + a mode/handler below. The menu is small on purpose: every tool must map to something the body can reliably do (see the in-scope envelope in `architecture.md`).
@@ -1207,7 +1267,7 @@ Illustrative tool schema as handed to the model (Anthropic tool-use shape; the O
 ]
 ```
 
-> **DECISION —** `explore` is **deliberative sugar** for v1, not a reactive mode. The deliberative layer implements it as a loop of `drive`/`turn`/`describe_scene` — each leg is an ordinary `Intent`, and the model re-decides after every `describe_scene`. `EXPLORE` is therefore **removed from the reactive mode enum and the reactive tick loop** (see §2.2, §2.3); the reactive layer stays dumb and carries one fewer mode. The cost is one extra round-trip per leg, which §3's latency budget already bounds (an explore step must stay under the ~10 s ceiling on real WiFi). We do **not** carry both interpretations forward.
+> **DECISION —** `explore` is **deliberative sugar** for v1, not a reactive mode. The deliberative layer implements it as a loop of `drive`/`turn`/`describe_scene` — each leg is an ordinary `Intent`, and the model re-decides after every `describe_scene`. `EXPLORE` is therefore **removed from the reactive mode enum and the reactive tick loop** (see §2.2, §2.3); the reactive layer stays dumb and carries one fewer mode. The cost is one extra round-trip per leg, which §3's latency budget already bounds (an explore step must stay under the ~10 s ceiling on real WiFi). The deliberative loop is itself **bounded by a max-steps cap** per command (`yalp agent --steps`, default 12) and the §3 hard per-session token/call budget, so an explore loop terminates rather than running forever. We do **not** carry both interpretations forward.
 
 ### 2.2 The intent / mode model
 
@@ -1407,7 +1467,9 @@ def deliberative_step(user_text, history, client, reactive):
             # explore -> NOT a reactive intent: run the drive/turn/describe_scene loop here (§2.1)
             # check_distance/look/describe_scene -> read/answer, feed back next turn
         elif block.type == "text":
-            speak(block.text)                     # TTS later; print for v1
+            print(block.text)                     # always printed (the transcript)
+            if speak_enabled:
+                voice.speak(block.text)           # OUTPUT shipped: macOS `say`, opt-in --speak
 
     return msg                                    # append to history for the next step
 ```
@@ -1445,6 +1507,8 @@ def pick_model(user_text, intent, history, cheap_flag) -> str:
 
 The escalation signals are **exactly**: `describe_scene(detail='full')` or a read-text intent → `claude-opus-4-8`; a multi-step `explore` request or a structured `need_more_reasoning` flag from the cheap tier → `claude-sonnet-4-6`; everything else stays on `claude-haiku-4-5`. Nothing else escalates.
 
+> **DECISION —** The three tier IDs are **env-overridable**, not hard-coded. `config` reads `YALP_MODEL_FAST` / `YALP_MODEL_MID` / `YALP_MODEL_BIG` (defaulting to `claude-haiku-4-5` / `claude-sonnet-4-6` / `claude-opus-4-8`), and the router resolves the tier from `config` — so the operator can re-pin any tier without editing source. Adaptive thinking remains **capability-gated independently of the ID**: the code keeps a known-supports-thinking list and attaches `thinking={"type":"adaptive"}` **only** when both the caller opted in *and* the resolved model is on that list (Sonnet/Opus). The fast tier (Haiku) is never sent `thinking` — it 400s — and an unknown/re-pinned ID is treated as unsupported (fail-safe).
+
 > **DECISION —** Enforce a **hard per-session token/call budget** in the deliberative process. A WiFi retry-storm or a runaway escalation must not silently run up cost: track cumulative tokens and API calls for the session, and once the cap is hit, **stop issuing model calls** (the robot falls back to `IDLE`/local behavior exactly as in the §5 outage path) rather than retrying forever. The budget is a hard ceiling the operator sets in `config` (§6), separate from any per-call `max_tokens`.
 
 > **RISK —** Each step is photo → upload → API call → response → new intent, so high-level decisions arrive in bursts. The often-quoted "2–3 s/step" is a **target to verify, not an assumption** — it is acceptable *because* the reactive layer fills the gaps, but only if it actually holds on real home WiFi. The smooth upgrade (streaming multimodal) is explicitly out of scope for v1 — see `architecture.md` and `roadmap.md`.
@@ -1474,6 +1538,16 @@ Two budgets to validate:
 - A **real person detector** (YOLO-nano, MobileNet-SSD) is **robust** — it actually knows what a person is and re-acquires after occlusion — but the Pi 5 has **no NPU**, so on CPU it may only manage a **few fps**. That collides head-on with the 10–30 Hz reactive target: you cannot run detection every tick.
 
 > **THESIS —** Use **track-by-detection**. Run the cheap tracker every reactive tick (on a crop around the last box, §2.5) to keep follow-mode at full rate, and run the slow person detector at whatever fps the Pi sustains (say 2–5 Hz) in a **child process** (§2.6 — a process, not a thread, to dodge GIL contention with the safety loop) purely to **re-seed and validate** the tracker's box. This 2-5 Hz is the expected range on the Pi 5 CPU; Gate H (see `roadmap.md`) sets the GO threshold at >=3 Hz sustained so track-by-detection stays viable. The fast tracker provides smoothness; the slow detector provides the "it's actually a person, and here's where they really are now" correction. This is the hobby version of how real trackers are built, and it's the only design that satisfies both robustness and the reactive frame budget on a no-NPU Pi.
+
+> **DECISION —** The FOLLOW brain is **built and laptop-tested** (exercised via `yalp follow` against the fake reactive backend + real webcam; flags `--detector`/`--preview`/`--benchmark`/`--seconds`/`--hz`/`--synthetic`, also reachable as the `enter_follow_mode` intent). The detector sits behind a **pluggable `Detector` interface** with four backends, selectable at runtime:
+> - **`face`** (DEFAULT at *desk* range) — OpenCV's **bundled** Haar frontal-face cascade (no download); the right default because a laptop webcam frames only head+shoulders, which a standing-body detector can't see. The face box is expanded downward to approximate head+shoulders as a distance proxy.
+> - **`hog`** — OpenCV's built-in HOG + linear-SVM standing-body detector (download-free).
+> - **`person`** — the **orientation-agnostic** cv2.dnn MobileNet-SSD **body** detector (uses OpenCV's *built-in* `cv2.dnn` — **no new pip dependency**, only a downloadable Caffe model file that is **lazily downloaded and cached** on first use, with a clear offline fallback message). It fires from **any** angle — front, **back**, side — so follow keeps working when the user walks away; this is the **robot's** default and the **Gate H** candidate.
+> - **`auto`** — prefers `person`, falling back to `face` for close-ups (and quietly face-only if the model can't load).
+>
+> The between-detection tracker is **also pluggable**: a real OpenCV legacy tracker (CSRT/KCF) when the installed build exposes one, else a tiny in-repo "hold the last box" fallback so FOLLOW still runs on any OpenCV build (and in CI with none). Detection runs on a **downscaled** copy and boxes are scaled back to original-frame pixels, so `RobotState.target_bbox` is always real frame pixels (§2.2).
+
+> **DECISION —** **Lost-grace hysteresis** governs coast-vs-stop, fixing the acquired/lost flicker. The detector fires only intermittently, so a single missed detection must **not** nuke a live box. The tracker coasts the box (cheap tracker bridging the gap) and keeps reporting it **visible** for as long as the last *successful* detection is younger than a **grace window** (`FOLLOW_LOST_GRACE_TICKS`, kept ≥ the detect interval). The reported `tracker_score` decays gently while coasting (a confidence signal), but the **grace window — not one missed frame — owns the lock**. Only once the grace elapses with no fresh confirmation (or the cheap tracker can no longer hold the box) does FOLLOW genuinely let go: it stops and reports lost, never a permanently latched dead box. A sanity gate also rejects implausible one-off detections (too tiny, jammed against a frame edge with no continuity, or an implausible teleport) before they can latch.
 
 Concretely, inside `step_follow`:
 
@@ -1505,7 +1579,7 @@ def step_follow(state, motors):
     motors.drive(fwd_cmd, turn_cmd)                # collision-stop still overrides upstream
 ```
 
-> **OPEN —** Which detector and which tracker. Candidates: detector ∈ {YOLO-nano, MobileNet-SSD}; tracker ∈ {CSRT (accurate, slower), KCF (faster, less robust), color-histogram CamShift (cheapest)}. The choice is **data-dependent** and not decidable from a desk — it depends on the actual sustained fps on *this* Pi 5 with *this* camera.
+> **OPEN —** Which detector and which tracker *on the Pi*. The interface and the candidate backends are now **built and pluggable** (detector ∈ {`face`, `hog`, `person`/cv2.dnn MobileNet-SSD, `auto`}; tracker ∈ {CSRT, KCF, in-repo hold} resolved by OpenCV build) — so this is no longer a from-scratch design choice but a **measured swap**: the room-range default is `person`, and whether the Pi sustains it is the **data-dependent** part, decided by Gate H's sustained fps on *this* Pi 5 with *this* camera (NO-GO → drop to a lighter `Detector` behind the same interface). The laptop already proves the steering/lost logic; only the Pi's detector fps is open. Status home: `roadmap.md`.
 
 > **OPEN / RISK —** Run an early **FPS spike** before committing to the follow-mode design: measure sustained person-detector fps on the Pi 5 (CPU only) at the camera resolution we intend to use. This is an explicit **GO/NO-GO gate**:
 > - **GO (≳3–5 Hz sustained):** track-by-detection as specified — detector re-seeds, tracker fills.
@@ -1536,11 +1610,14 @@ The SDK already retries 429/5xx/connection errors with backoff; we wrap the step
 
 > **DECISION —** Cloud API keys live in the **environment**, never in source. The deliberative process reads `ANTHROPIC_API_KEY` (and/or `OPENAI_API_KEY`) from the environment / a git-ignored `.env`; the SDK's default `anthropic.Anthropic()` constructor picks it up. No key is ever committed, logged, embedded in a prompt, or written to a memory/state file. Model selection (the per-tier IDs from §3 — `claude-haiku-4-5` / `claude-sonnet-4-6` / `claude-opus-4-8`), the **hard per-session token/call budget** (§3), speed limits, `SAFE_STOP_THRESHOLD`, tick rate, the watchdog timeout (100 ms, §2.6), the gpiozero pin factory (lgpio/native on Pi 5, §1), and the IPC socket endpoint live in one small `config.py` / `config.toml` checked into the repo — config in source, **secrets in the environment**. On the Pi, the key lives in a `0600` env file sourced by the deliberative service unit; on the laptop, in the shell environment.
 
-## 7. Voice — Later Track (High-Level Only)
+## 7. Voice — OUTPUT Shipped, INPUT Deferred
 
-Voice is a deliberately separate track, bolted on only after the full **text** loop works end to end. The deliberative step loop already has the seams for it (`stt.transcribe(...)` before `build_context`, `tts.say(...)` in place of `print`), so wiring it in is mechanical — but the hard part is not the wiring.
+Voice splits into two independent halves, and **the output half is already built**:
 
-> **RISK —** Far-field speech-to-text on a noisy floor, from a robot that is *also playing audio through its own speaker*, is a real project, not an afternoon bolt-on. It drags in wake-word detection, voice-activity detection, and acoustic echo cancellation (so the robot doesn't transcribe itself), plus mic quality and USB-audio latency. Treating "add a mic and a speaker" as a quick final step is the classic way to stall the whole build. Keep it isolated so its rabbit holes never block the core text-driven magic. Sequencing and the specific STT/TTS choices live in `roadmap.md`.
+- **Spoken OUTPUT (TTS) — DONE & integrated.** `voice.speak(text)` is a tiny, dependency-light shim over the macOS built-in `say` (`subprocess`; nothing to `pip install`). It is opt-in via the `--speak` flag on `yalp see` and `yalp agent` (the robot speaks its narration, scene descriptions, the `speak` tool, and the final report), **additive** to the printed transcript (printing is unchanged), **fire-and-forget** (spawned with `Popen`, never blocks the loop), and **headless-safe** — on a box with no `say` binary (Linux/CI/the Pi pre-TTS) `speak()` becomes a logged-once no-op and **never raises**, so a broken voice can't wedge the agent loop. The `say` voice/rate are env-overridable; this needs **no extra hardware** on the laptop (the Pi reuses the same Phase 3 speaker once present).
+- **Spoken INPUT (STT) — deferred.** Transcribing the user's speech is the remaining half. The deliberative step loop already has the seam for it (`stt.transcribe(...)` before `build_context`), so wiring it in is mechanical — but the hard part is not the wiring.
+
+> **RISK —** Far-field speech-to-text on a noisy floor, from a robot that is *also playing audio through its own speaker*, is a real project, not an afternoon bolt-on. It drags in wake-word detection, voice-activity detection, and acoustic echo cancellation (so the robot doesn't transcribe itself), plus mic quality and USB-audio latency. Treating "add a mic" as a quick final step is the classic way to stall the whole build. Keep INPUT isolated so its rabbit holes never block the core text-driven magic (OUTPUT, being a no-op without it, already is). Sequencing and the specific STT choice are the canonical status home of `roadmap.md`.
 
 </script>
 <script type="text/markdown" data-name="roadmap.md">
@@ -1565,6 +1642,45 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 ---
 
+## ⭐ Current status & next steps — read this first
+
+> **Phase 1 (the brain) is COMPLETE and laptop-tested — 134 tests passing.** The full
+> two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
+> wheels"). **6 of 16 rungs are green (0, A, B, C, D, E)**; the remaining 10 (F–O) are
+> **hardware steps gated on the Pi 5 + Phase 2**, which was **ORDERED 2026-06-20 and is
+> inbound**. The full §3 status and the §1 ladder have the detail; this is the skim.
+
+**DONE — the laptop phase (run any of these today):**
+
+- **`yalp see`** — webcam still → Claude → spoken-style description. `--speak` to hear
+  it, `--image PATH` for a file, free-text question supported. *(steps B, C ⭐)*
+- **`yalp agent "..."`** — deliberative loop: Claude picks tools (`drive`, `turn`,
+  `stop`, `look`, `check_distance`, `describe_scene`, `enter_follow_mode`, `explore`,
+  `speak`, `set_speed_limit`), drives the fake robot, narrates. Flags `--speak`,
+  `--synthetic`, `--steps N`, positional words or `--command`. *(steps A, D, E)*
+- **`yalp follow --detector person --preview`** — track-by-detection FOLLOW. Detectors
+  `face` (desk default) / `hog` / `person` (cv2.dnn MobileNet-SSD, orientation-agnostic,
+  robot default) / `auto`; lost-grace hysteresis; flags `--preview`, `--benchmark`,
+  `--seconds`, `--hz`, `--synthetic`. **The follow brain is fully built** — Gate H (L) is
+  only a Pi fps confirmation.
+- **Voice OUTPUT (TTS via macOS `say`, `--speak`) is SHIPPED.** Voice INPUT (STT) is NOT
+  built.
+- **Model routing:** Haiku default → Sonnet (multi-step `explore` / `need_more_reasoning`)
+  → Opus (`describe_scene` full / read-text); model IDs env-overridable. **Adaptive
+  thinking is attached only on Sonnet/Opus — Haiku does not support it.**
+
+**NEXT (optional, laptop):** voice **INPUT (STT)** — talk to it hands-free (needs a real
+STT dependency). Milestone **O**'s remaining half.
+
+**NEXT (when the Pi + Phase 2 arrive):** follow `hardware-runbook.md` —
+**GPIO first light (G) → Gate E power/brownout (F) → Hello motors (H) → Safety reflex
+(J) → Gate H Pi fps benchmark (L) → follow on hardware (M)**. The follow brain is already
+built; Gate H just confirms the Pi's sustained detector fps.
+
+**THEN (post-v1):** kid-friendly enclosure and the rest of §6.
+
+---
+
 ## 1. The build path — one canonical ladder
 
 One sequence, ordered smallest-win-first. Every rung has a **self-certifiable
@@ -1573,27 +1689,32 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 0 of 16 green.** Next up: **0** (order Phase 2 parts), fired the day
-> **A** (the loop contract) starts. Update this line as each done-signal goes green.
+> **Progress: 6 of 16 green — the entire laptop phase is DONE.** Steps **0, A, B, C,
+> D, E** are green (plus voice OUTPUT and the full follow brain), all laptop-tested
+> (**134 tests passing**). The **10 remaining rungs (F–O) are HARDWARE steps** that need
+> the Pi 5 + Phase 2 (ORDERED 2026-06-20, inbound). So "6 of 16" means *the brain is
+> finished* — not that little is done. **Next up: F** (Gate E power bring-up) the day the
+> Pi + Phase 2 arrive; the only optional laptop work left is voice INPUT (STT). Update
+> this line as each done-signal goes green.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
 |---|---|---|---|---|
 | **0** | **Order Phase 2 parts now** ✅ ORDERED 2026-06-20 | Phase 2 order placed (motors, driver, ball caster, HC-SR04, divider resistors, battery + holder, breadboard/wiring, 470–1000 µF + 0.1 µF caps, glue/zip-ties) the day Step A starts; order/tracking numbers recorded. Parts ship in parallel with laptop work. | Laptop / none | |
-| **A** | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | An agent stub and a fake reactive stub exchange **one hand-authored Intent and one RobotState over the REAL socket**, both printed to console. Documentation alone is **NOT** done. (Run `scripts/contract_demo.py` — prints the handshake and 'STEP A OK'.) | Laptop | |
-| **B** | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. | Phase 1 (C270 / laptop cam) | |
-| **C** | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. | Phase 1 | ⭐ **the magic moment** |
-| **D** | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. | Laptop (webcam stand-in) | |
-| **E** | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. (Run `scripts/agent_demo.py` — drives the fake robot end-to-end and prints 'AGENT LOOP OK'.) | Laptop | |
+| **A** ✅ DONE | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | An agent stub and a fake reactive stub exchange **one hand-authored Intent and one RobotState over the REAL socket**, both printed to console. Documentation alone is **NOT** done. **Verify:** `python scripts/contract_demo.py` (prints the handshake and 'STEP A OK'); `pytest tests/test_contract.py`. | Laptop | |
+| **B** ✅ DONE | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
+| **C** ✅ DONE | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
+| **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
+| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (134 passing). | Laptop | |
 | **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
 | **G** | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. | Pi 5 (+ one LED) | |
 | **H** | **Hello motors** | Drive the wheels from Python through the driver: forward, turn, stop. | Pi 5 + Phase 2 + F + G | |
 | **I** | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. | Pi 5 + HC-SR04 + resistors | |
 | **J** | **Safety reflex** (collision-stop) | A fast local loop overrides any drive command when something's too close: commanded forward drive halts within the threshold distance on the bench. In *before* any autonomous driving. | Pi 5 + Phase 2 | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
-| **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed:** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; HOG person detector behind a pluggable `Detector`; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. A laptop fps baseline is available via `yalp follow --benchmark`. See `software-spec.md`. | Pi 5 + Phase 2 | |
+| **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. | Pi 5 + Phase 2 | |
 | **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): the laptop-proven track-by-detection pipeline runs on the Pi — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): swap in the blob/color `Detector` behind the same pluggable interface — robot follows a colored target, collision-stop underneath, own bench demo. The follow *logic/steering* is already proven; only the Pi's detector fps is the open question Gate H answers. A NO-GO is a *different detector, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
 | **N** | **WiFi-degradation test** (gated milestone) | Kill the link **mid-DRIVE_GOAL** and **mid-FOLLOW** and assert: DRIVE_GOAL **safe-stops within the bounded-goal timeout**; FOLLOW **continues locally then safe-stops on target loss**. Both asserts logged green. | Pi 5 + Phase 2 | |
-| **O** | **It listens and speaks** *(separate track)* | STT + TTS bolted on **after** the text loop (0–N) works end-to-end. Allowed to lag indefinitely. | Phase 3 (mic + speaker) | |
+| **O** | **It listens and speaks** *(separate track)* | **TTS OUTPUT is SHIPPED ✅** (macOS `say`, the `--speak` flag on `yalp see` / `yalp agent`, headless-safe no-op if `say` is missing). The remaining half is voice **INPUT (STT)** — bolted on **after** the text loop (0–N) works end-to-end, needs a real STT dep, allowed to lag indefinitely. | Phase 3 (mic + speaker) for STT; TTS works on laptop today | |
 
 > **DECISION —** **Item 0 is real work, not a footnote.** Ordering Phase 2 fires the
 > day Step A starts, so motors, driver, HC-SR04, caps, and battery ship while the
@@ -1645,23 +1766,28 @@ instead of negotiations. See `software-spec.md` and `architecture.md`.
 
 > **DECISION —** The follow *brain* — `Detector` interface, track-by-detection tracker,
 > and steering — is **already implemented and tested laptop-side** (`yalp follow`,
-> `enter_follow_mode`; HOG person detector; graceful lost/too-dark → stop). Gate H's
-> role has therefore narrowed: it is a **benchmark-confirmation** that the chosen
-> detector sustains ≥ 3 Hz on the Pi under concurrent load (reactive loop + camera
-> capture + motor-PWM stress — never in isolation). Record the triple (model,
-> resolution, runtime). Try ONNX Runtime or ncnn with int8, not just OpenCV DNN.
-> A laptop fps baseline is available via `yalp follow --benchmark`. See `software-spec.md`.
+> `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the
+> **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side, robot default;
+> lost-grace hysteresis; graceful lost/too-dark → stop). Gate H's role has therefore
+> narrowed: it is a **benchmark-confirmation** that the chosen detector sustains ≥ 3 Hz on
+> the Pi under concurrent load (reactive loop + camera capture + motor-PWM stress — never
+> in isolation). Record the triple (model, resolution, runtime). Try ONNX Runtime or ncnn
+> with int8, not just OpenCV DNN. A laptop fps baseline is already runnable via
+> `yalp follow --benchmark --detector person`. See `software-spec.md`.
 
 > **STATUS (2026-06-20) —** The follow *brain* is **already implemented and
 > laptop-tested**: `yalp follow` / `enter_follow_mode` in `software-spec.md` ships the
-> pluggable `Detector` interface, the track-by-detection tracker (OpenCV HOG person
-> detector behind that interface), proportional steering, and "lost / too-dark → stop"
-> graceful behavior — all exercised against the fake reactive backend + real webcam.
-> Gate H is therefore a **benchmark-confirmation only**: does the chosen detector
-> sustain ≥ 3 Hz on the Pi under concurrent load? The laptop already provides a fps
-> baseline via `yalp follow --benchmark`. The follow logic and steering are proven; the
-> Pi's detector fps is the one remaining open question Gate H answers (and may force the
-> lighter blob/color `Detector` fallback). See `software-spec.md`.
+> pluggable `Detector` interface, the track-by-detection tracker (detectors
+> `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** —
+> orientation-agnostic, works front/back/side, robot default; the model is lazily
+> downloaded + cached and gitignored), lost-grace hysteresis, proportional steering, and
+> "lost / too-dark → stop" graceful behavior — all exercised against the fake reactive
+> backend + real webcam. Gate H is therefore a **benchmark-confirmation only**: does the
+> chosen detector sustain ≥ 3 Hz on the Pi under concurrent load? The laptop already
+> provides a fps baseline via `yalp follow --benchmark --detector person`. The follow
+> logic and steering are proven; the Pi's detector fps is the one remaining open question
+> Gate H answers (and may force the lighter blob/color `Detector` fallback). See
+> `software-spec.md`.
 
 The Pi 5 has no NPU (the AI HAT is deliberately skipped). The follow *logic/steering*
 is proven; the Pi's *detector fps* is the remaining open question. The NO-GO path is
@@ -1720,13 +1846,18 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 
 ## 3. Current status
 
-> **Status as of this writing:** Phase 1 (the brain) is in hand; Phase 2 hardware
-> parts were ORDERED 2026-06-20 and are inbound. **0 of 16 rungs green.**
-> **Laptop brain now covers all three headline behaviors:** see (`yalp` agent loop,
-> webcam, fake reactive backend), agent (full deliberative loop D1–D3), and follow
-> (`yalp follow` / `enter_follow_mode` — track-by-detection pipeline with HOG detector,
-> pluggable `Detector` interface, steering, and graceful lost/too-dark → stop). The Pi
-> is the remaining unknown for detector fps (Gate H / milestone L).
+> **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
+> (134 tests passing)**; Phase 2 hardware parts were ORDERED 2026-06-20 and are inbound.
+> **6 of 16 rungs green (0, A, B, C, D, E)** — the entire laptop phase, plus voice OUTPUT
+> and the full follow brain. The remaining 10 rungs (F–O) are **hardware steps gated on
+> the Pi**. **Laptop brain covers all three headline behaviors:** **see** (`yalp see` —
+> webcam still → Claude → spoken-style description, `--speak`/`--image`/free-text),
+> **agent** (`yalp agent` — full deliberative loop D1–D3 driving the fake reactive
+> backend), and **follow** (`yalp follow` / `enter_follow_mode` — track-by-detection
+> pipeline; detectors `face`/`hog`/`person`/`auto`, where `person` is the cv2.dnn
+> MobileNet-SSD (orientation-agnostic, robot default); lost-grace hysteresis, steering,
+> graceful lost/too-dark → stop). The Pi is the remaining unknown for detector fps (Gate
+> H / milestone L) — the follow logic itself is already proven.
 
 - **Spent (~$200):** the CanaKit Raspberry Pi 5 4GB Starter Kit PRO (board, 27W PD
   wall supply, active-cooling case, 128GB OS card) plus the Logitech C270 webcam.
@@ -1738,18 +1869,27 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 - **Phase 3 deferred:** USB mic + small speaker.
 - **Laptop brain covers all three headline behaviors:** `yalp see` (**see**), `yalp agent` (**agent**), and `yalp follow` (**follow**) are all implemented and laptop-tested; the follow pipeline (`Detector` interface, track-by-detection tracker, steering, lost/too-dark → stop) was built ahead of the hardware.
 
-**What the first sessions actually are:**
+**DONE — already shipped and laptop-tested (134 tests passing):**
 
-1. **Fire milestone 0** — place the Phase 2 order *the day Step A starts*, so parts
-   ship in parallel with the laptop work below.
-2. Flash the kit's card headless (WiFi + SSH baked in), bring the Pi up over SSH.
-3. **Laptop phase (A–E):** prove the loop contract with a live socket round-trip (A),
-   then bench **B–C** ("it sees and talks," the magic moment), build the agent loop in
-   three checkpoints (**D1–D3**), and close with the fake-robot integration run (**E**).
-4. **When Phase 2 arrives:** run the power gate (**F**), then GPIO first light (**G**),
-   Hello motors (**H**), the HC-SR04 divider bring-up (**I**), and the safety reflex
-   (**J**) *before* any autonomous driving — then the load/fps gates (**K**, **L**),
-   follow (**M**), and the WiFi-degradation test (**N**).
+1. **Milestone 0 fired** — Phase 2 order placed 2026-06-20; parts inbound.
+2. **Laptop phase (A–E) green:** the loop contract proven with a live socket round-trip
+   (**A**), "it sees and talks" benched (**B–C**, the magic moment), the agent loop built
+   in three checkpoints (**D1–D3**), and the fake-robot integration run closed (**E**).
+3. **Beyond the ladder:** voice OUTPUT (TTS, `--speak`) and the full follow brain
+   (`yalp follow` — pluggable `Detector`, cv2.dnn MobileNet-SSD person detector,
+   track-by-detection tracker, lost-grace hysteresis, steering, graceful stop) are built.
+
+**NEXT — what the next sessions actually are:**
+
+1. **Optional (laptop):** voice **INPUT (STT)** — milestone **O**'s remaining half;
+   needs a real STT dependency. Allowed to lag indefinitely.
+2. **When the Pi + Phase 2 arrive** (follow `hardware-runbook.md`): flash the kit's card
+   headless (WiFi + SSH baked in) and bring the Pi up over SSH, then **GPIO first light
+   (G)** → **Gate E power/brownout (F)** → **Hello motors (H)** → HC-SR04 divider
+   bring-up (**I**) → **safety reflex (J)** *before* any autonomous driving → the
+   load/fps gates (**K**, **L** — Gate H is now just a Pi fps confirmation of the
+   already-built follow brain) → follow on hardware (**M**) → the WiFi-degradation test
+   (**N**).
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
@@ -1769,7 +1909,7 @@ Ranked by how much each will actually bite — top of the table is where to spen
 | 3 | **A single front ultrasonic is thin** | Narrow cone, side/rear blind spots, silent failures on glass and soft/angled surfaces. | 🟠 High | **Settled in `hardware.md`:** v1 brings up one front HC-SR04 (milestone I); whether to add corner sensors is owned there, not an open roadmap question. Post-collision behavior settled in `architecture.md`. |
 | 4 | **No encoders = open-loop control** | Without wheel encoders, distance and heading are guesses; the robot drifts and "back up 30cm" is dead reckoning. | 🟠 High | Accept open-loop for v1; lean on vision feedback in follow mode; encoders are a post-v1 upgrade. `hardware.md` |
 | 5 | **Power / brownout** | Motor inrush and flyback drag the shared rail down and the Pi reboots mid-command — the #1 cause of mysterious resets. | 🟠 High | **Gate E (milestone F)** with an inline pass/fail and a built-in NO-GO recovery path; the **combined-load gate (K)** catches the under-load case (§2.3–§2.4). `hardware.md` |
-| 6 | **Voice is the headline goal but the most-deferred, least-specified track** | The product's pitch is "talk to it," yet voice is Phase 3 and barely specced. Far-field STT on a cheap mic, over USB, near motor noise is genuinely hard. | 🟡 Medium | Keep it a separate track (**O**) after the text loop works; spec mic/STT/TTS only when reached. `software-spec.md`, `product-spec.md` |
+| 6 | **Voice INPUT (STT) is the headline goal but the most-deferred half** | The product's pitch is "talk to it." Voice **OUTPUT (TTS, `--speak`) is already shipped**; the remaining risk is **INPUT** — far-field STT on a cheap mic, over USB, near motor noise is genuinely hard. | 🟡 Medium | Keep STT a separate track (**O**) after the text loop works; spec mic/STT only when reached. `software-spec.md`, `product-spec.md` |
 | 7 | **Graceful degradation on WiFi loss** | The deliberative layer needs WiFi; if it drops mid-roam the robot must not go haywire. | 🟡 Medium | Reactive layer is network-independent by design, and the **WiFi-degradation test (milestone N)** proves safe-stop on link loss with observable asserts (§2.6). `architecture.md`, `software-spec.md` |
 
 > **RISK —** Risks 1 and 2 are the ones that can invalidate the *design*, not just
@@ -1803,13 +1943,19 @@ converted to DECISIONs and cross-linked here so the backlog reflects reality.
 > specified in `architecture.md` / `software-spec.md` and reflected in milestone M;
 > roadmap defers to those rather than holding it open. → `architecture.md`, `software-spec.md`
 
-> **OPEN —** **Model / provider choice.** Which vision-language model and provider for
-> the per-step loop vs. the escalation model, and what's the tiering threshold? Cost,
-> latency, and SDK all hang on this. → `software-spec.md`, `architecture.md`
+> **DECISION —** **Model / provider choice — settled and implemented.** Provider is
+> Anthropic (Claude). The per-step loop runs on **Haiku** by default and escalates to
+> **Sonnet** for multi-step work (`explore` / `need_more_reasoning`) and to **Opus** for
+> the hardest vision (`describe_scene` full / read-text). Model IDs are env-overridable
+> (`YALP_MODEL_FAST` / `_MID` / `_BIG`). **Thinking-capability gating:** adaptive
+> "thinking" is attached **only on Sonnet/Opus — Haiku does not support it** (sending it
+> would 400), so the router never asks Haiku to think. → `software-spec.md`,
+> `architecture.md`
 
-> **OPEN —** **Voice timing and approach.** When does the voice track (**O**) actually
-> start, and is far-field STT in scope for v1 or punted to the kid version?
-> → `software-spec.md`, `product-spec.md`
+> **OPEN —** **Voice INPUT (STT) timing and approach.** Voice **OUTPUT is already
+> shipped** (TTS via macOS `say`, the `--speak` flag). What remains open is **INPUT**:
+> when does the STT half of track **O** start, which STT dependency, and is far-field STT
+> in scope for v1 or punted to the kid version? → `software-spec.md`, `product-spec.md`
 
 > **OPEN —** **How much should v1 anticipate the kid version?** Where do we spend now
 > to avoid a rewrite later (interfaces, modes) versus deliberately throwaway cardboard
@@ -1858,6 +2004,26 @@ the canonical pin map, see `hardware.md`; for the build sequence and the go/no-g
 gates, see `roadmap.md`; for the two-process split you are deploying, see
 `software-spec.md`. The laptop side is already done in `SETUP.md` — this picks up
 the moment the Raspberry Pi 5 and the Phase 2 body parts are on your bench.
+
+> **What already exists today (before you touch any hardware).** The whole
+> deliberative brain is **built and laptop-tested** against a *fake* reactive
+> backend, so you can exercise it now on the laptop webcam:
+> - `yalp see [question] [--image PATH] [--speak]` — vision Q&A on a still.
+> - `yalp agent "<command>"` (or `--command`, `--steps`, `--synthetic`, `--speak`)
+>   — the full tool-use agent loop driving the fake wheels with real vision.
+> - `yalp follow` (`--detector face|hog|person|auto`, `--preview`, `--benchmark`,
+>   `--seconds`, `--hz`, `--synthetic`) — **FOLLOW, including the real person
+>   detector, is testable NOW**: the track-by-detection loop, the pluggable
+>   `Detector` (the `person` cv2.dnn body detector tracks you front/back/side), and
+>   the lost-grace/coast-then-stop behavior all run on the laptop. `--benchmark`
+>   even gives a laptop fps baseline for the Gate H comparison in §9.
+>
+> So this runbook's job is *only* to bring the **body** up and marry it to that
+> already-working brain. Two notes carried in from `software-spec.md`: **voice
+> INPUT (a mic + STT) is future work** — only voice OUTPUT (TTS, the `--speak`
+> flag) ships today, and it's a software no-op without a speaker; and the model
+> tiers use **capability-gated thinking** — the fast per-step tier (Haiku) has
+> **no** extended thinking (sending it 400s), only the Sonnet/Opus escalations do.
 
 **Who does what.** You — the owner — do the physical build: wire the breadboard,
 meter voltages, plug things in, run the commands below, and report the result.
@@ -2394,10 +2560,15 @@ branch. Marry it to the brain you built on the laptop in `SETUP.md`.
 **DONE WHEN:** `yalp see` returns a description of the real scene and `yalp agent`
 drives the real wheels through the socket while the reflex keeps it safe.
 
-**Next milestones (not this session):** **follow-mode** (milestone **M**, the
-GO/NO-GO branch from §9), then the **WiFi-degradation test** (milestone **N**),
-and — on a deliberately separate, later track — **voice** (milestone **O**), bolted
-on only after the full text loop works end to end (`roadmap.md`).
+**➡️ NEXT STEPS after this runbook (the path, in order — canonical ledger in
+`roadmap.md`):** run **follow-mode on the hardware** (milestone **M**, the GO/NO-GO
+branch decided by §9 — the laptop-proven follow loop now confirmed on the Pi, or
+its blob/color `Detector` fallback) → the **WiFi-degradation test** (milestone
+**N**) → and, on a deliberately separate later track, **voice INPUT** (milestone
+**O** — STT, bolted on only after the full text loop works end to end; voice OUTPUT
+already ships). Everything past **N** — a stronger on-device tracker, depth/SLAM
+navigation, onboard inference, the kid-version enclosure — is **post-v1 stretch**,
+recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical path.
 
 ---
 
