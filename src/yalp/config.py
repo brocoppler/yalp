@@ -218,21 +218,24 @@ WATCHDOG_TIMEOUT_MS: int = 100
 BUDGET_MAX_CALLS: int = int(os.environ.get("YALP_BUDGET_MAX_CALLS", "40"))
 BUDGET_MAX_TOKENS: int = int(os.environ.get("YALP_BUDGET_MAX_TOKENS", "200000"))
 
-# --- Voice input / Speech-to-Text configuration -----------------------------
-# Audio capture source: 'microphone' (live capture), 'file' (read WAV),
-# or 'synthetic' (generate test audio without hardware).
+# --- Voice input / Speech-to-Text (STT) configuration -----------------------
+# Audio source: 'microphone' for live capture, 'file' for a WAV path, or
+# 'synthetic' for tests / offline pipelines that inject audio without hardware.
 VOICE_SOURCE: str = os.environ.get("YALP_VOICE_SOURCE", "microphone")  # 'microphone' | 'file' | 'synthetic'
-# Sample rate (Hz) for audio capture / playback.
+# PCM audio parameters used when capturing from a microphone or decoding a WAV.
+# Sample rate (Hz); 16000 is recommended for Whisper.
 VOICE_SAMPLE_RATE: int = int(os.environ.get("YALP_VOICE_SAMPLE_RATE", "16000"))
-# Number of audio channels (1 = mono, 2 = stereo).
+# Number of audio channels (1 = mono, 2 = stereo); Whisper expects mono.
 VOICE_CHANNELS: int = int(os.environ.get("YALP_VOICE_CHANNELS", "1"))
-# Duration (seconds) of each microphone recording window.
+# How many seconds of audio to capture per utterance (microphone mode only).
 VOICE_RECORD_SECONDS: float = float(os.environ.get("YALP_VOICE_RECORD_SECONDS", "5"))
-# Path to a WAV file used when VOICE_SOURCE='file'. Empty means unset.
+# Path to the WAV file used when VOICE_SOURCE='file'. Empty string means unset.
 VOICE_AUDIO_FILE: str = os.environ.get("YALP_VOICE_AUDIO_FILE", "")  # WAV path when VOICE_SOURCE='file'
-# Speech-to-text backend: 'faster-whisper' (real inference) or 'fake' (tests).
+# Speech-to-text backend: 'faster-whisper' for local on-device inference, or
+# 'fake' for deterministic unit tests that return canned text.
 STT_BACKEND: str = os.environ.get("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whisper' | 'fake'
-# Whisper model size when STT_BACKEND='faster-whisper'.
+# Whisper model size when STT_BACKEND='faster-whisper'. 'tiny' and 'base' run
+# comfortably on laptop-class CPUs (trade speed vs accuracy).
 STT_MODEL: str = os.environ.get("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whisper
 
 
