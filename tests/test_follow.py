@@ -19,6 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from yalp import config
 from yalp.contract.messages import GoalStatus, Intent, Mode
 from yalp.reactive.fake_backend import FakeReactiveBackend
 from yalp.reactive.follow import (
@@ -366,6 +367,38 @@ def test_follow_stale_box_stops_via_backend():
     assert dec.reason == REASON_STALE
 
 
+def test_follow_state_is_stable_across_detection_gaps_then_searches():
+    """Full stack: intermittent detection keeps the STATE tracking, departure searches.
+
+    Drives the real PersonTracker (with an injected intermittent detector) through
+    the backend, so RobotState.target_visible reflects the published state the
+    reporter/CLI sees. Standing in front of the camera (a box on some ticks, empty
+    on others, all within the grace) must show a STABLE tracking state — no
+    acquired/lost flicker — and a sustained departure must settle to not-visible
+    within about the grace window.
+    """
+    cam = FakeCamera(_bright_frame())
+    grace = config.FOLLOW_LOST_GRACE_TICKS
+    # First a run of intermittent detections (every 3rd tick), then the person
+    # leaves: nothing at all for well past the grace.
+    seq: List[List[Detection]] = []
+    for i in range(15):
+        seq.append([Detection((140, 90, 50, 60), 0.9)] if i % 3 == 0 else [])
+    seq += [[] for _ in range(grace + 10)]
+    pt = PersonTracker(detector=FakeDetector(seq), detect_interval=1)
+    backend = _follow_backend(cam, pt)
+    try:
+        present = [backend.tick().target_visible for _ in range(15)]
+        departed = [backend.tick().target_visible for _ in range(grace + 8)]
+    finally:
+        backend.stop()
+    # While present: rock-stable tracking across every gap (no flip to lost).
+    assert all(v is True for v in present)
+    # After leaving: it lets go and settles to "searching" (not-visible) and stays.
+    assert departed[-1] is False
+    assert departed[-2] is False
+
+
 # --------------------------------------------------------------------------- #
 # Desk-range detector selection (FIX 1) — no camera / no OpenCV needed
 # --------------------------------------------------------------------------- #
@@ -447,24 +480,77 @@ def test_one_off_edge_detection_is_not_latched():
     assert all(r.bbox is None for r in results)
 
 
-def test_target_visible_flips_false_promptly_after_face_lost():
-    """Once the detector stops returning a face, the lock drops within a few ticks.
+def test_target_visible_survives_gaps_then_drops_after_grace():
+    """HYSTERESIS: brief detection gaps stay TRACKING; only sustained loss drops.
 
-    A fresh detection — not a coasting tracker — is required to stay locked, so a
-    dead box can't be held for ~6 ticks like the observed stale coast.
+    Seed once, then the detector never finds the face again. The cheap tracker
+    COASTS the box across the normal gaps between detector hits, so a single (or
+    brief) missed detection does NOT flip the state to lost — target_visible stays
+    True through the grace window. Only after the grace elapses with no fresh
+    detection does it genuinely let go (no latch of a dead box).
     """
-    seq = [[Detection((140, 90, 50, 60), 0.9)]] + [[] for _ in range(10)]
+    grace = config.FOLLOW_LOST_GRACE_TICKS
+    seq = [[Detection((140, 90, 50, 60), 0.9)]] + [[] for _ in range(grace + 20)]
     det = FakeDetector(seq)
     pt = PersonTracker(detector=det, detect_interval=detect_interval_for("face"))
-    visibility = [pt.update(_bright_frame()).target_visible for _ in range(8)]
-    assert visibility[0] is True  # acquired on the first detection
-    # It must go (and stay) not-visible well before 6 ticks of stale coasting.
-    assert visibility[-1] is False
-    assert any(v is False for v in visibility[1:4])
+    vis = [pt.update(_bright_frame()).target_visible for _ in range(grace + 6)]
+    assert vis[0] is True  # acquired on the first detection
+    # A single/brief missed detection within the grace stays TRACKING (no flip).
+    assert all(v is True for v in vis[1:4])
+    # After sustained no-detection beyond the grace it lets go -> lost.
+    assert vis[-1] is False
 
 
-def test_implausible_jump_between_frames_is_rejected():
-    """While tracking, a transient detection that teleports across the frame is dropped."""
+def test_single_missed_detection_does_not_flip_state():
+    """One missed detection mid-track must NOT flip target_visible to lost.
+
+    This is the core flicker regression: the detector fires intermittently, so a
+    lone empty detection tick has to coast the live box, not nuke it.
+    """
+    # Seed, then ONE empty detection in the middle, then detections resume.
+    det = FakeDetector(
+        [
+            [Detection((140, 90, 50, 60), 0.9)],  # seed
+            [],                                    # the single MISS
+            [Detection((142, 92, 50, 60), 0.9)],  # detections resume
+            [Detection((143, 93, 50, 60), 0.9)],
+            [Detection((144, 94, 50, 60), 0.9)],
+        ]
+    )
+    pt = PersonTracker(detector=det, detect_interval=1)
+    results = [pt.update(_bright_frame()) for _ in range(6)]
+    # The lone empty detection never flips the state: every tick stays tracking
+    # with a (detected-or-coasted) box.
+    assert all(r.target_visible is True for r in results)
+    assert all(r.bbox is not None for r in results)
+    # And a fresh detection still re-confirms (resets the grace clock) along the way.
+    assert any(r.ticks_since_last_detector_confirmation == 0 for r in results[1:])
+
+
+def test_intermittent_detection_stays_tracking_across_gaps():
+    """Normal intermittent detection (box on some ticks, nothing on others) is stable.
+
+    Simulates the live bug: with the box appearing only every few ticks and empty
+    in between, the state must stay TRACKING the whole time — no acquired/lost
+    flicker — because every gap is well within the grace.
+    """
+    # A detection every 3rd tick, empty otherwise, for many ticks.
+    seq = []
+    for i in range(18):
+        seq.append([Detection((140, 90, 50, 60), 0.9)] if i % 3 == 0 else [])
+    det = FakeDetector(seq)
+    pt = PersonTracker(detector=det, detect_interval=1)
+    vis = [pt.update(_bright_frame()).target_visible for _ in range(18)]
+    assert all(v is True for v in vis)  # stable tracking across every gap
+
+
+def test_implausible_jump_between_frames_is_not_adopted():
+    """While tracking, a transient detection that teleports across the frame is ignored.
+
+    The teleport is rejected by the sanity gate, so we never jump our lock onto the
+    bogus box — we keep COASTING the original (correct) box. The state stays
+    "tracking" (the right person), and the teleport bbox is never adopted.
+    """
     det = FakeDetector(
         [
             [Detection((20, 90, 50, 60), 0.9)],      # seed on the left
@@ -473,10 +559,10 @@ def test_implausible_jump_between_frames_is_rejected():
     )
     pt = PersonTracker(detector=det, detect_interval=1)
     r0 = pt.update(_bright_frame())  # detect: seed on the left
-    pt.update(_bright_frame())       # cheap-track hold (counter ticks up)
-    r2 = pt.update(_bright_frame())  # detector reruns -> teleport rejected
+    r1 = pt.update(_bright_frame())  # detector reruns -> teleport rejected, coast
     assert r0.target_visible is True
-    assert r2.target_visible is False  # the teleport was not latched
+    assert r1.target_visible is True          # still tracking the original box
+    assert r1.bbox == (20, 90, 50, 60)        # the teleport was NOT adopted
 
 
 # --------------------------------------------------------------------------- #

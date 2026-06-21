@@ -117,6 +117,10 @@ class FollowController:
             )
 
         # 2. Lost / unconfirmed / stale -> stop, never drive on a stale box (§4).
+        #    ``coast_ticks`` is the lost-GRACE window (hysteresis): a coasted box
+        #    within it is still "tracking" (the cheap tracker bridges the normal
+        #    gap between detector hits), so it is NOT stale. Only once the box has
+        #    gone un-reconfirmed for LONGER than the grace is it truly stale.
         stale = result.ticks_since_last_detector_confirmation > self.coast_ticks
         no_box = (not result.target_visible) or result.bbox is None
         weak = result.score < self.track_min_score

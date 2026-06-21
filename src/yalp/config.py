@@ -153,13 +153,9 @@ FOLLOW_TURN_GAIN: float = 1.5
 FOLLOW_FORWARD_GAIN: float = 2.0
 FOLLOW_STOP_BBOX_HEIGHT: float = 0.60  # bbox height / frame height = "close enough"
 
-# Graceful degradation: coast at most this many ticks without a detector
-# re-confirmation before STOPPING and reporting "I lost you" (never drive blind
-# on a stale box, §2.2/§4); and treat a frame dimmer than this mean brightness
-# (0..255) as too dark to track (the lux-floor proxy for GOOD_LIGHT_LUX, §5).
-# Kept SHORT so a lost target is reported promptly (no 6-tick stale coasting):
-# a fresh detection — not just a coasting tracker — is required to stay locked.
-FOLLOW_COAST_TICKS: int = 3
+# Graceful degradation: treat a frame dimmer than this mean brightness (0..255)
+# as too dark to track (the lux-floor proxy for GOOD_LIGHT_LUX, §5) -> STOP and
+# report, because vision tracking is unreliable in the dark.
 FOLLOW_DARK_BRIGHTNESS: float = 16.0
 
 # Localhost IPC endpoint for the reactive <-> deliberative socket (JSON lines).
@@ -175,6 +171,30 @@ SAFE_STOP_THRESHOLD_M: float = 0.30
 
 # Default reactive tick rate (Hz). The spec target band is 10–30 Hz.
 REACTIVE_TICK_HZ: float = 20.0
+
+# --- FOLLOW hysteresis: the lost-grace window (the acquired/lost flicker fix) --
+# Standing in front of the camera must read as a STABLE "tracking" state, not an
+# acquired/lost flicker. Track-by-detection only fires the DETECTOR intermittently
+# (every few ticks) and the cheap tracker COASTS the box in between, so a brief,
+# normal detection gap must NOT read as "lost". The grace window keeps a coasted
+# box "tracking" (target_visible True) as long as a valid (detected-or-coasted)
+# box exists whose last SUCCESSFUL detection is younger than the grace — a coasted
+# box within the window is NOT "stale". Only after the grace elapses with NO fresh
+# detection (and the tracker can no longer hold a box) does FOLLOW transition to
+# LOST -> stop -> "searching: no target". Kept SHORT (~1s) so a real departure
+# still settles within about a second, after which a truly dead box is genuinely
+# released — the grace does NOT latch a dead box forever.
+FOLLOW_LOST_GRACE_S: float = 0.9
+# Tick equivalent of the grace at the default reactive tick rate (~18 ticks at
+# 20 Hz). Both the tracker (its coast budget) and the steering controller (its
+# "stale" gate) use this SINGLE window, so the published STATE always matches the
+# drawn green box: if a box is being used to steer/draw, the state is "tracking".
+FOLLOW_LOST_GRACE_TICKS: int = max(1, round(FOLLOW_LOST_GRACE_S * REACTIVE_TICK_HZ))
+# The coast budget IS the grace window now. (Was a too-strict 3 ticks, which
+# dropped a live box on the very first detection gap and caused the flicker: it
+# required a FRESH detection essentially every tick. The grace lets the coasted
+# box bridge the normal gaps between detector hits.)
+FOLLOW_COAST_TICKS: int = FOLLOW_LOST_GRACE_TICKS
 
 # Independent watchdog timeout (ms): the motor GPIO is zeroed if the reactive
 # tick's heartbeat is older than this (software-spec.md §2.6).
@@ -224,6 +244,8 @@ class Config:
     follow_forward_gain: float = FOLLOW_FORWARD_GAIN
     follow_stop_bbox_height: float = FOLLOW_STOP_BBOX_HEIGHT
     follow_coast_ticks: int = FOLLOW_COAST_TICKS
+    follow_lost_grace_s: float = FOLLOW_LOST_GRACE_S
+    follow_lost_grace_ticks: int = FOLLOW_LOST_GRACE_TICKS
     follow_dark_brightness: float = FOLLOW_DARK_BRIGHTNESS
     ipc_host: str = IPC_HOST
     ipc_port: int = IPC_PORT
@@ -287,6 +309,8 @@ __all__ = [
     "FOLLOW_FORWARD_GAIN",
     "FOLLOW_STOP_BBOX_HEIGHT",
     "FOLLOW_COAST_TICKS",
+    "FOLLOW_LOST_GRACE_S",
+    "FOLLOW_LOST_GRACE_TICKS",
     "FOLLOW_DARK_BRIGHTNESS",
     "IPC_HOST",
     "IPC_PORT",

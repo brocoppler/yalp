@@ -575,8 +575,8 @@ class PersonTracker:
         *,
         detect_interval: int = config.FOLLOW_DETECT_INTERVAL_TICKS,
         track_min_score: float = config.FOLLOW_TRACK_MIN_SCORE,
-        score_decay: float = 0.92,
-        max_coast_ticks: int = config.FOLLOW_COAST_TICKS,
+        score_decay: float = 0.97,
+        max_coast_ticks: int = config.FOLLOW_LOST_GRACE_TICKS,
         min_box_area_frac: float = config.FOLLOW_MIN_BOX_AREA_FRAC,
         edge_margin_frac: float = config.FOLLOW_EDGE_MARGIN_FRAC,
         max_jump_frac: float = config.FOLLOW_MAX_JUMP_FRAC,
@@ -585,9 +585,13 @@ class PersonTracker:
         self.detect_interval = max(1, int(detect_interval))
         self.track_min_score = float(track_min_score)
         self.score_decay = float(score_decay)
-        # After this many ticks coasting on the cheap tracker WITHOUT a fresh
-        # detector confirmation, stop claiming the box is visible — a fresh
-        # detection (not a coasting tracker) is required to re-lock.
+        # HYSTERESIS / lost-grace window: a valid box stays "tracking" (visible) as
+        # long as the cheap tracker can coast it AND its last SUCCESSFUL detection
+        # is younger than this many ticks. The detector only fires intermittently,
+        # so a brief, normal detection gap is NOT "lost" — the coasted box bridges
+        # it. Only after this window elapses with NO fresh detection do we let go
+        # (no latch of a dead box). This is the flicker fix: a single missed
+        # detection no longer nukes a live box.
         self.max_coast_ticks = max(0, int(max_coast_ticks))
         # Sanity-rejection thresholds (drop implausible one-off detections).
         self.min_box_area_frac = float(min_box_area_frac)
@@ -632,7 +636,6 @@ class PersonTracker:
     # -- internals -----------------------------------------------------------
     def _detect_and_reseed(self, frame) -> TrackResult:
         detections = self._get_detector().detect(frame)
-        self._ticks_since_detector = 0
         h, w = frame.shape[:2]
         prev = self._bbox
         # Drop implausible one-off detections (tiny, hard against a frame edge
@@ -640,14 +643,19 @@ class PersonTracker:
         # like the observed x=-0.83 can never get latched into a stale lock.
         plausible = [d for d in detections if self._plausible(d.bbox, w, h, prev)]
         if not plausible:
-            # No trustworthy detection — drop the box and report lost.
-            self._bbox, self._score, self._tracker = None, 0.0, None
-            return TrackResult(False, None, 0.0, 0, True)
+            # No trustworthy detection THIS tick. Do NOT nuke a live box on a
+            # single miss (that strictness caused the acquired/lost flicker): if
+            # we already have a box, COAST it on the cheap tracker within the
+            # grace window — a coasted box is still "tracking", not stale. With no
+            # box at all there is nothing to coast, so this honestly reports lost.
+            return self._coast(frame, detector_ran=True)
 
         best = max(plausible, key=lambda d: d.area)
         self._bbox = best.bbox
         self._score = best.score
         self._tracker = self._make_tracker(frame, best.bbox)
+        # A fresh, plausible detection re-confirms the box: reset the grace clock.
+        self._ticks_since_detector = 0
         visible = self._score >= self.track_min_score
         return TrackResult(visible, self._bbox, self._score, 0, True)
 
@@ -675,26 +683,46 @@ class PersonTracker:
         return True
 
     def _cheap_track(self, frame) -> TrackResult:
+        """A between-detection tick: coast the box on the cheap tracker."""
+        return self._coast(frame, detector_ran=False)
+
+    def _coast(self, frame, *, detector_ran: bool) -> TrackResult:
+        """Coast the box on the cheap tracker within the lost-grace window.
+
+        This is the hysteresis: as long as a valid box exists, the cheap tracker
+        can still hold it, AND its last successful detection is younger than the
+        grace (``max_coast_ticks``), the box stays "tracking" (visible). The cheap
+        tracker BRIDGES the gap between detector hits — that counts as tracking, so
+        the STATE matches the drawn green box. Only when the grace elapses with no
+        fresh detection, or the tracker can no longer hold a box, do we genuinely
+        let go (drop the box -> lost). It is reached both from a between-detection
+        tick and from a detection tick that found nobody (``detector_ran``).
+        """
         self._ticks_since_detector += 1
         if self._tracker is None or self._bbox is None:
-            # Nothing to follow yet; force a detect next tick.
+            # Nothing to coast on yet; force a detect next tick.
             self._ticks_since_detector = self.detect_interval
-            return TrackResult(False, self._bbox, 0.0, self._ticks_since_detector, False)
+            return TrackResult(False, None, 0.0, self._ticks_since_detector, detector_ran)
+
+        # Grace elapsed with no fresh detection: let go (do NOT latch a dead box).
+        if self._ticks_since_detector > self.max_coast_ticks:
+            self._bbox, self._score, self._tracker = None, 0.0, None
+            return TrackResult(False, None, 0.0, self._ticks_since_detector, detector_ran)
 
         ok, bbox = self._tracker.update(frame)
         if not ok or bbox is None:
+            # The cheap tracker can no longer hold the box -> lost.
             self._bbox, self._score, self._tracker = None, 0.0, None
-            return TrackResult(False, None, 0.0, self._ticks_since_detector, False)
+            return TrackResult(False, None, 0.0, self._ticks_since_detector, detector_ran)
 
+        # A coasted box WITHIN the grace is a valid (non-stale) target. Score
+        # erodes gently as a reported-confidence signal, but the grace — not a
+        # single missed detection — governs the lock.
         self._bbox = bbox
         self._score *= self.score_decay
-        # Require a FRESH detection (not a coasting tracker) to keep the lock:
-        # once we have coasted past max_coast_ticks without a detector
-        # confirmation, report not-visible so a dead box is dropped promptly.
-        fresh_enough = self._ticks_since_detector <= self.max_coast_ticks
-        visible = fresh_enough and (self._score >= self.track_min_score)
+        visible = self._score >= self.track_min_score
         return TrackResult(visible, self._bbox, self._score,
-                           self._ticks_since_detector, False)
+                           self._ticks_since_detector, detector_ran)
 
     def _make_tracker(self, frame, bbox: Bbox):
         factory = self._get_cv2_factory()
