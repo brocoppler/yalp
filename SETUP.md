@@ -63,6 +63,29 @@ This installs yalp plus its dependencies (the Anthropic SDK, OpenCV, Pillow,
 NumPy) and the `pytest` test tool. The `-e` means "editable": code changes take
 effect without reinstalling.
 
+### Optional: voice input (push-to-talk STT)
+
+If you want `yalp agent --listen` (speak a command, have it transcribed locally):
+
+```bash
+pip install -e ".[voice]"
+```
+
+This adds `sounddevice` (microphone capture) and `faster-whisper` (local
+speech-to-text). You also need system libraries:
+
+- **macOS:** nothing extra — PortAudio ships with macOS.
+- **Linux / Raspberry Pi:**
+  ```bash
+  sudo apt-get install libportaudio2    # for sounddevice
+  sudo apt-get install espeak-ng        # for --speak TTS output
+  ```
+- **macOS (optional, parity with Pi TTS):** `brew install espeak-ng`
+
+The base install and the test suite do **not** require the `[voice]` extra — tests
+use a fake STT backend and file-based audio sources so no microphone or model
+download is needed.
+
 ---
 
 ## 5. Get an Anthropic API key and add it
@@ -128,6 +151,8 @@ yalp see "what do you see?" --speak  # reads the answer aloud via macOS `say`
 yalp agent "look around and tell me what you see"
 yalp agent "follow me" --steps 3
 yalp agent --command "follow me" --synthetic  # no webcam needed
+yalp agent --listen                           # speak a command (needs [voice] extra)
+yalp agent --listen --speak                   # speak a command, hear the reply
 ```
 
 **`yalp follow`** — FOLLOW mode: track the nearest person and steer toward them:
