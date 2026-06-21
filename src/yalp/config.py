@@ -218,6 +218,23 @@ WATCHDOG_TIMEOUT_MS: int = 100
 BUDGET_MAX_CALLS: int = int(os.environ.get("YALP_BUDGET_MAX_CALLS", "40"))
 BUDGET_MAX_TOKENS: int = int(os.environ.get("YALP_BUDGET_MAX_TOKENS", "200000"))
 
+# --- Voice input / Speech-to-Text configuration -----------------------------
+# Audio capture source: 'microphone' (live capture), 'file' (read WAV),
+# or 'synthetic' (generate test audio without hardware).
+VOICE_SOURCE: str = os.environ.get("YALP_VOICE_SOURCE", "microphone")  # 'microphone' | 'file' | 'synthetic'
+# Sample rate (Hz) for audio capture / playback.
+VOICE_SAMPLE_RATE: int = int(os.environ.get("YALP_VOICE_SAMPLE_RATE", "16000"))
+# Number of audio channels (1 = mono, 2 = stereo).
+VOICE_CHANNELS: int = int(os.environ.get("YALP_VOICE_CHANNELS", "1"))
+# Duration (seconds) of each microphone recording window.
+VOICE_RECORD_SECONDS: float = float(os.environ.get("YALP_VOICE_RECORD_SECONDS", "5"))
+# Path to a WAV file used when VOICE_SOURCE='file'. Empty means unset.
+VOICE_AUDIO_FILE: str = os.environ.get("YALP_VOICE_AUDIO_FILE", "")  # WAV path when VOICE_SOURCE='file'
+# Speech-to-text backend: 'faster-whisper' (real inference) or 'fake' (tests).
+STT_BACKEND: str = os.environ.get("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whisper' | 'fake'
+# Whisper model size when STT_BACKEND='faster-whisper'.
+STT_MODEL: str = os.environ.get("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whisper
+
 
 @dataclass(frozen=True)
 class Config:
@@ -263,6 +280,13 @@ class Config:
     watchdog_timeout_ms: int = WATCHDOG_TIMEOUT_MS
     budget_max_calls: int = BUDGET_MAX_CALLS
     budget_max_tokens: int = BUDGET_MAX_TOKENS
+    voice_source: str = VOICE_SOURCE
+    voice_sample_rate: int = VOICE_SAMPLE_RATE
+    voice_channels: int = VOICE_CHANNELS
+    voice_record_seconds: float = VOICE_RECORD_SECONDS
+    voice_audio_file: str = VOICE_AUDIO_FILE
+    stt_backend: str = STT_BACKEND
+    stt_model: str = STT_MODEL
 
 
 def get_api_key() -> str | None:
@@ -328,6 +352,13 @@ __all__ = [
     "WATCHDOG_TIMEOUT_MS",
     "BUDGET_MAX_CALLS",
     "BUDGET_MAX_TOKENS",
+    "VOICE_SOURCE",
+    "VOICE_SAMPLE_RATE",
+    "VOICE_CHANNELS",
+    "VOICE_RECORD_SECONDS",
+    "VOICE_AUDIO_FILE",
+    "STT_BACKEND",
+    "STT_MODEL",
     "Config",
     "get_api_key",
     "require_api_key",
