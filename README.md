@@ -45,8 +45,8 @@ cp .env.example .env
 # then edit .env and set ANTHROPIC_API_KEY=...
 
 # 4. Sanity-check the install
-yalp --help        # shows the (currently minimal) command set
-pytest             # runs the smoke test
+yalp --help        # shows all available commands
+pytest             # 134 tests, all should pass
 ```
 
 ## Commands
@@ -58,15 +58,45 @@ pattern when no camera is available.
 | Command | What it does |
 |---|---|
 | `yalp --help` | Show the command set. |
-| `yalp see [question]` | Grab a camera still (or `--image PATH`) and ask Claude "what do you see?". |
-| `yalp agent [command]` | Run the full deliberative loop (Claude → intents → fake reactive robot). Natural-language commands like `yalp agent "follow me"` route through `enter_follow_mode` into FOLLOW. |
-| `yalp follow` | **FOLLOW mode** (track-by-detection, software-spec.md §4): detect/track the nearest person on the real webcam and steer the simulated wheels toward them (turn to center, drive forward until close; clean stop when lost/stale or too dark). |
+| `yalp see [question...]` | Grab a camera still and ask Claude "what do you see?" (or any follow-up question). |
+| `yalp agent [words... \| --command TEXT]` | Run the full deliberative loop (Claude → intents → fake reactive robot). |
+| `yalp follow` | **FOLLOW mode**: detect/track the nearest person and steer the simulated wheels toward them. |
 
-`yalp follow` flags: `--seconds N` (auto-stop), `--preview` (OpenCV overlay window
-if a display is available; headless-safe), `--synthetic` (no-camera demo),
-`--detector {face,hog,person,auto}`, and `--benchmark` — print the **selected**
-detector / tracker / FOLLOW-tick fps baseline and compare it to the **Gate H** GO
-threshold (`config.GATE_H_GO_HZ`).
+### `yalp see`
+
+```
+yalp see [question...]          # optional free-text question to ask about the frame
+         [--image PATH]         # use a file instead of the webcam
+         [--speak]              # read the answer aloud via macOS `say` (TTS)
+```
+
+### `yalp agent`
+
+```
+yalp agent [words...]           # natural-language command, e.g. yalp agent follow me
+           [--command TEXT]     # explicit command string (alternative to positional words)
+           [--steps N]          # max deliberate-loop iterations (default: 1)
+           [--synthetic]        # use synthetic camera frames instead of webcam
+           [--speak]            # read each response aloud via macOS `say` (TTS)
+```
+
+Natural-language commands like `yalp agent "follow me"` route through
+`enter_follow_mode` into FOLLOW.
+
+### `yalp follow`
+
+```
+yalp follow [--detector {face,hog,person,auto}]
+            [--preview]         # OpenCV overlay window (headless-safe)
+            [--benchmark]       # print fps baseline vs Gate H threshold
+            [--seconds N]       # auto-stop after N seconds
+            [--hz HZ]           # target tick rate (default: config.FOLLOW_HZ)
+            [--synthetic]       # no-camera demo with generated frames
+```
+
+FOLLOW mode (software-spec.md §4): detect/track the nearest person on the webcam
+and steer the simulated wheels toward them (turn to center, drive forward until
+close; clean stop when lost/stale or too dark).
 
 `--detector` picks the person detector:
 
@@ -78,7 +108,7 @@ threshold (`config.GATE_H_GO_HZ`).
   working when you walk **away** with your back turned. This is the **robot's**
   default (face is desk-only) and the **Gate H** detector candidate. It uses
   OpenCV's built-in `cv2.dnn` (**no new pip dependency**) and downloads a small
-  model file once, cached under `~/.cache/yalp/models` (override with
+  model file once on first run, cached under `~/.cache/yalp/models` (override with
   `YALP_MODEL_CACHE_DIR`); offline it fails with clear instructions for dropping the
   file in by hand. Try it: `yalp follow --detector person`, then stand back and turn
   around — it should still track.
@@ -87,6 +117,28 @@ threshold (`config.GATE_H_GO_HZ`).
 Benchmark the Gate H candidate with `yalp follow --benchmark --detector person`. The
 laptop fps is a **ceiling**, not the gate verdict — Gate H is measured on the Pi
 (under concurrent load) later.
+
+### Voice output
+
+All commands that produce a text response support `--speak`, which pipes the output
+through macOS's built-in `say` command (TTS). Voice **input** (speech-to-text) is
+not yet implemented.
+
+## What's implemented / What's next
+
+**Done (laptop phase — works today):**
+- `yalp see` — VLM vision Q&A, optional image file input, voice output
+- `yalp agent` — full deliberative loop against the fake reactive backend
+- `yalp follow` — FOLLOW mode with `face`, `hog`, `person` (orientation-agnostic),
+  and `auto` detectors; 134 tests pass
+- Voice output (TTS) via `--speak`
+
+**Next:**
+- Voice input (STT) — not yet built
+- Hardware path — real reactive layer (motors, ultrasonic, camera) runs on the Pi;
+  see [docs/technical/roadmap.md](docs/technical/roadmap.md) for the gate ladder and
+  [docs/technical/hardware-runbook.md](docs/technical/hardware-runbook.md) for
+  bring-up steps
 
 ## Viewing the spec hub
 

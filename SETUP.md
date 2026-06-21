@@ -111,15 +111,46 @@ You can also check the command-line tool works:
 yalp --help
 ```
 
-> The interesting commands (`yalp see`, then `yalp agent`) arrive in the next
-> wave. For now `--help` and the test suite confirm your setup is healthy.
+All three laptop commands are ready to use now. Here's a quick tour — the laptop
+phase is complete end-to-end:
+
+**`yalp see`** — ask Claude what the webcam sees (or ask any question about a
+frame):
+```bash
+yalp see                              # "what do you see?"
+yalp see "how many fingers am I holding up?"
+yalp see --image tests/assets/sample.jpg "describe this image"
+yalp see "what do you see?" --speak  # reads the answer aloud via macOS `say`
+```
+
+**`yalp agent`** — run the full deliberative loop against the simulated robot:
+```bash
+yalp agent "look around and tell me what you see"
+yalp agent "follow me" --steps 3
+yalp agent --command "follow me" --synthetic  # no webcam needed
+```
+
+**`yalp follow`** — FOLLOW mode: track the nearest person and steer toward them:
+```bash
+yalp follow                           # face detector, your webcam
+yalp follow --preview                 # same + OpenCV overlay window
+yalp follow --detector person         # orientation-agnostic body detector
+yalp follow --detector person --benchmark  # check fps vs Gate H threshold
+yalp follow --synthetic --seconds 10  # no-camera demo, auto-stops after 10 s
+```
+
+> **First `--detector person` run:** the MobileNet-SSD model (~23 MB) is
+> downloaded once and cached under `~/.cache/yalp/models`. Subsequent runs are
+> instant. If you're offline, it will fail with instructions for dropping the
+> file in by hand.
 
 ---
 
 ## When the Raspberry Pi arrives
 
-Everything above is laptop-only. The real robot body comes later and changes very
-little of the brain:
+At this point the **laptop phase is complete** — `yalp see`, `yalp agent`, and
+`yalp follow` all work end-to-end against the simulated robot. The real robot body
+comes later and changes very little of the brain:
 
 1. **Flash the Pi.** Use Raspberry Pi Imager to write **Raspberry Pi OS Lite
    (64-bit)** to the microSD card, **headless** — enable SSH and Wi-Fi at flash
