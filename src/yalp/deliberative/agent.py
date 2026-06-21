@@ -120,10 +120,16 @@ class Agent:
         max_retries: int = 3,
         retry_backoff: float = 0.2,
         explore_legs: int = 2,
+        speak: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.client = client
         self.reactive = reactive
         self.describe_scene = describe_scene
+        # Optional spoken-OUTPUT callback (the robot's voice). Default OFF: when
+        # None, the ``speak`` ability only prints/records as before. The CLI
+        # threads in ``voice.speak`` when ``--speak`` is passed. This is additive
+        # — the printed transcript is unchanged whether or not speech is enabled.
+        self._speak = speak
         self.budget = budget if budget is not None else Budget()
         self.tools = tools if tools is not None else ANTHROPIC_TOOLS
         self.system = system
@@ -350,6 +356,7 @@ class Agent:
         if name == "speak":
             text = str(params.get("text", "")).strip()
             self._record("model", text, spoken=True)
+            self._vocalize(text)  # the robot's voice (no-op unless --speak)
             return "spoke to the user."
         return f"deliberative ability '{name}' not handled."
 
@@ -444,6 +451,22 @@ class Agent:
 
     def _note(self, text: str, **data: Any) -> TranscriptEntry:
         return self._record("note", text, **data)
+
+    def _vocalize(self, text: str) -> None:
+        """Speak ``text`` aloud via the injected callback (no-op when disabled).
+
+        Best-effort: speech is additive output, so a voice failure must never
+        wedge the loop — exactly like the rest of the deliberative path.
+        """
+        if self._speak is None:
+            return
+        body = (text or "").strip()
+        if not body:
+            return
+        try:
+            self._speak(body)
+        except Exception:  # noqa: BLE001 - voice is best-effort, never fatal
+            pass
 
 
 # --- module-level helpers (also handy for the CLI / tests) ------------------

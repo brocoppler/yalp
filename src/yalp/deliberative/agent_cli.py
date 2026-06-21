@@ -78,6 +78,15 @@ def add_parser(subparsers) -> None:
             "webcam, auto-falling back to synthetic when no camera can be opened."
         ),
     )
+    parser.add_argument(
+        "--speak",
+        action="store_true",
+        help=(
+            "Let the robot SPEAK its 'speak' tool text out loud (macOS 'say'; "
+            "silent no-op without it). The printed transcript is unchanged; voice "
+            "is additive. Default off so nothing makes surprise noise."
+        ),
+    )
     parser.set_defaults(handler=run)
 
 
@@ -114,11 +123,21 @@ def run(args) -> int:
     server.wait_for_client(2.0)
 
     describe = _make_describe(backend)
+    # Spoken OUTPUT (default OFF): thread voice.speak into the agent only when
+    # --speak is passed, so the robot's `speak` tool vocalizes its text. Headless-
+    # safe — voice.speak never raises and no-ops without a 'say' binary.
+    speak_fn = None
+    if getattr(args, "speak", False):
+        from .. import voice
+
+        speak_fn = voice.speak
+
     agent = Agent(
         client=None,  # real LLM client built lazily by llm.call_with_tools
         reactive=client,
         describe_scene=describe,
         max_steps=args.steps,
+        speak=speak_fn,
     )
 
     # Resolve the command: positional words take precedence over --command.

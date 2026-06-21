@@ -32,6 +32,14 @@ def add_parser(subparsers) -> None:
         help="Describe this image file instead of grabbing from the camera.",
     )
     parser.add_argument(
+        "--speak",
+        action="store_true",
+        help=(
+            "Also SPEAK the description out loud (macOS 'say'; silent no-op on "
+            "machines without it). Default off so nothing makes surprise noise."
+        ),
+    )
+    parser.add_argument(
         "question",
         nargs="*",
         help="Optional question about the scene, e.g. 'how many cups are here'.",
@@ -44,6 +52,12 @@ def run(args) -> int:
     question = " ".join(getattr(args, "question", []) or []).strip() or None
     text = vision.see(image_path=args.image, question=question)
     print(vision.format_answer(text, question))
+    if getattr(args, "speak", False):
+        # Voice is additive: speak the description AFTER printing it. Best-effort
+        # and headless-safe — voice.speak never raises and no-ops without 'say'.
+        from .. import voice
+
+        voice.speak(text)
     return 0
 
 
