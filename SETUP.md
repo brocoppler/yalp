@@ -63,9 +63,11 @@ This installs yalp plus its dependencies (the Anthropic SDK, OpenCV, Pillow,
 NumPy) and the `pytest` test tool. The `-e` means "editable": code changes take
 effect without reinstalling.
 
-### Optional: voice input (push-to-talk STT)
+### Optional: voice input
 
-If you want `yalp agent --listen` (speak a command, have it transcribed locally):
+`yalp agent --speak` (text-to-speech output) works out of the box on macOS via
+the built-in `say` command. Voice **input** (`yalp agent --listen` — speak a
+command, have it transcribed locally) needs an optional extra:
 
 ```bash
 pip install -e ".[voice]"
@@ -77,14 +79,16 @@ speech-to-text). You also need system libraries:
 - **macOS:** nothing extra — PortAudio ships with macOS.
 - **Linux / Raspberry Pi:**
   ```bash
-  sudo apt-get install libportaudio2    # for sounddevice
+  sudo apt-get install libportaudio2    # PortAudio runtime for sounddevice
   sudo apt-get install espeak-ng        # for --speak TTS output
   ```
 - **macOS (optional, parity with Pi TTS):** `brew install espeak-ng`
 
-The base install and the test suite do **not** require the `[voice]` extra — tests
-use a fake STT backend and file-based audio sources so no microphone or model
-download is needed.
+The base install and the test suite (`pytest`) do **not** require the `[voice]`
+extra — voice is entirely opt-in, and the tests use a fake STT backend and
+file-based audio sources so no microphone or model download is needed. See
+[docs/technical/audio.md](docs/technical/audio.md) for the full voice reference
+and the `YALP_VOICE_*` / `YALP_STT_*` env vars.
 
 ---
 

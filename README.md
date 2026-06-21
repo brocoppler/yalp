@@ -77,9 +77,12 @@ yalp agent [words...]           # natural-language command, e.g. yalp agent foll
            [--command TEXT]     # explicit command string (alternative to positional words)
            [--steps N]          # max deliberate-loop iterations (default: 1)
            [--synthetic]        # use synthetic camera frames instead of webcam
-           [--speak]            # read each response aloud (TTS)
+           [--speak]            # read each response aloud (macOS `say` / Linux `espeak-ng`)
            [--listen]           # capture one spoken command via mic, transcribe, then run it
 ```
+
+Positional words and `--command` always take precedence over `--listen`; combine
+`--listen --speak` for a fully hands-free loop.
 
 Natural-language commands like `yalp agent "follow me"` route through
 `enter_follow_mode` into FOLLOW.
@@ -125,6 +128,8 @@ laptop fps is a **ceiling**, not the gate verdict — Gate H is measured on the 
 ### Voice output (TTS)
 
 `yalp see --speak` and `yalp agent --speak` read the reply aloud after every turn.
+Any command that produces a text response supports `--speak`; the backend is
+chosen by platform:
 
 | Platform | Backend | Install |
 |---|---|---|
@@ -132,13 +137,15 @@ laptop fps is a **ceiling**, not the gate verdict — Gate H is measured on the 
 | Linux / Raspberry Pi | `espeak-ng` | `sudo apt-get install espeak-ng` |
 | macOS (parity with Pi) | `espeak-ng` | `brew install espeak-ng` |
 
-When neither binary is present the flag is a silent no-op — nothing crashes.
+When no TTS binary is present, `--speak` is a silent no-op — nothing crashes and
+the text reply still prints.
 
 ### Voice input (push-to-talk STT)
 
 `yalp agent --listen` records one spoken command (~5 s by default), transcribes it
 locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and runs
-it through the agent exactly as if you had typed it.
+it through the agent exactly as if you had typed it. Nothing is sent off the
+machine.
 
 ```bash
 yalp agent --listen              # speak a command, run it
@@ -146,13 +153,12 @@ yalp agent --listen --speak      # speak a command, hear the reply
 ```
 
 **Optional install** — voice input requires extra dependencies not included in the
-base install:
+base install (or the tests):
 
 ```bash
-pip install -e ".[voice]"
+pip install -e ".[voice]"        # adds sounddevice (mic) + faster-whisper (STT)
 ```
 
-This adds `sounddevice` (microphone capture) and `faster-whisper` (local STT).
 Linux / Raspberry Pi also need the PortAudio system library:
 
 ```bash
@@ -166,23 +172,7 @@ model at `tiny`.
 **Precedence** — positional words and `--command` always win over `--listen`, so
 typed commands are never overridden accidentally.
 
-### Voice env vars
-
-All voice knobs live in `.env` (see `.env.example`):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `YALP_VOICE_SOURCE` | `microphone` | Mic source: `microphone`, `synthetic`, or `file` |
-| `YALP_VOICE_SAMPLE_RATE` | `16000` | Audio sample rate (Hz) |
-| `YALP_VOICE_CHANNELS` | `1` | Audio channels (1 = mono) |
-| `YALP_VOICE_RECORD_SECONDS` | `5` | How long push-to-talk records |
-| `YALP_VOICE_AUDIO_FILE` | _(none)_ | WAV file path when `YALP_VOICE_SOURCE=file` |
-| `YALP_STT_BACKEND` | `faster_whisper` | STT engine: `faster_whisper` or `fake` |
-| `YALP_STT_MODEL` | `tiny` | faster-whisper model size |
-
-### Dev / CI without hardware
-
-Mirror the synthetic-camera story for voice:
+**Dev / CI without hardware** — mirror the synthetic-camera story for voice:
 
 ```bash
 # No microphone — use a pre-recorded WAV file
@@ -198,16 +188,33 @@ YALP_STT_BACKEND=fake yalp agent --listen
 The test suite uses `YALP_STT_BACKEND=fake` and the file/synthetic sources so it
 runs with **no mic, no model download, and no network**.
 
+### Voice env vars
+
+All voice knobs live in `.env` (see `.env.example` to override):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `YALP_VOICE_SOURCE` | `microphone` | Audio source: `microphone`, `synthetic`, or `file` |
+| `YALP_VOICE_SAMPLE_RATE` | `16000` | Audio sample rate (Hz) |
+| `YALP_VOICE_CHANNELS` | `1` | Audio channels (1 = mono) |
+| `YALP_VOICE_RECORD_SECONDS` | `5` | How long push-to-talk records |
+| `YALP_VOICE_AUDIO_FILE` | _(none)_ | WAV file path when `YALP_VOICE_SOURCE=file` |
+| `YALP_STT_BACKEND` | `faster-whisper` | STT engine: `faster-whisper` or `fake` |
+| `YALP_STT_MODEL` | `tiny` | faster-whisper model size (`tiny`/`base`) |
+
+Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
+
 ## What's implemented / What's next
 
 **Done (laptop phase — works today):**
 - `yalp see` — VLM vision Q&A, optional image file input, voice output
 - `yalp agent` — full deliberative loop against the fake reactive backend
 - `yalp follow` — FOLLOW mode with `face`, `hog`, `person` (orientation-agnostic),
-  and `auto` detectors
+  and `auto` detectors; 134 tests pass
 - Voice output (TTS) via `--speak` (macOS `say` / Linux `espeak-ng`)
 - Voice input (push-to-talk STT) via `--listen` — local faster-whisper transcription,
-  optional `[voice]` extra, hardware-free CI path
+  optional `[voice]` extra, hardware-free CI path; see
+  [docs/technical/audio.md](docs/technical/audio.md)
 
 **Next:**
 - Hardware path — real reactive layer (motors, ultrasonic, camera) runs on the Pi;
@@ -232,3 +239,4 @@ After editing any markdown doc under `docs/`, rebuild the embedded page with
 - **Setup:** [SETUP.md](SETUP.md) — laptop bring-up, getting an API key, running tests.
 - **Build order & gates:** [docs/technical/roadmap.md](docs/technical/roadmap.md).
 - **The loop contract:** [docs/technical/software-spec.md](docs/technical/software-spec.md).
+- **Voice stack (TTS + STT):** [docs/technical/audio.md](docs/technical/audio.md).
