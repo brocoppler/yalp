@@ -13,10 +13,12 @@ so the entire deliberative path and the loop-to-loop seam can be exercised with
     ``BLOCKED`` (sticky: clears only when the obstacle is gone **and** a fresh
     intent arrives), and never open-loop reverses;
   * **owns the camera** (the reactive layer owns the camera, per the contract):
-    it holds a single ``yalp.camera.Camera`` for the run, defaulting to the real
-    webcam with an automatic synthetic fallback so it still runs headless / in
-    CI. The deliberative ``describe_scene`` reads the latest frame from *this*
-    same camera — one device, opened once.
+    it holds a single ``yalp.camera.Camera`` for the run — the **real webcam by
+    default** (auto-falling back to a synthetic source when no camera can be
+    opened, so it still runs headless / in CI). The deliberative
+    ``describe_scene`` reads the latest frame from *this* same camera — one
+    device, opened once. Headless callers and tests pass an explicit synthetic
+    camera or ``camera_source="synthetic"``.
 
 It also provides a ``run`` loop that ticks at a target rate and publishes state
 through a ``ReactiveServer``.
@@ -41,14 +43,17 @@ class FakeReactiveBackend(ReactiveBackend):
     Parameters
     ----------
     camera:
-        An explicit ``Camera`` to read frames from (highest precedence). Tests
-        and headless callers pass a synthetic/mock camera so they never touch
-        hardware.
+        An explicit (pre-built) ``Camera`` to read frames from (highest
+        precedence). If omitted, one is created from ``camera_source``. The
+        reactive layer OWNS this single camera for the run; the deliberative
+        ``describe_scene`` reads its latest frame from the SAME instance (never
+        opens a second device). Tests and headless callers pass a synthetic/mock
+        camera so they never touch hardware.
     camera_source:
         Source string used to build the owned ``Camera`` when ``camera`` is not
         given: ``"webcam"`` (the default — real webcam with an automatic
-        synthetic fallback), ``"synthetic"`` to force the test pattern, or
-        ``"image"``.
+        synthetic fallback if no device opens), ``"synthetic"`` to force the test
+        pattern (for headless/CI/reproducible runs), or ``"image"``.
     safe_stop_threshold_m:
         Distance (m) under which collision-stop fires.
     max_speed_mps / turn_rate_dps:

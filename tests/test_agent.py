@@ -86,7 +86,7 @@ class _Harness:
     """A real fake-backend + server + client, ticking on a thread."""
 
     def __init__(self, backend=None, tick_hz=50.0):
-        # Tests must never touch hardware: force the synthetic camera source.
+        # Tests must never touch real hardware: force the synthetic camera source.
         self.backend = backend or FakeReactiveBackend(
             tick_hz=tick_hz, camera_source="synthetic"
         )
@@ -302,12 +302,36 @@ def test_agent_cli_steps_flag_unchanged():
     assert args.words == ["go", "forward"]
 
 
+# --- camera source: REAL EYES by default, --synthetic forces synthetic -------
 def test_agent_cli_synthetic_flag_defaults_false():
     parser = _make_agent_parser()
     args = parser.parse_args(["agent", "look", "around"])
     assert args.synthetic is False
+
+
+def test_agent_cli_synthetic_flag_sets_true():
+    parser = _make_agent_parser()
     args = parser.parse_args(["agent", "--synthetic", "look", "around"])
     assert args.synthetic is True
+
+
+# --- CLI helper: _camera_source maps args -> a camera source string ----------
+def test_agent_cli_camera_source_defaults_to_real_webcam():
+    """No --synthetic => the run wires up the REAL webcam source."""
+    from yalp.deliberative.agent_cli import _camera_source
+
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "describe the room"])
+    assert _camera_source(args) == "webcam"
+
+
+def test_agent_cli_synthetic_flag_forces_synthetic_source():
+    """--synthetic => the run forces the synthetic camera source."""
+    from yalp.deliberative.agent_cli import _camera_source
+
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "--synthetic", "describe the room"])
+    assert _camera_source(args) == "synthetic"
 
 
 # --- REAL EYES + FAKE WHEELS: camera source & one shared camera --------------
@@ -349,6 +373,53 @@ def test_backend_uses_monkeypatched_camera_factory(monkeypatch):
     assert [c.source for c in built] == ["webcam", "synthetic"]
 
 
+# --- backend owns ONE camera; default is the real webcam ---------------------
+class _FakeCamera:
+    """A no-hardware stand-in that records its requested source."""
+
+    instances = []
+
+    def __init__(self, source="webcam", **kwargs):
+        self.source = source
+        self.kwargs = kwargs
+        self.started = False
+        _FakeCamera.instances.append(self)
+
+    def start(self):
+        self.started = True
+        return self
+
+    def stop(self):
+        self.started = False
+
+    def latest(self):
+        return "FRAME"
+
+    def wait_for_frame(self, timeout=5.0):
+        return "FRAME"
+
+
+def test_backend_defaults_to_real_webcam_camera(monkeypatch):
+    """By default the backend builds a real-webcam-backed Camera (one instance)."""
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+
+    backend = FakeReactiveBackend(tick_hz=50.0)
+
+    assert len(_FakeCamera.instances) == 1, "exactly one Camera per run"
+    assert backend.camera().source == "webcam"
+
+
+def test_backend_camera_source_synthetic_is_honored(monkeypatch):
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+
+    backend = FakeReactiveBackend(tick_hz=50.0, camera_source="synthetic")
+
+    assert len(_FakeCamera.instances) == 1
+    assert backend.camera().source == "synthetic"
+
+
 def test_describe_scene_reads_from_backend_shared_camera(monkeypatch):
     """describe_scene pulls from the backend's ONE shared camera (not a fresh one)."""
     from yalp.deliberative import agent_cli, vision
@@ -372,6 +443,37 @@ def test_describe_scene_reads_from_backend_shared_camera(monkeypatch):
     # It read the latest frame FROM the backend's shared camera, not by opening
     # a new/synthetic one (frame is None => pull latest from the passed camera).
     assert captured["camera"] is shared_camera
+    assert captured["frame"] is None
+
+
+def test_describe_scene_reads_from_shared_backend_camera(monkeypatch):
+    """describe_scene must read the latest frame from the backend's ONE camera."""
+    from yalp.deliberative import agent_cli, vision
+
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+
+    backend = FakeReactiveBackend(tick_hz=50.0)  # default real webcam (faked)
+    assert len(_FakeCamera.instances) == 1
+
+    captured = {}
+
+    def fake_describe_scene(frame=None, question=None, *, model=None,
+                            camera=None, **kwargs):
+        captured["frame"] = frame
+        captured["camera"] = camera
+        return "ok"
+
+    monkeypatch.setattr(vision, "describe_scene", fake_describe_scene)
+
+    describe = agent_cli._make_describe(backend)
+    result = describe()
+
+    assert result == "ok"
+    # No second camera was opened; the same shared instance is used.
+    assert len(_FakeCamera.instances) == 1
+    assert captured["camera"] is backend.camera()
+    # The frame is pulled from that camera (frame=None => grab from camera).
     assert captured["frame"] is None
 
 

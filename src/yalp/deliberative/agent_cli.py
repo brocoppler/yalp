@@ -41,7 +41,10 @@ def add_parser(subparsers) -> None:
         description=(
             "Start a fake reactive backend + server on a thread, connect a "
             "deliberative client, and run the agent loop on a command (or an "
-            "interactive prompt). Prints the model / tool / robot-state transcript."
+            "interactive prompt). Prints the model / tool / robot-state transcript. "
+            "REAL EYES + FAKE WHEELS: the body is simulated but vision comes from "
+            "the real webcam (auto-falling back to synthetic). Pass --synthetic to "
+            "force the synthetic camera test-pattern."
         ),
     )
     parser.add_argument(
@@ -71,9 +74,8 @@ def add_parser(subparsers) -> None:
         action="store_true",
         help=(
             "Force the synthetic camera test-pattern instead of the real webcam "
-            "(useful for a no-camera demo / reproducible runs). By default the "
-            "agent uses the real webcam, auto-falling back to synthetic if none "
-            "can be opened."
+            "(useful for a no-camera demo / reproducible runs). Default: REAL "
+            "webcam, auto-falling back to synthetic when no camera can be opened."
         ),
     )
     parser.set_defaults(handler=run)
@@ -92,6 +94,10 @@ def run(args) -> int:
     from ..contract.ipc import DeliberativeClient, ReactiveServer
     from .agent import Agent, format_transcript
 
+    # REAL EYES + FAKE WHEELS: the reactive layer OWNS one camera for this run.
+    # Default is the real webcam (auto-falling back to synthetic); --synthetic
+    # forces the synthetic test-pattern. describe_scene reads frames from THIS
+    # same shared camera (see _make_describe), so the device is opened only once.
     backend = _make_backend(synthetic=bool(getattr(args, "synthetic", False)))
     server = ReactiveServer(host="127.0.0.1", port=0, mailbox=backend.mailbox)
     server.start()
@@ -151,6 +157,15 @@ def _interactive(agent, fmt) -> None:
         _run_one(agent, command, fmt)
 
 
+def _camera_source(args) -> str:
+    """Map the parsed args to a camera source for the shared backend camera.
+
+    Default is the real webcam (``"webcam"``, auto-falling back to synthetic when
+    no device opens); ``--synthetic`` forces the synthetic test-pattern.
+    """
+    return "synthetic" if getattr(args, "synthetic", False) else "webcam"
+
+
 def _make_backend(synthetic: bool):
     """Build the run's single FakeReactiveBackend, choosing the camera source.
 
@@ -170,10 +185,12 @@ def _make_describe(backend):
     """Build the agent's describe_scene callable bound to the backend camera.
 
     Routes nothing itself — the agent picks the model tier and passes it in; we
-    just grab the latest still from the backend's OWNED camera (real webcam by
-    default, synthetic with ``--synthetic``) and ask the vision path. Reading the
-    shared camera here is what keeps us from opening the webcam a second time.
-    The real Anthropic client is built lazily (a key is present here).
+    just grab the latest still from the backend's OWNED/SHARED camera (real
+    webcam by default, synthetic with ``--synthetic``) and ask the vision path.
+    Reading ``backend.camera()`` here — rather than opening a fresh camera —
+    keeps the reactive layer the sole owner of the device and guarantees only ONE
+    camera is opened per run. The real Anthropic client is built lazily (a key is
+    present here).
     """
     from . import vision
 
