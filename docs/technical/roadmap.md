@@ -106,6 +106,17 @@ instead of negotiations. See `software-spec.md` and `architecture.md`.
 > resolution, runtime). Try ONNX Runtime or ncnn with int8, not just OpenCV DNN.
 > A laptop fps baseline is available via `yalp follow --benchmark`. See `software-spec.md`.
 
+> **STATUS (2026-06-20) —** The follow *brain* is **already implemented and
+> laptop-tested**: `yalp follow` / `enter_follow_mode` in `software-spec.md` ships the
+> pluggable `Detector` interface, the track-by-detection tracker (OpenCV HOG person
+> detector behind that interface), proportional steering, and "lost / too-dark → stop"
+> graceful behavior — all exercised against the fake reactive backend + real webcam.
+> Gate H is therefore a **benchmark-confirmation only**: does the chosen detector
+> sustain ≥ 3 Hz on the Pi under concurrent load? The laptop already provides a fps
+> baseline via `yalp follow --benchmark`. The follow logic and steering are proven; the
+> Pi's detector fps is the one remaining open question Gate H answers (and may force the
+> lighter blob/color `Detector` fallback). See `software-spec.md`.
+
 The Pi 5 has no NPU (the AI HAT is deliberately skipped). The follow *logic/steering*
 is proven; the Pi's *detector fps* is the remaining open question. The NO-GO path is
 **not a dead end**: the blob/color tracker slots in behind the same pluggable `Detector`
@@ -179,6 +190,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
   divider resistors, battery + holder, breadboard/wiring, bulk + ceramic caps,
   glue/zip-ties.
 - **Phase 3 deferred:** USB mic + small speaker.
+- **Laptop brain covers all three headline behaviors:** `yalp see` (**see**), `yalp agent` (**agent**), and `yalp follow` (**follow**) are all implemented and laptop-tested; the follow pipeline (`Detector` interface, track-by-detection tracker, steering, lost/too-dark → stop) was built ahead of the hardware.
 
 **What the first sessions actually are:**
 
