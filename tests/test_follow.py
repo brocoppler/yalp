@@ -1,323 +1,374 @@
-"""FOLLOW-mode tests — no camera, network, or display (software-spec.md §4).
+"""FOLLOW-mode tests — track-by-detection steering, honesty fields, degradation.
 
-Steering and degradation are proven with an injected FAKE detector / tracker and a
-fake frame source carrying a controllable "person bbox", so the whole
-track-by-detection pipeline is exercised with zero hardware:
+No camera, network, or display: a FAKE detector / tracker (with a controllable
+"person bbox") and a fake frame source drive the steering decisions. We assert the
+spec's behaviors (software-spec.md §4):
 
-  * the pure :func:`compute_steering` controller (left -> turn left, centered+far
-    -> forward, centered+close -> stop);
-  * the :class:`PersonTracker` track-by-detection cadence (detector seeds the box,
-    the cheap tracker fills between, the detector re-validates every N ticks);
-  * the FOLLOW tick on :class:`FakeReactiveBackend`: it steers via the tracker,
-    populates the honesty fields on ``RobotState``, and degrades to a clean STOP
-    ("I lost you") on target loss or a too-dark frame — and collision-stop still
-    overrides everything.
+  * person to the left  -> turn left;
+  * centered + far (small bbox)  -> drive forward;
+  * centered + close (large bbox) -> stop;
+  * no detection for K ticks -> target_visible False + stop ("lost");
+  * a too-dark frame -> degrade to stop;
+  * RobotState gets target_visible / target_bbox / tracker_score /
+    ticks_since_last_detector_confirmation populated every FOLLOW tick.
 """
 
 from __future__ import annotations
 
+from typing import List, Optional
+
 import numpy as np
 
-from yalp.contract.messages import GoalStatus, Intent, Mode, RobotState
-from yalp.reactive.fake_backend import FakeReactiveBackend, compute_steering
-from yalp.reactive.person_tracker import (
-    Detection,
-    PersonTracker,
-    TrackResult,
-    best_detection,
+from yalp.contract.messages import GoalStatus, Intent, Mode
+from yalp.reactive.fake_backend import FakeReactiveBackend
+from yalp.reactive.follow import (
+    REASON_DARK,
+    REASON_LOST,
+    REASON_REACHED,
+    REASON_STALE,
+    FollowController,
+    frame_brightness,
 )
-
-FRAME_W, FRAME_H = 640, 480
-
-
-def _bright(w: int = FRAME_W, h: int = FRAME_H, value: int = 200) -> np.ndarray:
-    return np.full((h, w, 3), value, dtype=np.uint8)
+from yalp.reactive.person_tracker import Detection, PersonTracker, TrackResult
 
 
-def _dark(w: int = FRAME_W, h: int = FRAME_H) -> np.ndarray:
-    return np.zeros((h, w, 3), dtype=np.uint8)
-
-
-# --- fakes -------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Test doubles
+# --------------------------------------------------------------------------- #
 class FakeCamera:
-    """A minimal stand-in for yalp.camera.Camera returning a fixed frame."""
+    """A minimal stand-in for yalp.camera.Camera with a fixed frame."""
 
-    def __init__(self, frame, source: str = "fake") -> None:
+    source = "fake"
+
+    def __init__(self, frame: np.ndarray) -> None:
         self._frame = frame
-        self.source = source
+        self.height, self.width = frame.shape[:2]
+        self.started = False
+
+    def set_frame(self, frame: np.ndarray) -> None:
+        self._frame = frame
+        self.height, self.width = frame.shape[:2]
 
     def start(self):
+        self.started = True
         return self
 
-    def stop(self) -> None:
-        pass
+    def stop(self):
+        self.started = False
 
     def latest(self):
         return self._frame
 
-    def wait_for_frame(self, timeout: float = 0.0):
-        return self._frame
-
 
 class FakeTracker:
-    """Returns a scripted TrackResult every update (counts its calls)."""
+    """Returns scripted TrackResults, ignoring the frame (steering under test)."""
 
-    def __init__(self, result: TrackResult) -> None:
-        self.result = result
-        self.updates = 0
+    def __init__(self, results: List[TrackResult]) -> None:
+        self._results = list(results)
+        self._last = results[-1] if results else None
 
-    def reset(self) -> None:
-        pass
-
-    def update(self, frame) -> TrackResult:
-        self.updates += 1
-        return self.result
+    def update(self, _frame) -> TrackResult:
+        if self._results:
+            self._last = self._results.pop(0)
+        return self._last
 
 
-class StaticDetector:
-    """A fake person detector returning a fixed list of detections."""
+class FakeDetector:
+    """A pluggable detector returning a scripted sequence of detection lists."""
 
-    def __init__(self, dets) -> None:
-        self.dets = list(dets)
+    def __init__(self, sequence: List[List[Detection]]) -> None:
+        self._seq = list(sequence)
         self.calls = 0
 
-    def detect(self, frame):
+    def detect(self, _frame) -> List[Detection]:
         self.calls += 1
-        return list(self.dets)
+        if self._seq:
+            return self._seq.pop(0)
+        return []
 
 
-class FakeBoxTracker:
-    """A fake cheap box tracker that always reports the seeded box."""
-
-    def __init__(self, score: float = 0.8) -> None:
-        self.score = score
-        self.bbox = (0, 0, 0, 0)
-        self.inited = 0
-        self.updates = 0
-
-    def init(self, frame, bbox) -> None:
-        self.inited += 1
-        self.bbox = tuple(int(v) for v in bbox)
-
-    def update(self, frame):
-        self.updates += 1
-        return True, self.bbox, self.score
+def _bright_frame(h: int = 240, w: int = 320, value: int = 180) -> np.ndarray:
+    return np.full((h, w, 3), value, dtype=np.uint8)
 
 
-def _follow_backend(camera, tracker, **kw):
-    backend = FakeReactiveBackend(camera=camera, person_tracker=tracker, tick_hz=50.0, **kw)
+def _dark_frame(h: int = 240, w: int = 320) -> np.ndarray:
+    return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+def _visible(bbox, score=0.9, ticks=0) -> TrackResult:
+    return TrackResult(True, bbox, score, ticks, detector_ran=True)
+
+
+# --------------------------------------------------------------------------- #
+# FollowController steering (pure)
+# --------------------------------------------------------------------------- #
+def test_person_to_the_left_turns_left():
+    ctrl = FollowController()
+    # bbox centered well to the LEFT of a 320px-wide frame.
+    res = _visible((10, 100, 40, 90))
+    dec = ctrl.decide(res, frame_w=320, frame_h=240, brightness=180)
+    assert dec.target_visible is True
+    assert dec.error_x < 0
+    assert dec.turn < 0  # turn left
+
+
+def test_person_to_the_right_turns_right():
+    ctrl = FollowController()
+    res = _visible((270, 100, 40, 90))
+    dec = ctrl.decide(res, frame_w=320, frame_h=240, brightness=180)
+    assert dec.error_x > 0
+    assert dec.turn > 0  # turn right
+
+
+def test_centered_and_far_drives_forward():
+    ctrl = FollowController()
+    # Centered horizontally, SMALL bbox height (far away) -> forward, no turn.
+    res = _visible((140, 100, 40, 40))  # h/240 ~ 0.17 << stop fraction
+    dec = ctrl.decide(res, frame_w=320, frame_h=240, brightness=180)
+    assert abs(dec.turn) < 1e-9  # within deadband -> no turn
+    assert dec.forward > 0.0
+
+
+def test_centered_and_close_stops():
+    ctrl = FollowController()
+    # Centered, LARGE bbox (close) -> hold, forward 0.
+    res = _visible((110, 20, 100, 200))  # h/240 ~ 0.83 >= stop fraction
+    dec = ctrl.decide(res, frame_w=320, frame_h=240, brightness=180)
+    assert dec.target_visible is True
+    assert dec.forward == 0.0
+    assert dec.reason == REASON_REACHED
+
+
+def test_lost_when_not_visible_stops():
+    ctrl = FollowController()
+    res = TrackResult(False, None, 0.0, 0, False)
+    dec = ctrl.decide(res, 320, 240, brightness=180)
+    assert dec.target_visible is False
+    assert dec.turn == 0.0 and dec.forward == 0.0
+    assert dec.reason == REASON_LOST
+
+
+def test_stale_box_stops_even_if_tracker_reports_visible():
+    ctrl = FollowController(coast_ticks=8)
+    # Tracker still "sees" a box, but the detector has not confirmed it for too
+    # long -> stop, never drive blind on a stale box (§4).
+    res = TrackResult(True, (140, 100, 40, 40), 0.9, ticks_since_last_detector_confirmation=20)
+    dec = ctrl.decide(res, 320, 240, brightness=180)
+    assert dec.target_visible is False
+    assert dec.reason == REASON_STALE
+    assert dec.forward == 0.0
+
+
+def test_too_dark_frame_degrades_to_stop():
+    ctrl = FollowController()
+    res = _visible((140, 100, 40, 40))  # a perfectly good box...
+    dec = ctrl.decide(res, 320, 240, brightness=2.0)  # ...but the frame is dark
+    assert dec.target_visible is False
+    assert dec.reason == REASON_DARK
+    assert dec.forward == 0.0 and dec.turn == 0.0
+
+
+def test_weak_score_treated_as_lost():
+    ctrl = FollowController(track_min_score=0.2)
+    res = TrackResult(True, (140, 100, 40, 40), 0.05, 0, False)
+    dec = ctrl.decide(res, 320, 240, brightness=180)
+    assert dec.target_visible is False
+    assert dec.reason == REASON_LOST
+
+
+def test_frame_brightness_helper():
+    assert frame_brightness(None) == 0.0
+    assert frame_brightness(_dark_frame()) < 1.0
+    assert frame_brightness(_bright_frame(value=200)) > 150.0
+
+
+# --------------------------------------------------------------------------- #
+# PersonTracker track-by-detection (with a fake detector)
+# --------------------------------------------------------------------------- #
+def test_tracker_reseeds_on_detection_and_resets_counter():
+    det = FakeDetector([[Detection((100, 50, 40, 90), 0.9)]])
+    pt = PersonTracker(detector=det, detect_interval=5)
+    res = pt.update(_bright_frame())
+    assert res.target_visible is True
+    assert res.bbox == (100, 50, 40, 90)
+    assert res.ticks_since_last_detector_confirmation == 0
+    assert res.detector_ran is True
+    assert det.calls == 1
+
+
+def test_tracker_holds_box_between_detections_and_counts_ticks():
+    # Detector finds a person once, then is not called again until the interval.
+    det = FakeDetector([[Detection((100, 50, 40, 90), 0.9)]])
+    pt = PersonTracker(detector=det, detect_interval=3)
+    pt.update(_bright_frame())  # tick 0: detect + seed
+    r1 = pt.update(_bright_frame())  # tick 1: cheap-track (hold)
+    r2 = pt.update(_bright_frame())  # tick 2: cheap-track (hold)
+    assert det.calls == 1  # detector did NOT run on the in-between ticks
+    assert r1.ticks_since_last_detector_confirmation == 1
+    assert r2.ticks_since_last_detector_confirmation == 2
+    # The box is held between detections.
+    assert r2.bbox == (100, 50, 40, 90)
+
+
+def test_tracker_reruns_detector_after_interval():
+    det = FakeDetector(
+        [
+            [Detection((100, 50, 40, 90), 0.9)],   # tick 0 seed
+            [Detection((120, 55, 44, 92), 0.95)],  # tick 3 re-seed
+        ]
+    )
+    pt = PersonTracker(detector=det, detect_interval=3)
+    pt.update(_bright_frame())  # 0: detect + seed (ticks=0)
+    pt.update(_bright_frame())  # 1: hold (ticks=1)
+    pt.update(_bright_frame())  # 2: hold (ticks=2)
+    pt.update(_bright_frame())  # 3: hold (ticks=3)
+    r4 = pt.update(_bright_frame())  # 4: ticks>=interval -> detect again
+    assert det.calls == 2
+    assert r4.ticks_since_last_detector_confirmation == 0
+    assert r4.bbox == (120, 55, 44, 92)
+
+
+def test_tracker_reports_lost_when_detector_finds_nobody():
+    det = FakeDetector([[]])  # detector runs, finds nobody
+    pt = PersonTracker(detector=det, detect_interval=5)
+    res = pt.update(_bright_frame())
+    assert res.target_visible is False
+    assert res.bbox is None
+    assert det.calls == 1
+
+
+def test_tracker_handles_none_frame():
+    det = FakeDetector([[Detection((100, 50, 40, 90), 0.9)]])
+    pt = PersonTracker(detector=det, detect_interval=5)
+    res = pt.update(None)
+    assert res.target_visible is False
+    assert res.bbox is None
+    assert det.calls == 0  # never even tried to detect on a missing frame
+
+
+# --------------------------------------------------------------------------- #
+# FakeReactiveBackend FOLLOW integration (state population + degradation)
+# --------------------------------------------------------------------------- #
+def _follow_backend(camera, tracker) -> FakeReactiveBackend:
+    backend = FakeReactiveBackend(camera=camera, tracker=tracker)
     backend.start()
     backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))
+    backend.tick()  # adopt FOLLOW
     return backend
 
 
-# --- compute_steering (pure controller) -------------------------------------
-def test_steering_person_left_turns_left():
-    # bbox centered well left of frame center.
-    turn, forward, err_x, _hfrac = compute_steering((40, 100, 100, 200), FRAME_W, FRAME_H)
-    assert err_x < 0
-    assert turn < 0  # turn LEFT toward the person
-
-
-def test_steering_person_right_turns_right():
-    turn, _forward, err_x, _hfrac = compute_steering((520, 100, 100, 200), FRAME_W, FRAME_H)
-    assert err_x > 0
-    assert turn > 0  # turn RIGHT toward the person
-
-
-def test_steering_centered_far_drives_forward():
-    # Centered (x≈center) and a SMALL bbox (far away) -> no turn, drive forward.
-    bbox = (FRAME_W // 2 - 50, 100, 100, 120)  # h/H = 0.25, below stop frac
-    turn, forward, _err, hfrac = compute_steering(bbox, FRAME_W, FRAME_H)
-    assert turn == 0.0
-    assert forward > 0.0
-    assert hfrac < 0.6
-
-
-def test_steering_centered_close_stops():
-    # Centered and a LARGE bbox (close) -> hold (forward 0).
-    bbox = (FRAME_W // 2 - 60, 40, 120, 360)  # h/H = 0.75, above stop frac
-    turn, forward, _err, hfrac = compute_steering(bbox, FRAME_W, FRAME_H)
-    assert turn == 0.0
-    assert forward == 0.0
-    assert hfrac >= 0.6
-
-
-# --- PersonTracker track-by-detection cadence -------------------------------
-def test_best_detection_picks_largest():
-    small = Detection(0, 0, 10, 10, 0.5)
-    big = Detection(0, 0, 100, 200, 0.9)
-    assert best_detection([small, big]) is big
-    assert best_detection([]) is None
-
-
-def test_tracker_detects_then_tracks_then_redetects():
-    frame = _bright()
-    det = Detection(100, 100, 80, 200, 0.9)
-    detector = StaticDetector([det])
-    created = []
-
-    def factory():
-        t = FakeBoxTracker()
-        created.append(t)
-        return t
-
-    pt = PersonTracker(detector=detector, tracker_factory=factory,
-                       detect_every=3, min_score=0.0)
-
-    r0 = pt.update(frame)  # no live track -> detector seeds
-    assert r0.detector_ran and r0.target_visible
-    assert r0.ticks_since_last_detector_confirmation == 0
-    assert r0.bbox == det.bbox
-    assert detector.calls == 1 and len(created) == 1
-
-    r1 = pt.update(frame)  # cheap tracker fills the gap
-    assert not r1.detector_ran and r1.target_visible
-    assert r1.ticks_since_last_detector_confirmation == 1
-    r2 = pt.update(frame)
-    assert r2.ticks_since_last_detector_confirmation == 2
-    r3 = pt.update(frame)
-    assert r3.ticks_since_last_detector_confirmation == 3
-    assert detector.calls == 1  # still no re-detect yet
-
-    r4 = pt.update(frame)  # ticks_since >= detect_every -> detector re-validates
-    assert r4.detector_ran
-    assert r4.ticks_since_last_detector_confirmation == 0
-    assert detector.calls == 2 and len(created) == 2
-
-
-def test_tracker_reports_lost_when_detector_sees_nobody():
-    detector = StaticDetector([])  # nobody in frame
-    pt = PersonTracker(detector=detector, tracker_factory=FakeBoxTracker)
-    r = pt.update(_bright())
-    assert r.detector_ran
-    assert not r.target_visible
-    assert r.bbox is None
-    assert r.score == 0.0
-
-
-# --- FOLLOW on the backend: steering + honesty fields -----------------------
-def test_follow_person_left_turns_left_and_populates_state():
-    bbox = (40, 100, 100, 200)
-    tracker = FakeTracker(TrackResult(True, bbox, 0.9, 0))
-    backend = _follow_backend(FakeCamera(_bright()), tracker)
+def test_follow_populates_honesty_fields_on_state():
+    cam = FakeCamera(_bright_frame())
+    tracker = FakeTracker([_visible((140, 100, 40, 40), score=0.8, ticks=0)] * 3)
+    backend = _follow_backend(cam, tracker)
     try:
         state = backend.tick()
     finally:
         backend.stop()
-
-    turn, forward = backend.follow_motion()
-    assert turn < 0  # toward the person on the left
-    # RobotState honesty fields are populated every tick (software-spec.md §2.2).
+    assert state.mode == Mode.FOLLOW
+    assert state.goal_status == GoalStatus.RUNNING
     assert state.target_visible is True
-    assert state.target_bbox == bbox
-    assert state.tracker_score == 0.9
+    assert state.target_bbox == (140, 100, 40, 40)
+    assert abs(state.tracker_score - 0.8) < 1e-6
     assert state.ticks_since_last_detector_confirmation == 0
-    assert tracker.updates == 1
 
 
-def test_follow_centered_far_drives_forward():
-    bbox = (FRAME_W // 2 - 50, 100, 100, 120)  # small -> far
-    tracker = FakeTracker(TrackResult(True, bbox, 0.9, 0))
-    backend = _follow_backend(FakeCamera(_bright()), tracker)
+def test_follow_left_person_makes_backend_turn_left():
+    cam = FakeCamera(_bright_frame())
+    tracker = FakeTracker([_visible((10, 100, 40, 90))] * 3)
+    backend = _follow_backend(cam, tracker)
     try:
         backend.tick()
+        dec = backend.last_follow_decision
     finally:
         backend.stop()
-    turn, forward = backend.follow_motion()
-    assert turn == 0.0
-    assert forward > 0.0
+    assert dec.target_visible is True
+    assert dec.turn < 0  # steering left
 
 
-def test_follow_centered_close_stops():
-    bbox = (FRAME_W // 2 - 60, 40, 120, 360)  # large -> close
-    tracker = FakeTracker(TrackResult(True, bbox, 0.9, 0))
-    backend = _follow_backend(FakeCamera(_bright()), tracker)
+def test_follow_close_person_stops_forward():
+    cam = FakeCamera(_bright_frame())
+    tracker = FakeTracker([_visible((110, 20, 100, 200))] * 3)
+    backend = _follow_backend(cam, tracker)
     try:
         backend.tick()
+        dec = backend.last_follow_decision
     finally:
         backend.stop()
-    _turn, forward = backend.follow_motion()
-    assert forward == 0.0
+    assert dec.forward == 0.0
+    assert dec.reason == REASON_REACHED
 
 
-def test_follow_lost_target_stops_and_reports():
-    # Tracker never sees the person; with coast_ticks=0 a lost tick STOPs at once.
-    tracker = FakeTracker(TrackResult(False, None, 0.0, 5))
-    backend = _follow_backend(FakeCamera(_bright()), tracker, follow_coast_ticks=0)
+def test_follow_lost_target_sets_invisible_and_stops():
+    cam = FakeCamera(_bright_frame())
+    tracker = FakeTracker([TrackResult(False, None, 0.0, 0, False)] * 3)
+    backend = _follow_backend(cam, tracker)
     try:
         state = backend.tick()
+        dec = backend.last_follow_decision
     finally:
         backend.stop()
-
-    _turn, forward = backend.follow_motion()
-    assert forward == 0.0
     assert state.target_visible is False
     assert state.target_bbox is None
-    assert "lost" in (state.goal or {}).get("status", "").lower()
-    assert "I lost you" in (state.goal or {}).get("status", "")
+    assert dec.forward == 0.0 and dec.turn == 0.0
+    assert dec.reason == REASON_LOST
 
 
-def test_follow_too_dark_degrades_to_stop():
-    # A too-dark frame degrades to STOP before the tracker is ever consulted.
-    tracker = FakeTracker(TrackResult(True, (40, 100, 100, 200), 0.9, 0))
-    backend = _follow_backend(FakeCamera(_dark()), tracker)
+def test_follow_dark_frame_degrades_to_stop():
+    cam = FakeCamera(_dark_frame())
+    # Tracker would happily report a box, but the frame is too dark to trust.
+    tracker = FakeTracker([_visible((140, 100, 40, 40))] * 3)
+    backend = _follow_backend(cam, tracker)
     try:
         state = backend.tick()
+        dec = backend.last_follow_decision
     finally:
         backend.stop()
-
-    _turn, forward = backend.follow_motion()
-    assert forward == 0.0
     assert state.target_visible is False
-    assert tracker.updates == 0  # never tracked on a dark frame
-    assert "dark" in (state.goal or {}).get("status", "").lower()
-
-
-def test_follow_coasts_briefly_before_stopping():
-    tracker = FakeTracker(TrackResult(False, None, 0.0, 9))
-    backend = _follow_backend(FakeCamera(_bright()), tracker, follow_coast_ticks=2)
-    try:
-        # first FOLLOW tick adopts + one lost tick -> still within coast budget
-        s1 = backend.tick()
-        assert (s1.goal or {}).get("reason") == "coast"
-        s2 = backend.tick()
-        assert (s2.goal or {}).get("reason") == "coast"
-        s3 = backend.tick()  # exceeds coast budget -> STOP/lost
-        assert (s3.goal or {}).get("reason") == "lost"
-    finally:
-        backend.stop()
-    _turn, forward = backend.follow_motion()
-    assert forward == 0.0
+    assert dec.reason == REASON_DARK
+    assert dec.forward == 0.0
 
 
 def test_collision_stop_overrides_follow():
-    tracker = FakeTracker(TrackResult(True, (40, 100, 100, 200), 0.9, 0))
-    backend = _follow_backend(FakeCamera(_bright()), tracker)
-    backend.trigger_collision(0.10)  # obstacle inside the safe-stop threshold
+    cam = FakeCamera(_bright_frame())
+    tracker = FakeTracker([_visible((140, 100, 40, 40))] * 5)
+    backend = _follow_backend(cam, tracker)
     try:
+        backend.trigger_collision(0.10)  # obstacle inside the safe-stop threshold
         state = backend.tick()
     finally:
         backend.stop()
-
+    # Safety reflex beats FOLLOW entirely this tick (§2.3).
     assert state.mode == Mode.SAFE_STOP
-    assert state.blocked is True
-    assert tracker.updates == 0  # safety override returns before FOLLOW runs
+    assert state.goal_status == GoalStatus.BLOCKED
 
 
-def test_robotstate_follow_honesty_fields_roundtrip():
-    # The populated honesty fields survive JSON serialization (the wire contract).
-    bbox = (40, 100, 100, 200)
-    tracker = FakeTracker(TrackResult(True, bbox, 0.77, 0))
-    backend = _follow_backend(FakeCamera(_bright()), tracker)
+def test_follow_stale_box_stops_via_backend():
+    cam = FakeCamera(_bright_frame())
+    # Tracker keeps "seeing" the box but the detector hasn't confirmed in 20 ticks.
+    stale = TrackResult(True, (140, 100, 40, 40), 0.9, 20, False)
+    tracker = FakeTracker([stale] * 3)
+    backend = _follow_backend(cam, tracker)
     try:
         state = backend.tick()
+        dec = backend.last_follow_decision
     finally:
         backend.stop()
+    assert state.target_visible is False
+    assert state.ticks_since_last_detector_confirmation == 20
+    assert dec.reason == REASON_STALE
 
-    restored = RobotState.from_json(state.to_json())
-    assert restored.target_visible is True
-    assert restored.target_bbox == bbox
-    assert restored.tracker_score == 0.77
-    assert restored.ticks_since_last_detector_confirmation == 0
-    assert restored.goal_status == GoalStatus.RUNNING
+
+def test_enter_follow_mode_is_fire_and_forget():
+    # apply_intent only stores the intent; it must return immediately without
+    # blocking on the tracker/camera (the contract: enter_follow_mode returns now).
+    cam = FakeCamera(_bright_frame())
+    tracker = FakeTracker([_visible((140, 100, 40, 40))])
+    backend = FakeReactiveBackend(camera=cam, tracker=tracker)
+    backend.start()
+    try:
+        backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))
+        # No tick yet -> the tracker was never consulted.
+        assert backend.last_follow_decision is None
+    finally:
+        backend.stop()

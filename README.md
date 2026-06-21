@@ -51,21 +51,23 @@ pytest             # runs the smoke test
 
 ## Commands
 
-Run `yalp --help` for the live list. Today:
+All commands run **laptop-first** against the fake reactive backend (simulated
+wheels); vision uses your real webcam, auto-falling back to a synthetic test
+pattern when no camera is available.
 
 | Command | What it does |
 |---|---|
-| `yalp see [question]` | Grab a webcam still (or `--image PATH`) and ask a Claude vision model "what do you see?". |
-| `yalp agent "<command>"` | Run the deliberative agent loop against the fake reactive backend (real eyes, simulated wheels). It turns plain language into tool-call intents — including **`yalp agent "follow me"`**, which routes through `enter_follow_mode` into the FOLLOW behavior below. |
-| `yalp follow` | Run **FOLLOW mode** (track-by-detection) against the real webcam: the simulated wheels steer toward a real person, printing a per-tick steering decision. `--seconds N` auto-stops; `--preview` shows a bbox/steering overlay when a display is available (headless-safe); `--synthetic` forces the test-pattern; `--benchmark` prints the laptop detector/tracker/FOLLOW-tick fps baseline vs the Gate H threshold. |
+| `yalp --help` | Show the command set. |
+| `yalp see [question]` | Grab a camera still (or `--image PATH`) and ask Claude "what do you see?". |
+| `yalp agent [command]` | Run the full deliberative loop (Claude → intents → fake reactive robot). Natural-language commands like `yalp agent "follow me"` route through `enter_follow_mode` into FOLLOW. |
+| `yalp follow` | **FOLLOW mode** (track-by-detection, software-spec.md §4): detect/track the nearest person on the real webcam and steer the simulated wheels toward them (turn to center, drive forward until close; clean stop when lost/stale or too dark). |
 
-`yalp follow` realizes software-spec.md §4's track-by-detection thesis: OpenCV's
-built-in HOG people detector (no model download) re-seeds a cheap box tracker, and
-the FOLLOW loop turns toward the person (horizontal bbox error) and drives forward
-until they're close enough (bbox size), degrading to a clean stop ("I lost you")
-when the target is lost or the scene is too dark. The detector is pluggable — on
-the Pi we'd swap in MobileNet-SSD / YOLO-nano behind the same interface; Gate H
-decides.
+`yalp follow` flags: `--seconds N` (auto-stop), `--preview` (OpenCV overlay window
+if a display is available; headless-safe), `--synthetic` (no-camera demo), and
+`--benchmark` — print the laptop detector / tracker / FOLLOW-tick fps baseline and
+compare it to the **Gate H** GO threshold (`config.GATE_H_GO_HZ`). The laptop uses
+OpenCV's built-in HOG people detector (no model download); on the Pi we'd swap in a
+faster detector behind the same interface.
 
 ## Viewing the spec hub
 

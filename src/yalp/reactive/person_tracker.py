@@ -1,84 +1,70 @@
-"""Track-by-detection person tracker (software-spec.md §4).
+"""Track-by-detection person tracker for FOLLOW mode (software-spec.md §4).
 
-This realizes the spec's **THESIS**: a slow, robust *person detector* re-seeds and
-validates a cheap, fast *box tracker* that fills the gaps between detections. The
-fast tracker provides smoothness at the reactive tick rate; the slow detector
-provides the "it's actually a person, and here's where they really are now"
-correction. That is the only design that satisfies both robustness and the
-reactive frame budget on a no-NPU Pi.
+This realizes the spec's **THESIS**: run a *cheap* per-frame tracker every reactive
+tick to keep follow-mode smooth, and re-run a *slower* person **detector** every
+few frames (or whenever the tracked box goes stale) purely to **re-seed and
+validate** the box. The fast tracker gives smoothness; the slow detector gives
+"it's actually a person, and here's where they really are now".
 
-Two pluggable seams keep the swap Gate H (roadmap.md) ultimately decides cheap:
+Two seams keep this honest and portable:
 
-  * ``Detector`` — anything with ``detect(frame) -> list[Detection]``. The default
-    is :class:`HOGPersonDetector` (OpenCV's built-in HOG people detector, which
-    ships with opencv and needs **no model download**). On the Pi we would swap in
-    a faster detector (MobileNet-SSD / YOLO-nano via onnxruntime/ncnn) behind this
-    same interface — Gate H's fps spike decides whether that swap is even needed.
-  * ``BoxTracker`` — anything with ``init(frame, bbox)`` + ``update(frame) ->
-    (ok, bbox, score)``. :func:`make_box_tracker` prefers a real OpenCV tracker
-    (CSRT / KCF, across the several OpenCV API spellings) and **falls back** to the
-    pure-Python :class:`SimpleBoxTracker` when no cv2 tracker is available — so
-    FOLLOW still runs on an OpenCV build without the (contrib) tracking module.
+  * **The detector is pluggable** behind :class:`Detector`. The laptop default is
+    OpenCV's built-in **HOG people detector** (:class:`HogPersonDetector`), which
+    ships with ``opencv-python`` and needs **no model-file download**. On the Pi we
+    would swap in a faster detector (MobileNet-SSD / YOLO-nano via onnxruntime or
+    ncnn) **behind this same interface** — Gate H (roadmap.md) decides whether the
+    Pi sustains the ``config.GATE_H_GO_HZ`` floor that makes track-by-detection
+    viable. Nothing else in FOLLOW changes when that swap happens.
+  * **The between-detection tracker is pluggable too.** We prefer a real OpenCV
+    legacy tracker (CSRT/KCF) when the installed OpenCV exposes one — handling the
+    ``cv2.legacy.*`` vs ``cv2.Tracker*_create`` vs *missing* differences across
+    OpenCV builds — and otherwise **fall back to a tiny in-repo "hold the last
+    box" tracker** so FOLLOW still runs on any OpenCV build (and in CI with none).
 
-Coordinates: bounding boxes are ``(x, y, w, h)`` in **frame pixels** (the
-OpenCV convention, top-left origin), consistent end-to-end — the detector scales
-its downscaled-frame boxes back up to full-frame pixels before returning them, and
-``RobotState.target_bbox`` is populated with the same pixel box.
+Coordinate convention: a bbox is ``(x, y, w, h)`` in **frame pixel coordinates**
+of the *original* (non-downscaled) frame. Detection runs on a downscaled copy for
+speed, and boxes are scaled back to original-frame pixels before they leave this
+module — so ``RobotState.target_bbox`` is always in real frame pixels (§2.2).
 
-Import-clean: the module top-level is **pure standard library** (no cv2 / numpy),
-so tests can import it and inject a fake detector/tracker with no hardware. cv2
-and numpy are imported lazily, only inside the HOG detector / real-tracker paths.
+Import hygiene: ``cv2`` is imported **lazily** (only when a real detector/tracker
+is actually constructed), so this module imports cleanly with no OpenCV present
+and tests can inject a fake detector without touching hardware or heavy deps.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol, Tuple, runtime_checkable
+from typing import List, Optional, Protocol, Tuple
 
-# A bounding box in frame pixels: (x, y, w, h), top-left origin.
-Bbox = Tuple[int, int, int, int]
+from .. import config
 
-
-# --- lazy heavy-dep accessors ------------------------------------------------
-def _cv2():
-    import cv2  # local import keeps the module import-clean
-
-    return cv2
+Bbox = Tuple[int, int, int, int]  # (x, y, w, h) in original-frame pixels
 
 
-def _np():
-    import numpy as np
-
-    return np
-
-
-# --- detection value type ----------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Results
+# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Detection:
-    """One detected person box in full-frame pixels with a 0..1 confidence."""
+    """One person box from a :class:`Detector`, in original-frame pixels."""
 
-    x: float
-    y: float
-    w: float
-    h: float
-    score: float = 1.0
+    bbox: Bbox
+    score: float  # detector confidence, normalized to 0..1
 
     @property
-    def bbox(self) -> Bbox:
-        return (int(round(self.x)), int(round(self.y)),
-                int(round(self.w)), int(round(self.h)))
-
-    @property
-    def area(self) -> float:
-        return max(0.0, self.w) * max(0.0, self.h)
+    def area(self) -> int:
+        return int(self.bbox[2]) * int(self.bbox[3])
 
 
-@dataclass
+@dataclass(frozen=True)
 class TrackResult:
-    """The per-tick output the reactive FOLLOW loop consumes.
+    """The tracker's per-tick estimate, with the spec's honesty signals (§2.2).
 
-    Mirrors the honesty fields of ``RobotState`` (software-spec.md §2.2) so the
-    backend can choose to coast vs stop instead of driving blindly on a stale box.
+    ``ticks_since_last_detector_confirmation`` counts ticks since the *detector*
+    last re-seeded/validated the box (0 on the tick a detection lands). FOLLOW
+    uses ``score`` + this counter to choose **coast vs stop** instead of driving
+    blindly on a stale box.
     """
 
     target_visible: bool
@@ -88,308 +74,240 @@ class TrackResult:
     detector_ran: bool = False
 
 
-# --- detector interface + default HOG impl -----------------------------------
-@runtime_checkable
+# --------------------------------------------------------------------------- #
+# Detector interface + the laptop default (HOG)
+# --------------------------------------------------------------------------- #
 class Detector(Protocol):
-    """A pluggable person detector. Returns boxes in full-frame pixels."""
+    """A pluggable person detector: a frame in, person boxes out.
+
+    Implementations return boxes in **original-frame** pixel coordinates. Any
+    downscaling-for-speed is the detector's own internal concern.
+    """
 
     def detect(self, frame) -> List[Detection]:  # pragma: no cover - protocol
         ...
 
 
-def _sigmoid(x: float) -> float:
-    import math
-
-    # Clamp to avoid overflow on extreme SVM margins.
-    if x < -60.0:
-        return 0.0
-    if x > 60.0:
-        return 1.0
-    return 1.0 / (1.0 + math.exp(-x))
-
-
-class HOGPersonDetector:
+class HogPersonDetector:
     """OpenCV's built-in HOG + linear-SVM people detector (no weights to download).
 
-    The frame is **downscaled** to ``detect_width`` before inference (the main
-    throughput lever — software-spec.md §2.5) and the resulting boxes are scaled
-    back up to full-frame pixels. The SVM margin per detection is squashed through
-    a sigmoid into a 0..1 ``score``. cv2/numpy are imported lazily and the
-    descriptor is built on first use, so importing this class is cheap and
-    hardware-free.
+    The frame is downscaled to ``detect_width`` before inference — the single
+    biggest throughput lever on a no-NPU machine (software-spec.md §2.5) — and the
+    returned boxes are scaled back to original-frame pixels. ``cv2`` is imported
+    lazily on first construction so importing this module never requires OpenCV.
     """
 
-    def __init__(
-        self,
-        *,
-        detect_width: int = 320,
-        win_stride: Tuple[int, int] = (8, 8),
-        padding: Tuple[int, int] = (8, 8),
-        scale: float = 1.05,
-    ) -> None:
-        self.detect_width = int(detect_width)
-        self.win_stride = win_stride
-        self.padding = padding
-        self.scale = float(scale)
-        self._hog = None  # built lazily
+    def __init__(self, *, detect_width: int = config.FOLLOW_DETECT_WIDTH) -> None:
+        import cv2  # lazy: only when a real detector is built
 
-    def _descriptor(self):
-        if self._hog is None:
-            cv2 = _cv2()
-            hog = cv2.HOGDescriptor()
-            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-            self._hog = hog
-        return self._hog
+        self._cv2 = cv2
+        self.detect_width = int(detect_width)
+        self._hog = cv2.HOGDescriptor()
+        self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
     def detect(self, frame) -> List[Detection]:
-        cv2 = _cv2()
-        np = _np()
-        h0, w0 = frame.shape[:2]
-        scale = self.detect_width / float(w0) if w0 > self.detect_width else 1.0
-        if scale != 1.0:
-            small = cv2.resize(frame, (int(w0 * scale), int(h0 * scale)))
-        else:
-            small = frame
-        rects, weights = self._descriptor().detectMultiScale(
-            small,
-            winStride=self.win_stride,
-            padding=self.padding,
-            scale=self.scale,
+        if frame is None:
+            return []
+        cv2 = self._cv2
+        h, w = frame.shape[:2]
+        scale = 1.0
+        img = frame
+        if w > self.detect_width:
+            scale = self.detect_width / float(w)
+            img = cv2.resize(frame, (self.detect_width, max(1, int(round(h * scale)))))
+        rects, weights = self._hog.detectMultiScale(
+            img, winStride=(8, 8), padding=(8, 8), scale=1.05
         )
         out: List[Detection] = []
-        inv = 1.0 / scale
-        flat = list(np.asarray(weights).ravel()) if len(rects) else []
-        for (x, y, w, h), wt in zip(rects, flat):
-            out.append(
-                Detection(
-                    x=float(x) * inv,
-                    y=float(y) * inv,
-                    w=float(w) * inv,
-                    h=float(h) * inv,
-                    score=_sigmoid(float(wt)),
-                )
+        inv = 1.0 / scale if scale > 0 else 1.0
+        for (rx, ry, rw, rh), weight in zip(rects, weights):
+            bbox = (
+                int(round(rx * inv)),
+                int(round(ry * inv)),
+                int(round(rw * inv)),
+                int(round(rh * inv)),
             )
+            out.append(Detection(bbox=bbox, score=_squash(float(weight))))
         return out
 
 
-def best_detection(dets: List[Detection]) -> Optional[Detection]:
-    """Pick the largest (closest / most prominent) person box, or None."""
-    if not dets:
-        return None
-    return max(dets, key=lambda d: d.area)
+def _squash(weight: float) -> float:
+    """Map a HOG SVM decision value (~0..2) to a 0..1 confidence."""
+    return float(1.0 / (1.0 + math.exp(-2.0 * weight)))
 
 
-# --- box tracker interface + impls -------------------------------------------
-@runtime_checkable
-class BoxTracker(Protocol):
-    """A cheap per-frame box tracker that fills between detections."""
+# --------------------------------------------------------------------------- #
+# Between-detection tracker (cv2 if available; in-repo hold otherwise)
+# --------------------------------------------------------------------------- #
+def _resolve_cv2_tracker_factory():
+    """Return a 0-arg factory that builds a fresh OpenCV box tracker, or ``None``.
 
-    def init(self, frame, bbox: Bbox) -> None:  # pragma: no cover - protocol
-        ...
-
-    def update(self, frame) -> Tuple[bool, Bbox, float]:  # pragma: no cover
-        ...
-
-
-def iou(a: Bbox, b: Bbox) -> float:
-    """Intersection-over-union of two pixel boxes (centroid/IoU reconcile helper)."""
-    ax, ay, aw, ah = a
-    bx, by, bw, bh = b
-    ix1, iy1 = max(ax, bx), max(ay, by)
-    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
-    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
-    inter = iw * ih
-    union = aw * ah + bw * bh - inter
-    return inter / union if union > 0 else 0.0
-
-
-class SimpleBoxTracker:
-    """Pure-Python fallback tracker — no cv2 required.
-
-    OpenCV's appearance trackers (CSRT/KCF) live in the contrib ``tracking``
-    module and are absent from many opencv builds (and from the wheel used here).
-    Without them we cannot do appearance tracking from raw pixels cheaply, so this
-    fallback simply **holds the last detector box and linearly decays its
-    confidence** every tick until the next detector re-seed. It deliberately leans
-    on the detector cadence (track-by-detection still works; it is just less
-    smooth between detections). This keeps FOLLOW running on a stock opencv wheel
-    rather than hard-failing — honest degradation, not a silent stub.
-    """
-
-    def __init__(self, *, decay: float = 0.12) -> None:
-        self.decay = float(decay)
-        self._bbox: Optional[Bbox] = None
-        self._conf = 0.0
-
-    def init(self, frame, bbox: Bbox) -> None:
-        self._bbox = tuple(int(v) for v in bbox)  # type: ignore[assignment]
-        self._conf = 1.0
-
-    def update(self, frame) -> Tuple[bool, Bbox, float]:
-        if self._bbox is None:
-            return False, (0, 0, 0, 0), 0.0
-        self._conf = max(0.0, self._conf - self.decay)
-        return self._conf > 0.0, self._bbox, self._conf
-
-
-class _Cv2BoxTracker:
-    """Adapter over an OpenCV tracker object (CSRT/KCF), if one is available."""
-
-    def __init__(self, factory: Callable[[], object]) -> None:
-        self._factory = factory
-        self._tracker = None
-
-    def init(self, frame, bbox: Bbox) -> None:
-        self._tracker = self._factory()  # type: ignore[assignment]
-        x, y, w, h = (int(v) for v in bbox)
-        self._tracker.init(frame, (x, y, w, h))  # type: ignore[union-attr]
-
-    def update(self, frame) -> Tuple[bool, Bbox, float]:
-        if self._tracker is None:
-            return False, (0, 0, 0, 0), 0.0
-        ok, box = self._tracker.update(frame)  # type: ignore[union-attr]
-        if not ok:
-            return False, (0, 0, 0, 0), 0.0
-        x, y, w, h = (int(round(v)) for v in box)
-        # cv2 trackers expose no scalar confidence; a successful update == 1.0.
-        return True, (x, y, w, h), 1.0
-
-
-def _cv2_tracker_factory() -> Optional[Callable[[], object]]:
-    """Return a zero-arg cv2 tracker factory, handling API-spelling differences.
-
-    OpenCV moved tracker constructors around across versions:
-      * ``cv2.legacy.TrackerCSRT_create`` (contrib, 4.5.x legacy namespace)
-      * ``cv2.TrackerCSRT_create``        (older contrib)
-      * ``cv2.TrackerCSRT.create``        (newer object-style)
-    We probe CSRT (accurate) then KCF (faster) across all three spellings and
-    return None if the build ships no tracker at all.
+    Handles the cross-version differences: ``cv2.legacy.TrackerCSRT_create`` (newer
+    contrib), ``cv2.TrackerCSRT_create`` (older), and the same for KCF; returns
+    ``None`` when the installed OpenCV exposes no usable single-object tracker (or
+    OpenCV is absent), so the caller falls back to the in-repo hold tracker.
     """
     try:
-        cv2 = _cv2()
-    except Exception:
+        import cv2  # lazy
+    except Exception:  # pragma: no cover - no opencv at all
         return None
+
     legacy = getattr(cv2, "legacy", None)
-    for name in ("TrackerCSRT", "TrackerKCF"):
-        for ns in (cv2, legacy):
-            if ns is None:
-                continue
-            create = getattr(ns, f"{name}_create", None)
-            if callable(create):
-                return create
-            klass = getattr(ns, name, None)
-            create2 = getattr(klass, "create", None) if klass is not None else None
-            if callable(create2):
-                return create2
-    return None
+    candidates = []
+    for name in ("TrackerCSRT_create", "TrackerKCF_create"):
+        if legacy is not None and hasattr(legacy, name):
+            candidates.append(getattr(legacy, name))
+        if hasattr(cv2, name):
+            candidates.append(getattr(cv2, name))
+    return candidates[0] if candidates else None
 
 
-def make_box_tracker() -> BoxTracker:
-    """Build the best available box tracker (real cv2 tracker, else the fallback)."""
-    factory = _cv2_tracker_factory()
-    if factory is not None:
-        return _Cv2BoxTracker(factory)
-    return SimpleBoxTracker()
+class _HoldTracker:
+    """Trivial in-repo fallback: hold the last box until the detector re-seeds.
+
+    With no real OpenCV tracker available we cannot follow the box *between*
+    detections, so we simply hold the last detected box. Track-by-detection still
+    works because the detector re-seeds every ``detect_interval`` ticks; the
+    staleness counter (and FOLLOW's coast/stop policy) keeps this honest — a held
+    box that is never re-confirmed goes stale and FOLLOW stops.
+    """
+
+    def __init__(self, bbox: Bbox) -> None:
+        self._bbox = bbox
+
+    def update(self, _frame) -> Tuple[bool, Bbox]:
+        return True, self._bbox
 
 
-# --- the track-by-detection tracker ------------------------------------------
+class _Cv2TrackerWrapper:
+    """Adapt an OpenCV single-object tracker to the (ok, bbox) shape."""
+
+    def __init__(self, factory, frame, bbox: Bbox) -> None:
+        self._t = factory()
+        self._t.init(frame, tuple(int(v) for v in bbox))
+
+    def update(self, frame) -> Tuple[bool, Optional[Bbox]]:
+        ok, box = self._t.update(frame)
+        if not ok or box is None:
+            return False, None
+        x, y, w, h = box
+        return True, (int(x), int(y), int(w), int(h))
+
+
+# --------------------------------------------------------------------------- #
+# The track-by-detection tracker
+# --------------------------------------------------------------------------- #
 class PersonTracker:
-    """Track-by-detection: a fast tracker re-seeded by a slow detector (§4).
+    """Track-by-detection: cheap per-tick tracking, periodic detector re-seed.
 
-    Each :meth:`update` runs the cheap box tracker; every ``detect_every`` ticks
-    (or whenever there is no live track) it re-runs the detector to **re-seed and
-    validate** the box. ``ticks_since_last_detector_confirmation`` is the honesty
-    signal the FOLLOW loop uses to decide coast-vs-stop (software-spec.md §2.2/§4):
-    it is reset to 0 on every detector confirmation and incremented otherwise.
-
-    On the Pi the detector would run in a child *process* (GIL, §2.6); here on the
-    laptop it runs inline — fine for dev, and the ``yalp follow --benchmark`` path
-    measures exactly the fps this inline cost yields (Gate H, roadmap.md).
+    Parameters
+    ----------
+    detector:
+        A :class:`Detector` (default: :class:`HogPersonDetector`, built lazily on
+        first use so construction never requires OpenCV). Tests inject a fake.
+    detect_interval:
+        Number of cheap-track ticks to run between detector re-seeds
+        (track-by-detection cadence): after a detection the detector re-runs once
+        ``detect_interval`` ticks have elapsed without a confirmation. The detector
+        also runs whenever there is no current box.
+    track_min_score:
+        Below this the held/tracked box is reported as not-visible.
+    score_decay:
+        Per-tick multiplicative decay applied to the score while only the cheap
+        tracker is running, so confidence visibly erodes the longer the detector
+        has not re-confirmed the box.
     """
 
     def __init__(
         self,
         detector: Optional[Detector] = None,
-        tracker_factory: Optional[Callable[[], BoxTracker]] = None,
         *,
-        detect_every: int = 8,
-        min_score: float = 0.0,
-        reseed_iou: float = 0.2,
+        detect_interval: int = config.FOLLOW_DETECT_INTERVAL_TICKS,
+        track_min_score: float = config.FOLLOW_TRACK_MIN_SCORE,
+        score_decay: float = 0.92,
     ) -> None:
-        self.detector = detector if detector is not None else HOGPersonDetector()
-        self.tracker_factory = tracker_factory or make_box_tracker
-        self.detect_every = max(1, int(detect_every))
-        self.min_score = float(min_score)
-        self.reseed_iou = float(reseed_iou)
+        self._detector = detector
+        self.detect_interval = max(1, int(detect_interval))
+        self.track_min_score = float(track_min_score)
+        self.score_decay = float(score_decay)
 
-        self._tracker: Optional[BoxTracker] = None
+        self._cv2_factory = None
+        self._cv2_resolved = False
+
         self._bbox: Optional[Bbox] = None
         self._score = 0.0
-        self._ticks_since_confirm = 0
+        self._ticks_since_detector = 0
+        self._tracker = None  # cv2 wrapper or _HoldTracker
 
-    def reset(self) -> None:
-        """Drop any live track so the next update re-detects from scratch."""
-        self._tracker = None
-        self._bbox = None
-        self._score = 0.0
-        self._ticks_since_confirm = 0
+    # -- detector (lazy default) --------------------------------------------
+    def _get_detector(self) -> Detector:
+        if self._detector is None:
+            self._detector = HogPersonDetector()
+        return self._detector
 
+    def _get_cv2_factory(self):
+        if not self._cv2_resolved:
+            self._cv2_factory = _resolve_cv2_tracker_factory()
+            self._cv2_resolved = True
+        return self._cv2_factory
+
+    # -- public API ----------------------------------------------------------
     def update(self, frame) -> TrackResult:
-        # Re-detect when there is no live track or the box is due for validation.
-        if self._tracker is None or self._ticks_since_confirm >= self.detect_every:
-            return self._run_detector(frame)
-        return self._run_tracker(frame)
+        """Advance one tick: detect-and-reseed on the interval, else cheap-track."""
+        if frame is None:
+            # No frame this tick: can't confirm or track. Report lost honestly.
+            self._bbox, self._score, self._tracker = None, 0.0, None
+            return TrackResult(False, None, 0.0, self._ticks_since_detector, False)
+
+        want_detect = self._bbox is None or (
+            self._ticks_since_detector >= self.detect_interval
+        )
+        if want_detect:
+            return self._detect_and_reseed(frame)
+        return self._cheap_track(frame)
 
     # -- internals -----------------------------------------------------------
-    def _run_detector(self, frame) -> TrackResult:
-        det = best_detection(self.detector.detect(frame))
-        if det is None:
-            # The detector ran and saw no person: this is a strong "lost" signal.
-            self.reset()
-            self._ticks_since_confirm = 0  # we *did* just run the detector
-            return TrackResult(
-                target_visible=False,
-                bbox=None,
-                score=0.0,
-                ticks_since_last_detector_confirmation=0,
-                detector_ran=True,
-            )
-        # Re-seed the cheap tracker on the fresh, validated detector box.
-        self._bbox = det.bbox
-        self._score = det.score
-        self._ticks_since_confirm = 0
-        self._tracker = self.tracker_factory()
-        self._tracker.init(frame, self._bbox)
-        return TrackResult(
-            target_visible=True,
-            bbox=self._bbox,
-            score=self._score,
-            ticks_since_last_detector_confirmation=0,
-            detector_ran=True,
-        )
+    def _detect_and_reseed(self, frame) -> TrackResult:
+        detections = self._get_detector().detect(frame)
+        self._ticks_since_detector = 0
+        if not detections:
+            # The detector ran and confirmed nobody is there — drop the box.
+            self._bbox, self._score, self._tracker = None, 0.0, None
+            return TrackResult(False, None, 0.0, 0, True)
 
-    def _run_tracker(self, frame) -> TrackResult:
-        assert self._tracker is not None
-        ok, bbox, score = self._tracker.update(frame)
-        self._ticks_since_confirm += 1
-        if not ok or score < self.min_score:
-            self.reset()
-            return TrackResult(
-                target_visible=False,
-                bbox=None,
-                score=0.0,
-                ticks_since_last_detector_confirmation=self._ticks_since_confirm,
-                detector_ran=False,
-            )
-        self._bbox = tuple(int(v) for v in bbox)  # type: ignore[assignment]
-        self._score = float(score)
-        return TrackResult(
-            target_visible=True,
-            bbox=self._bbox,
-            score=self._score,
-            ticks_since_last_detector_confirmation=self._ticks_since_confirm,
-            detector_ran=False,
-        )
+        best = max(detections, key=lambda d: d.area)
+        self._bbox = best.bbox
+        self._score = best.score
+        self._tracker = self._make_tracker(frame, best.bbox)
+        visible = self._score >= self.track_min_score
+        return TrackResult(visible, self._bbox, self._score, 0, True)
+
+    def _cheap_track(self, frame) -> TrackResult:
+        self._ticks_since_detector += 1
+        if self._tracker is None or self._bbox is None:
+            # Nothing to follow yet; force a detect next tick.
+            self._ticks_since_detector = self.detect_interval
+            return TrackResult(False, self._bbox, 0.0, self._ticks_since_detector, False)
+
+        ok, bbox = self._tracker.update(frame)
+        if not ok or bbox is None:
+            self._bbox, self._score, self._tracker = None, 0.0, None
+            return TrackResult(False, None, 0.0, self._ticks_since_detector, False)
+
+        self._bbox = bbox
+        self._score *= self.score_decay
+        visible = self._score >= self.track_min_score
+        return TrackResult(visible, self._bbox, self._score,
+                           self._ticks_since_detector, False)
+
+    def _make_tracker(self, frame, bbox: Bbox):
+        factory = self._get_cv2_factory()
+        if factory is None:
+            return _HoldTracker(bbox)
+        try:
+            return _Cv2TrackerWrapper(factory, frame, bbox)
+        except Exception:  # pragma: no cover - defensive: bad cv2 build
+            return _HoldTracker(bbox)
 
 
 __all__ = [
@@ -397,11 +315,6 @@ __all__ = [
     "Detection",
     "TrackResult",
     "Detector",
-    "HOGPersonDetector",
-    "best_detection",
-    "BoxTracker",
-    "SimpleBoxTracker",
-    "make_box_tracker",
-    "iou",
+    "HogPersonDetector",
     "PersonTracker",
 ]

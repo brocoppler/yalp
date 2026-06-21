@@ -53,6 +53,31 @@ GATE_H_GO_HZ: int = 3
 # loop holds >= 30 Hz under full load (combined-load gate, software-spec.md §4).
 TICK_BUDGET_MS: int = 33
 
+# --- FOLLOW-mode tuning (software-spec.md §4) -------------------------------
+# Track-by-detection cadence & geometry. The detector downscales the frame to
+# FOLLOW_DETECT_WIDTH before inference (the main throughput lever on a no-NPU
+# machine, §2.5), and re-seeds/validates the cheap tracker at least every
+# FOLLOW_DETECT_INTERVAL_TICKS ticks.
+FOLLOW_DETECT_WIDTH: int = 384
+FOLLOW_DETECT_INTERVAL_TICKS: int = 5
+
+# A held/tracked box below this confidence (0..1) is treated as not-visible.
+FOLLOW_TRACK_MIN_SCORE: float = 0.20
+
+# Steering: proportional turn toward the bbox center with a small deadband, and
+# drive forward until the bbox height (distance proxy) reaches the stop fraction.
+FOLLOW_TURN_DEADBAND: float = 0.12   # normalized -1..1 center error
+FOLLOW_TURN_GAIN: float = 1.5
+FOLLOW_FORWARD_GAIN: float = 2.0
+FOLLOW_STOP_BBOX_HEIGHT: float = 0.60  # bbox height / frame height = "close enough"
+
+# Graceful degradation: coast at most this many ticks without a detector
+# re-confirmation before STOPPING and reporting "I lost you" (never drive blind
+# on a stale box, §2.2/§4); and treat a frame dimmer than this mean brightness
+# (0..255) as too dark to track (the lux-floor proxy for GOOD_LIGHT_LUX, §5).
+FOLLOW_COAST_TICKS: int = 8
+FOLLOW_DARK_BRIGHTNESS: float = 16.0
+
 # Localhost IPC endpoint for the reactive <-> deliberative socket (JSON lines).
 # TCP 127.0.0.1 in dev; a Unix-domain socket once co-located on the Pi.
 IPC_HOST: str = "127.0.0.1"
@@ -95,6 +120,15 @@ class Config:
     good_light_lux: int = GOOD_LIGHT_LUX
     gate_h_go_hz: int = GATE_H_GO_HZ
     tick_budget_ms: int = TICK_BUDGET_MS
+    follow_detect_width: int = FOLLOW_DETECT_WIDTH
+    follow_detect_interval_ticks: int = FOLLOW_DETECT_INTERVAL_TICKS
+    follow_track_min_score: float = FOLLOW_TRACK_MIN_SCORE
+    follow_turn_deadband: float = FOLLOW_TURN_DEADBAND
+    follow_turn_gain: float = FOLLOW_TURN_GAIN
+    follow_forward_gain: float = FOLLOW_FORWARD_GAIN
+    follow_stop_bbox_height: float = FOLLOW_STOP_BBOX_HEIGHT
+    follow_coast_ticks: int = FOLLOW_COAST_TICKS
+    follow_dark_brightness: float = FOLLOW_DARK_BRIGHTNESS
     ipc_host: str = IPC_HOST
     ipc_port: int = IPC_PORT
     safe_stop_threshold_m: float = SAFE_STOP_THRESHOLD_M
@@ -133,6 +167,15 @@ __all__ = [
     "GOOD_LIGHT_LUX",
     "GATE_H_GO_HZ",
     "TICK_BUDGET_MS",
+    "FOLLOW_DETECT_WIDTH",
+    "FOLLOW_DETECT_INTERVAL_TICKS",
+    "FOLLOW_TRACK_MIN_SCORE",
+    "FOLLOW_TURN_DEADBAND",
+    "FOLLOW_TURN_GAIN",
+    "FOLLOW_FORWARD_GAIN",
+    "FOLLOW_STOP_BBOX_HEIGHT",
+    "FOLLOW_COAST_TICKS",
+    "FOLLOW_DARK_BRIGHTNESS",
     "IPC_HOST",
     "IPC_PORT",
     "SAFE_STOP_THRESHOLD_M",
