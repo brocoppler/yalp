@@ -8,6 +8,8 @@
 
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
+> **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is today a **Step-A stub** (`RealReactiveBackend` raises `NotImplementedError`) carrying the on-Pi hardware TODO — motor control via `gpiozero` phase/enable on the §5 pins, the HC-SR04 read, and collision-stop — behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
+
 | Component | Selected part | ~Cost | Rationale (one line) |
 |---|---|---|---|
 | **Brain** | Raspberry Pi 5 4GB via **CanaKit Starter Kit PRO** | ~$180 | RAM headroom + multiple real USB ports = fewer first-build gremlins; kit bundles 27W PD wall PSU, fan case, 128GB OS card. |
@@ -20,7 +22,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
 | Chassis | Cardboard / hot glue / zip ties / foam tape | ~$19 | v1 — looks don't matter. Hot glue gun is the one tool worth buying. |
-| **Voice** *(deferred)* | USB mini mic + small USB speaker | ~$15 | Voice I/O is a separate, later track — get the whole loop working text-first. |
+| **Voice INPUT** *(deferred)* | USB mini mic (+ small USB speaker) | ~$15 | Only the **INPUT** half (mic + STT) needs hardware and is deferred. Voice **OUTPUT** (TTS) is **already shipped in software** (macOS `say`, opt-in `--speak`) and needs **no hardware** on the laptop; on the Pi it reuses this same small speaker once present. Get the rest of the loop working text-first. |
 
 > **DECISION —** Brain = Raspberry Pi 5 4GB via the CanaKit Starter Kit PRO. **Ordered.** Skip the AI HAT / NPU — local models on a Pi accelerator are a known hobbyist trap; CPU + cloud is the v1 move.
 
@@ -45,6 +47,7 @@ These are tempting but wrong for v1, and naming them keeps the budget honest:
 - **AI HAT / NPU accelerator** — the heavy AI runs in the cloud; on-device models on a Pi accelerator are a known hobbyist trap for build #1.
 - **Depth camera / LiDAR** — that's the post-v1 navigation upgrade, not a v1 part.
 - **Soldering iron** — every module is bought pre-headered; ~$20 nice-to-have, not a must.
+- **Mic/speaker for voice OUTPUT** — not needed: spoken **OUTPUT** (TTS) already ships as software (macOS `say`, opt-in `--speak`) with **zero hardware** — proof that the brain is cloud/software and the Pi is just I/O. Only voice **INPUT** (a USB mic + STT) is a real future buy, and it stays deferred until the text loop is solid (`software-spec.md` §7, `roadmap.md` milestone **O**).
 
 ---
 
@@ -189,7 +192,7 @@ ASCII wiring sketch:
 |---|---|---|---|
 | **Phase 1 — Brain** | CanaKit Pi 5 4GB Starter Kit PRO (~$180) + Logitech C270 (~$22) | ✅ Ordered | ~$200 |
 | **Phase 2 — Body** | Card reader, PD power bank, TT motors, driver, ball caster, HC-SR04, AA power, wiring, glue/chassis | ✅ ORDERED 2026-06-20 (inbound) | ~$115 |
-| **Phase 3 — Voice** | USB mic + small speaker (deferred) | 🛒 Later | ~$20 |
+| **Phase 3 — Voice INPUT** | USB mic (+ small speaker) — deferred. Voice **OUTPUT** (TTS) already ships in software, **$0 hardware** | 🛒 Later | ~$20 |
 | | | **Total** | **~$335** |
 
 - **Spent so far (~$200):** the entire brain — Pi kit + webcam — is ordered.

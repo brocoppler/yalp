@@ -11,6 +11,26 @@ gates, see `roadmap.md`; for the two-process split you are deploying, see
 `software-spec.md`. The laptop side is already done in `SETUP.md` — this picks up
 the moment the Raspberry Pi 5 and the Phase 2 body parts are on your bench.
 
+> **What already exists today (before you touch any hardware).** The whole
+> deliberative brain is **built and laptop-tested** against a *fake* reactive
+> backend, so you can exercise it now on the laptop webcam:
+> - `yalp see [question] [--image PATH] [--speak]` — vision Q&A on a still.
+> - `yalp agent "<command>"` (or `--command`, `--steps`, `--synthetic`, `--speak`)
+>   — the full tool-use agent loop driving the fake wheels with real vision.
+> - `yalp follow` (`--detector face|hog|person|auto`, `--preview`, `--benchmark`,
+>   `--seconds`, `--hz`, `--synthetic`) — **FOLLOW, including the real person
+>   detector, is testable NOW**: the track-by-detection loop, the pluggable
+>   `Detector` (the `person` cv2.dnn body detector tracks you front/back/side), and
+>   the lost-grace/coast-then-stop behavior all run on the laptop. `--benchmark`
+>   even gives a laptop fps baseline for the Gate H comparison in §9.
+>
+> So this runbook's job is *only* to bring the **body** up and marry it to that
+> already-working brain. Two notes carried in from `software-spec.md`: **voice
+> INPUT (a mic + STT) is future work** — only voice OUTPUT (TTS, the `--speak`
+> flag) ships today, and it's a software no-op without a speaker; and the model
+> tiers use **capability-gated thinking** — the fast per-step tier (Haiku) has
+> **no** extended thinking (sending it 400s), only the Sonnet/Opus escalations do.
+
 **Who does what.** You — the owner — do the physical build: wire the breadboard,
 meter voltages, plug things in, run the commands below, and report the result.
 Where a step needs *code* written (most importantly implementing the on-Pi motor
@@ -546,10 +566,15 @@ branch. Marry it to the brain you built on the laptop in `SETUP.md`.
 **DONE WHEN:** `yalp see` returns a description of the real scene and `yalp agent`
 drives the real wheels through the socket while the reflex keeps it safe.
 
-**Next milestones (not this session):** **follow-mode** (milestone **M**, the
-GO/NO-GO branch from §9), then the **WiFi-degradation test** (milestone **N**),
-and — on a deliberately separate, later track — **voice** (milestone **O**), bolted
-on only after the full text loop works end to end (`roadmap.md`).
+**➡️ NEXT STEPS after this runbook (the path, in order — canonical ledger in
+`roadmap.md`):** run **follow-mode on the hardware** (milestone **M**, the GO/NO-GO
+branch decided by §9 — the laptop-proven follow loop now confirmed on the Pi, or
+its blob/color `Detector` fallback) → the **WiFi-degradation test** (milestone
+**N**) → and, on a deliberately separate later track, **voice INPUT** (milestone
+**O** — STT, bolted on only after the full text loop works end to end; voice OUTPUT
+already ships). Everything past **N** — a stronger on-device tracker, depth/SLAM
+navigation, onboard inference, the kid-version enclosure — is **post-v1 stretch**,
+recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical path.
 
 ---
 

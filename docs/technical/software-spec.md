@@ -18,7 +18,8 @@ The single organizing principle: **only motor control and camera capture genuine
 | Reactive | Camera capture | `picamera2` (Pi cam) **or** OpenCV UVC capture (USB webcam) | Pi (prod) / laptop (dev) | v1 ships the C270 USB/UVC path; its blocking `read()` runs in a dedicated capture thread (§2.5). `picamera2` is a later swap if we move to the Pi Camera Module. |
 | Deliberative | Cloud VLM/LLM agent | `anthropic` SDK (primary) / `openai` SDK (alt) | Laptop (dev), Pi or laptop (later) | Tool-use / vision; tiered models — see §3. |
 | Deliberative | Prompt + dispatch glue | Plain Python (`stdlib` + SDK) | Anywhere | The "brain" you iterate on the laptop. |
-| Voice *(deferred)* | Speech-to-text / text-to-speech | STT/TTS lib or cloud service (TBD) | Pi + cloud | Separate track; see §7 and `roadmap.md`. |
+| Voice | Text-to-speech (**OUTPUT, shipped**) | macOS `say` via `subprocess` (no dep) | Laptop now / Pi later | `voice.speak()`, opt-in `--speak`, additive + headless-safe; see §7. |
+| Voice *(deferred)* | Speech-to-text (**INPUT**) | STT lib or cloud service (TBD) | Pi + cloud | The remaining half; separate track — see §7 and `roadmap.md`. |
 | OS | Base image | **Raspberry Pi OS Lite (64-bit)** | Pi | Headless. Develop over SSH/WiFi; enable SSH, camera, I2C at flash time. No desktop. |
 
 > **DECISION —** The reactive layer and the deliberative layer are **two separate OS processes**, always — never threads in one interpreter, never a shared in-process queue. They talk over a **localhost socket** (TCP `127.0.0.1` in dev; a Unix-domain socket once co-located on the Pi), framed as **JSON lines — one JSON object per line, `\n`-terminated** (see §2.2 for the wire format). The reactive process **owns GPIO and the camera** and runs whether or not the cloud is reachable; it **publishes** the latest frame and `RobotState` non-blocking. The deliberative process (laptop in dev) **never reaches into the reactive tick** — it cannot make the reactive tick block on a network read or a camera read. There is **no shared-dataclass model**: `RobotState` and `Intent` are *serialized* across the socket as JSON and reconstructed on the far side; the two processes never share a live Python object. This supersedes any earlier "shared in-process queue once co-located" framing — co-location swaps TCP for a Unix socket, nothing more.
@@ -36,12 +37,12 @@ The model never twitches a motor. It picks **intents**, expressed as **tool call
 | `drive` | `distance_m: float` (signed; −=back), `speed: 0..1` | Enter `DRIVE_GOAL`: drive straight until the **timed** distance estimate elapses, blocked, or preempted. Reports `"completed (timed, unverified)"` — there are no encoders. |
 | `turn` | `angle_deg: float` (signed; +=left/CCW), `speed: 0..1` | Enter `DRIVE_GOAL` (rotate variant): turn in place for the **timed** angle estimate. Reports `"completed (timed, unverified)"` — no encoders, no IMU. |
 | `stop` | — | Enter `IDLE`: cancel current goal, wheels halt. |
-| `look` / `capture` | `save: bool=false` | Grab one still from the camera; return a frame handle for the next model turn. |
+| `look` | `save: bool=false` | Grab one still from the camera; return a frame handle for the next model turn. |
 | `check_distance` | — | Return the latest ultrasonic reading (meters) from shared state. |
 | `describe_scene` | `detail: "quick"\|"full"` | Capture a still and (deliberative side) escalate to a model tier for a scene description. |
 | `enter_follow_mode` | `target: "nearest_person"` | Enter `FOLLOW`: local tracker centers + approaches the target. No cloud in the loop. |
 | `explore` | `goal_text: str` | **Deliberative sugar** (v1): the deliberative layer runs a loop of `drive`/`turn`/`describe_scene` itself. There is **no** `EXPLORE` reactive mode — see §2.2 and the EXPLORE decision below. |
-| `speak` | `text: str` | Say/print `text` (TTS later; `print` for v1). |
+| `speak` | `text: str` | Say `text` out loud — voice **OUTPUT is implemented** (macOS `say`, opt-in via `--speak`; silent no-op without it) and additive to the printed transcript. Spoken INPUT (STT) is the deferred half (§7). |
 | `set_speed_limit` | `max_speed: 0..1` | Clamp all subsequent motion (safety / "go slow"). |
 
 > **DECISION —** This menu is the stable contract. Abilities are *mostly modes for the reactive layer*, not direct actuation — `enter_follow_mode` hands the job to the local tracker; the model does not stream steering. Adding a new ability = adding a row here + a mode/handler below. The menu is small on purpose: every tool must map to something the body can reliably do (see the in-scope envelope in `architecture.md`).
@@ -83,7 +84,7 @@ Illustrative tool schema as handed to the model (Anthropic tool-use shape; the O
 ]
 ```
 
-> **DECISION —** `explore` is **deliberative sugar** for v1, not a reactive mode. The deliberative layer implements it as a loop of `drive`/`turn`/`describe_scene` — each leg is an ordinary `Intent`, and the model re-decides after every `describe_scene`. `EXPLORE` is therefore **removed from the reactive mode enum and the reactive tick loop** (see §2.2, §2.3); the reactive layer stays dumb and carries one fewer mode. The cost is one extra round-trip per leg, which §3's latency budget already bounds (an explore step must stay under the ~10 s ceiling on real WiFi). We do **not** carry both interpretations forward.
+> **DECISION —** `explore` is **deliberative sugar** for v1, not a reactive mode. The deliberative layer implements it as a loop of `drive`/`turn`/`describe_scene` — each leg is an ordinary `Intent`, and the model re-decides after every `describe_scene`. `EXPLORE` is therefore **removed from the reactive mode enum and the reactive tick loop** (see §2.2, §2.3); the reactive layer stays dumb and carries one fewer mode. The cost is one extra round-trip per leg, which §3's latency budget already bounds (an explore step must stay under the ~10 s ceiling on real WiFi). The deliberative loop is itself **bounded by a max-steps cap** per command (`yalp agent --steps`, default 12) and the §3 hard per-session token/call budget, so an explore loop terminates rather than running forever. We do **not** carry both interpretations forward.
 
 ### 2.2 The intent / mode model
 
@@ -283,7 +284,9 @@ def deliberative_step(user_text, history, client, reactive):
             # explore -> NOT a reactive intent: run the drive/turn/describe_scene loop here (§2.1)
             # check_distance/look/describe_scene -> read/answer, feed back next turn
         elif block.type == "text":
-            speak(block.text)                     # TTS later; print for v1
+            print(block.text)                     # always printed (the transcript)
+            if speak_enabled:
+                voice.speak(block.text)           # OUTPUT shipped: macOS `say`, opt-in --speak
 
     return msg                                    # append to history for the next step
 ```
@@ -321,6 +324,8 @@ def pick_model(user_text, intent, history, cheap_flag) -> str:
 
 The escalation signals are **exactly**: `describe_scene(detail='full')` or a read-text intent → `claude-opus-4-8`; a multi-step `explore` request or a structured `need_more_reasoning` flag from the cheap tier → `claude-sonnet-4-6`; everything else stays on `claude-haiku-4-5`. Nothing else escalates.
 
+> **DECISION —** The three tier IDs are **env-overridable**, not hard-coded. `config` reads `YALP_MODEL_FAST` / `YALP_MODEL_MID` / `YALP_MODEL_BIG` (defaulting to `claude-haiku-4-5` / `claude-sonnet-4-6` / `claude-opus-4-8`), and the router resolves the tier from `config` — so the operator can re-pin any tier without editing source. Adaptive thinking remains **capability-gated independently of the ID**: the code keeps a known-supports-thinking list and attaches `thinking={"type":"adaptive"}` **only** when both the caller opted in *and* the resolved model is on that list (Sonnet/Opus). The fast tier (Haiku) is never sent `thinking` — it 400s — and an unknown/re-pinned ID is treated as unsupported (fail-safe).
+
 > **DECISION —** Enforce a **hard per-session token/call budget** in the deliberative process. A WiFi retry-storm or a runaway escalation must not silently run up cost: track cumulative tokens and API calls for the session, and once the cap is hit, **stop issuing model calls** (the robot falls back to `IDLE`/local behavior exactly as in the §5 outage path) rather than retrying forever. The budget is a hard ceiling the operator sets in `config` (§6), separate from any per-call `max_tokens`.
 
 > **RISK —** Each step is photo → upload → API call → response → new intent, so high-level decisions arrive in bursts. The often-quoted "2–3 s/step" is a **target to verify, not an assumption** — it is acceptable *because* the reactive layer fills the gaps, but only if it actually holds on real home WiFi. The smooth upgrade (streaming multimodal) is explicitly out of scope for v1 — see `architecture.md` and `roadmap.md`.
@@ -350,6 +355,16 @@ Two budgets to validate:
 - A **real person detector** (YOLO-nano, MobileNet-SSD) is **robust** — it actually knows what a person is and re-acquires after occlusion — but the Pi 5 has **no NPU**, so on CPU it may only manage a **few fps**. That collides head-on with the 10–30 Hz reactive target: you cannot run detection every tick.
 
 > **THESIS —** Use **track-by-detection**. Run the cheap tracker every reactive tick (on a crop around the last box, §2.5) to keep follow-mode at full rate, and run the slow person detector at whatever fps the Pi sustains (say 2–5 Hz) in a **child process** (§2.6 — a process, not a thread, to dodge GIL contention with the safety loop) purely to **re-seed and validate** the tracker's box. This 2-5 Hz is the expected range on the Pi 5 CPU; Gate H (see `roadmap.md`) sets the GO threshold at >=3 Hz sustained so track-by-detection stays viable. The fast tracker provides smoothness; the slow detector provides the "it's actually a person, and here's where they really are now" correction. This is the hobby version of how real trackers are built, and it's the only design that satisfies both robustness and the reactive frame budget on a no-NPU Pi.
+
+> **DECISION —** The FOLLOW brain is **built and laptop-tested** (exercised via `yalp follow` against the fake reactive backend + real webcam; flags `--detector`/`--preview`/`--benchmark`/`--seconds`/`--hz`/`--synthetic`, also reachable as the `enter_follow_mode` intent). The detector sits behind a **pluggable `Detector` interface** with four backends, selectable at runtime:
+> - **`face`** (DEFAULT at *desk* range) — OpenCV's **bundled** Haar frontal-face cascade (no download); the right default because a laptop webcam frames only head+shoulders, which a standing-body detector can't see. The face box is expanded downward to approximate head+shoulders as a distance proxy.
+> - **`hog`** — OpenCV's built-in HOG + linear-SVM standing-body detector (download-free).
+> - **`person`** — the **orientation-agnostic** cv2.dnn MobileNet-SSD **body** detector (uses OpenCV's *built-in* `cv2.dnn` — **no new pip dependency**, only a downloadable Caffe model file that is **lazily downloaded and cached** on first use, with a clear offline fallback message). It fires from **any** angle — front, **back**, side — so follow keeps working when the user walks away; this is the **robot's** default and the **Gate H** candidate.
+> - **`auto`** — prefers `person`, falling back to `face` for close-ups (and quietly face-only if the model can't load).
+>
+> The between-detection tracker is **also pluggable**: a real OpenCV legacy tracker (CSRT/KCF) when the installed build exposes one, else a tiny in-repo "hold the last box" fallback so FOLLOW still runs on any OpenCV build (and in CI with none). Detection runs on a **downscaled** copy and boxes are scaled back to original-frame pixels, so `RobotState.target_bbox` is always real frame pixels (§2.2).
+
+> **DECISION —** **Lost-grace hysteresis** governs coast-vs-stop, fixing the acquired/lost flicker. The detector fires only intermittently, so a single missed detection must **not** nuke a live box. The tracker coasts the box (cheap tracker bridging the gap) and keeps reporting it **visible** for as long as the last *successful* detection is younger than a **grace window** (`FOLLOW_LOST_GRACE_TICKS`, kept ≥ the detect interval). The reported `tracker_score` decays gently while coasting (a confidence signal), but the **grace window — not one missed frame — owns the lock**. Only once the grace elapses with no fresh confirmation (or the cheap tracker can no longer hold the box) does FOLLOW genuinely let go: it stops and reports lost, never a permanently latched dead box. A sanity gate also rejects implausible one-off detections (too tiny, jammed against a frame edge with no continuity, or an implausible teleport) before they can latch.
 
 Concretely, inside `step_follow`:
 
@@ -381,7 +396,7 @@ def step_follow(state, motors):
     motors.drive(fwd_cmd, turn_cmd)                # collision-stop still overrides upstream
 ```
 
-> **OPEN —** Which detector and which tracker. Candidates: detector ∈ {YOLO-nano, MobileNet-SSD}; tracker ∈ {CSRT (accurate, slower), KCF (faster, less robust), color-histogram CamShift (cheapest)}. The choice is **data-dependent** and not decidable from a desk — it depends on the actual sustained fps on *this* Pi 5 with *this* camera.
+> **OPEN —** Which detector and which tracker *on the Pi*. The interface and the candidate backends are now **built and pluggable** (detector ∈ {`face`, `hog`, `person`/cv2.dnn MobileNet-SSD, `auto`}; tracker ∈ {CSRT, KCF, in-repo hold} resolved by OpenCV build) — so this is no longer a from-scratch design choice but a **measured swap**: the room-range default is `person`, and whether the Pi sustains it is the **data-dependent** part, decided by Gate H's sustained fps on *this* Pi 5 with *this* camera (NO-GO → drop to a lighter `Detector` behind the same interface). The laptop already proves the steering/lost logic; only the Pi's detector fps is open. Status home: `roadmap.md`.
 
 > **OPEN / RISK —** Run an early **FPS spike** before committing to the follow-mode design: measure sustained person-detector fps on the Pi 5 (CPU only) at the camera resolution we intend to use. This is an explicit **GO/NO-GO gate**:
 > - **GO (≳3–5 Hz sustained):** track-by-detection as specified — detector re-seeds, tracker fills.
@@ -412,8 +427,11 @@ The SDK already retries 429/5xx/connection errors with backoff; we wrap the step
 
 > **DECISION —** Cloud API keys live in the **environment**, never in source. The deliberative process reads `ANTHROPIC_API_KEY` (and/or `OPENAI_API_KEY`) from the environment / a git-ignored `.env`; the SDK's default `anthropic.Anthropic()` constructor picks it up. No key is ever committed, logged, embedded in a prompt, or written to a memory/state file. Model selection (the per-tier IDs from §3 — `claude-haiku-4-5` / `claude-sonnet-4-6` / `claude-opus-4-8`), the **hard per-session token/call budget** (§3), speed limits, `SAFE_STOP_THRESHOLD`, tick rate, the watchdog timeout (100 ms, §2.6), the gpiozero pin factory (lgpio/native on Pi 5, §1), and the IPC socket endpoint live in one small `config.py` / `config.toml` checked into the repo — config in source, **secrets in the environment**. On the Pi, the key lives in a `0600` env file sourced by the deliberative service unit; on the laptop, in the shell environment.
 
-## 7. Voice — Later Track (High-Level Only)
+## 7. Voice — OUTPUT Shipped, INPUT Deferred
 
-Voice is a deliberately separate track, bolted on only after the full **text** loop works end to end. The deliberative step loop already has the seams for it (`stt.transcribe(...)` before `build_context`, `tts.say(...)` in place of `print`), so wiring it in is mechanical — but the hard part is not the wiring.
+Voice splits into two independent halves, and **the output half is already built**:
 
-> **RISK —** Far-field speech-to-text on a noisy floor, from a robot that is *also playing audio through its own speaker*, is a real project, not an afternoon bolt-on. It drags in wake-word detection, voice-activity detection, and acoustic echo cancellation (so the robot doesn't transcribe itself), plus mic quality and USB-audio latency. Treating "add a mic and a speaker" as a quick final step is the classic way to stall the whole build. Keep it isolated so its rabbit holes never block the core text-driven magic. Sequencing and the specific STT/TTS choices live in `roadmap.md`.
+- **Spoken OUTPUT (TTS) — DONE & integrated.** `voice.speak(text)` is a tiny, dependency-light shim over the macOS built-in `say` (`subprocess`; nothing to `pip install`). It is opt-in via the `--speak` flag on `yalp see` and `yalp agent` (the robot speaks its narration, scene descriptions, the `speak` tool, and the final report), **additive** to the printed transcript (printing is unchanged), **fire-and-forget** (spawned with `Popen`, never blocks the loop), and **headless-safe** — on a box with no `say` binary (Linux/CI/the Pi pre-TTS) `speak()` becomes a logged-once no-op and **never raises**, so a broken voice can't wedge the agent loop. The `say` voice/rate are env-overridable; this needs **no extra hardware** on the laptop (the Pi reuses the same Phase 3 speaker once present).
+- **Spoken INPUT (STT) — deferred.** Transcribing the user's speech is the remaining half. The deliberative step loop already has the seam for it (`stt.transcribe(...)` before `build_context`), so wiring it in is mechanical — but the hard part is not the wiring.
+
+> **RISK —** Far-field speech-to-text on a noisy floor, from a robot that is *also playing audio through its own speaker*, is a real project, not an afternoon bolt-on. It drags in wake-word detection, voice-activity detection, and acoustic echo cancellation (so the robot doesn't transcribe itself), plus mic quality and USB-audio latency. Treating "add a mic" as a quick final step is the classic way to stall the whole build. Keep INPUT isolated so its rabbit holes never block the core text-driven magic (OUTPUT, being a no-op without it, already is). Sequencing and the specific STT choice are the canonical status home of `roadmap.md`.

@@ -6,6 +6,8 @@
 
 This document defines the **concepts and boundaries** of yalp's control system. It is deliberately schema-free: the exact tool list, message formats, and intent payloads live in `software-spec.md`. Read this first to understand *why* the system is shaped the way it is, then read `software-spec.md` for the concrete contract. Hardware choices that this design leans on are in `hardware.md`; build sequencing is in `roadmap.md`; the scope envelope is in `product-spec.md`.
 
+> **STATUS —** The laptop "brain" (see/agent/follow, including the pluggable-detector follow loop and voice OUTPUT) is built and tested; the on-Pi reactive body is the remaining work. This doc fixes *concepts*; the canonical, up-to-date build status and gate ledger live in **`roadmap.md`** — treat it as the single status home.
+
 ## 1. The Core Idea: Two Loops, Not One
 
 yalp runs on **two control loops with different clocks**, not a single pipeline. They are different because the two halves of the job have fundamentally different time budgets.
@@ -57,9 +59,9 @@ yalp does not hand-code a keyword table ("if user says 'forward' then drive"). I
 | `drive(distance)` / `turn(angle)` | one-shot motion | reactive layer, guarded by collision-stop |
 | `look(direction)` | orient camera/body | reactive layer |
 | `check_distance()` | read ultrasonic | reactive layer (returns now) |
-| `enter_follow_mode(target)` | **mode** | reactive tracker runs until told to stop |
+| `enter_follow_mode(target)` | **mode** | reactive tracker (track-by-detection, **pluggable detector**) runs until told to stop |
 | `describe_scene()` | capture + reason | deliberative layer (bigger model) |
-| `speak(text)` | text-to-speech out | deliberative layer |
+| `speak(text)` | text-to-speech out (**OUTPUT shipped** — macOS `say`, opt-in `--speak`) | deliberative layer |
 
 The crucial point: **most abilities are modes for the reactive layer, not direct motor twitches.** The model says *"follow that person"*; it does not micro-steer. It sets the goal, and the local tracker does the second-by-second following. The model conducts; the fast layer plays the instrument.
 
@@ -107,7 +109,7 @@ A fresh goal from the cloud atomically replaces the current one (last-write wins
 
 The hard question is **what happens after a collision-stop fires** mid-goal:
 
-> **DECISION —** After a collision-stop interrupts an active motion goal, the reactive layer halts and holds, marks the goal `BLOCKED`, and **surfaces that state up to the deliberative layer rather than silently resuming or silently aborting.** The robot does not blindly retry into the same obstacle, and it does not freeze forever — it kicks the decision back to the brain, which can re-plan ("there's a wall, turn and go around?"), turn away, or ask the user. For v1, auto-resume is explicitly *off*; resuming requires a fresh deliberative decision, because auto-resume risks grinding into the obstacle the instant the path looks clear.
+> **DECISION —** After a collision-stop interrupts an active motion goal, the reactive layer halts and holds, marks the goal `BLOCKED`, and **surfaces that state up to the deliberative layer rather than silently resuming or silently aborting.** The robot does not blindly retry into the same obstacle, and it does not freeze forever — it kicks the decision back to the brain, which can re-plan ("there's a wall, turn and go around?"), turn away, or ask the user. For v1, auto-resume is explicitly *off*; resuming requires a fresh deliberative decision, because auto-resume risks grinding into the obstacle the instant the path looks clear. Concretely, **`SAFE_STOP` is sticky**: clearing the obstacle is necessary but not sufficient — the robot stays stopped until the obstacle is gone **and** a fresh intent arrives (see `software-spec.md` §2.3).
 
 > **OPEN —** Whether a *follow* goal should auto-resume after the obstacle clears (likely yes — the human stepped between robot and target) while a *drive/explore* goal should not. Per-mode resume policy is unresolved and deferred to `software-spec.md`.
 
@@ -164,7 +166,7 @@ The deliberative layer sends a **single still photo** per step, not a video stre
 
 Not every glance deserves a flagship model. The per-step loop ("is the path clear?", "roughly what's ahead?", centering hints) runs on a **fast/cheap VLM**; only genuinely hard requests ("describe this whole scene in detail," "read this sign") escalate to a **bigger model**.
 
-> **DECISION —** The deliberative layer is **tiered**: a fast/cheap vision model for the routine per-step loop, a larger model only for hard scene-understanding requests. Paying flagship latency and cost on every step is wasteful and would make the bursts even slower. Specific model picks and the escalation trigger belong in `software-spec.md`.
+> **DECISION —** The deliberative layer is **tiered across three rungs**, routed by an explicit, auditable table (not a vibe): a fast/cheap model (Haiku) is the **default** for routine per-step VQA / tool-picking; a mid model (Sonnet) handles multi-step `explore` reasoning or a `need_more_reasoning` flag from the cheap tier; a big model (Opus) handles only genuinely hard vision/reading (`describe_scene(detail=full)`, read-text). Paying flagship latency and cost on every step is wasteful and would make the bursts even slower. **Extended/adaptive thinking is capability-gated**: it is attached only on the mid/big tiers that support it — the fast Haiku tier does **not** support it (sending it 400s), so the per-step loop runs without it. Specific (env-overridable) model IDs and the exact escalation triggers belong in `software-spec.md`.
 
 These two together keep the deliberative layer **cheap and fast enough to be fun**: small payloads, small models, and only occasional escalation.
 
