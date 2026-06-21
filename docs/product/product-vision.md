@@ -45,9 +45,12 @@ The dream, stated plainly:
 
 > **DECISION —** The "dream" is voice-first — talking to a robot and having it talk back is
 > the whole magic. But v1 is built **text-first**: the full see-think-move loop is proven over
-> typed commands before a mic and speaker are bolted on. Voice is a real goal, deliberately
-> deferred to a later track so the audio rabbit hole (mic quality, STT/TTS latency, wake-words)
-> never blocks the core loop. See `roadmap.md` and `product-spec.md`.
+> typed commands. The two halves of voice ship separately, though. Voice **output** (text-to-
+> speech) is already here as an optional flag — `yalp see --speak` and `yalp agent --speak`
+> read the robot's answers aloud via macOS `say` — so it can already talk back when asked.
+> Voice **input** (speech-to-text) is the part still deliberately deferred to a later track,
+> so the audio rabbit hole (mic quality, STT latency, wake-words) never blocks the core loop.
+> See `roadmap.md` for the full DONE-vs-NEXT and `product-spec.md`.
 
 > **THESIS —** The thing worth being proud of in v1 is the *interaction*, not the hardware:
 > a robot you address in plain English that genuinely sees and moves. A cardboard chassis that
@@ -101,9 +104,11 @@ Two flavors, both of which feel good in v1:
 - **Reactive movement** — following, coming, backing up, spinning, stopping, reacting to faces
   and gestures, not driving into walls. This feels *snappy and alive* because it doesn't wait on
   the cloud to think.
-- **Talk & visual Q&A** — answering spoken (eventually) or typed questions, describing a scene,
-  reading a sign, identifying an object, telling stories, playing games. It's a camera and an
-  LLM with a voice; this isn't time-critical, so a little latency doesn't hurt.
+- **Talk & visual Q&A** — answering typed questions (spoken questions are the deferred
+  speech-to-text track), describing a scene, reading a sign, identifying an object, telling
+  stories, playing games. Answers can already be **spoken back aloud** via the optional
+  `--speak` flag (text-to-speech is shipped). It's a camera and an LLM with a voice; this
+  isn't time-critical, so a little latency doesn't hurt.
 
 > **DECISION —** These two are the heart of v1. If yalp does *only* reactive movement plus talk
 > and visual Q&A — and nothing in the lower tiers — v1 is already a success.
@@ -154,6 +159,14 @@ v1 is "done enough to be proud of" when, on the bench and the living-room floor,
 > **THESIS —** Hitting items 1–3 alone already justifies the build as a learning project. Items
 > 4–5 are what make it feel like *yalp* and not a demo.
 
+> **STATUS —** These criteria span two phases, and only the second is gated on parts arriving.
+> The **LAPTOP phase is done**: the brain — `see`, `agent`, and `follow` (including an
+> orientation-agnostic person detector) — is built and laptop-tested against a fake robot
+> backend, and answers can already be spoken aloud via `--speak`. The **HARDWARE phase** —
+> proving these same behaviors on the real chassis once the Raspberry Pi and motors arrive — is
+> what remains. Read the success criteria above against that split: the *intelligence* is real
+> today; the *embodiment* is the next milestone. See `roadmap.md` for the full DONE-vs-NEXT.
+
 ### 5.1 Explicit non-goals for v1
 
 To protect the core loop, v1 deliberately does **not** aim for:
@@ -161,7 +174,9 @@ To protect the core loop, v1 deliberately does **not** aim for:
 - **A nice-looking or durable body.** Cardboard, hot glue, and zip ties are fine.
 - **Child-readiness.** No child-safety hardening, no small-parts/battery childproofing yet — v1 is
   adult-supervised. (These become first-class in the post-v1 pet — §3.)
-- **Voice in v1's critical path.** Text-first; mic and speaker are a separate later track.
+- **Voice *input* in v1's critical path.** Text-first for commands; speech-to-text (the mic
+  side) is a separate later track. Voice *output* (text-to-speech) already ships as an optional
+  `--speak` flag, so this non-goal is about listening, not talking back.
 - **Smooth, continuous motion.** Halting explore-and-report is accepted (§4.2).
 - **Named-place navigation, manipulation, or off-road/outdoor operation.** Cut (§4.3).
 - **On-device AI / zero cloud dependency.** v1 leans on cloud vision-language models; local
