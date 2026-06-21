@@ -49,10 +49,23 @@ yalp --help        # shows the (currently minimal) command set
 pytest             # runs the smoke test
 ```
 
-> **Coming next:** `yalp see` (capture a still → Claude "what do you see?") lands
-> in the next wave, followed by `yalp agent` (the full deliberative loop driving
-> the fake reactive backend). They are not implemented yet — `yalp --help` lists
-> only what exists today.
+## Commands
+
+Run `yalp --help` for the live list. Today:
+
+| Command | What it does |
+|---|---|
+| `yalp see [question]` | Grab a webcam still (or `--image PATH`) and ask a Claude vision model "what do you see?". |
+| `yalp agent "<command>"` | Run the deliberative agent loop against the fake reactive backend (real eyes, simulated wheels). It turns plain language into tool-call intents — including **`yalp agent "follow me"`**, which routes through `enter_follow_mode` into the FOLLOW behavior below. |
+| `yalp follow` | Run **FOLLOW mode** (track-by-detection) against the real webcam: the simulated wheels steer toward a real person, printing a per-tick steering decision. `--seconds N` auto-stops; `--preview` shows a bbox/steering overlay when a display is available (headless-safe); `--synthetic` forces the test-pattern; `--benchmark` prints the laptop detector/tracker/FOLLOW-tick fps baseline vs the Gate H threshold. |
+
+`yalp follow` realizes software-spec.md §4's track-by-detection thesis: OpenCV's
+built-in HOG people detector (no model download) re-seeds a cheap box tracker, and
+the FOLLOW loop turns toward the person (horizontal bbox error) and drives forward
+until they're close enough (bbox size), degrading to a clean stop ("I lost you")
+when the target is lost or the scene is too dark. The detector is pluggable — on
+the Pi we'd swap in MobileNet-SSD / YOLO-nano behind the same interface; Gate H
+decides.
 
 ## Viewing the spec hub
 

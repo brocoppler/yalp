@@ -29,6 +29,7 @@ from . import __version__
 FEATURE_MODULES: list[str] = [
     "yalp.deliberative.see",
     "yalp.deliberative.agent_cli",
+    "yalp.follow_cli",
 ]
 
 
