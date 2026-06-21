@@ -1,18 +1,27 @@
-"""Tests for spoken OUTPUT (yalp.voice) — no audio, no macOS assumptions.
+"""Tests for spoken OUTPUT (yalp.voice) — no audio, no platform assumptions.
 
-The actual ``say`` subprocess spawn (``voice._spawn``) and the capability probe
-(``voice.tts_available``) are monkeypatched, so these exercise the real speak
-plumbing and the ``--speak`` wiring WITHOUT emitting a sound or assuming the
-host is a Mac. Coverage:
+The actual TTS subprocess spawn (``voice.tts._spawn``), the binary selection
+(``voice.tts._tts_binary`` / ``platform.system``) and the capability probe
+(``voice.tts.tts_available``) are monkeypatched, so these exercise the real speak
+plumbing and the ``--speak`` wiring WITHOUT emitting a sound or assuming the host
+is a Mac (or a Linux box). Coverage:
 
-  1. speak() builds + spawns the ``say`` command with the text when TTS is
+  1. speak() builds + spawns the platform TTS command with the text when TTS is
      available (voice/rate from kwargs flow through).
-  2. speak() is a graceful no-op (never raises, never spawns) when ``say`` is
-     unavailable.
-  3. speak() never raises even if the spawn itself blows up.
-  4. ``yalp see --speak`` speaks the description; without --speak it does not.
-  5. the agent's ``speak`` tool vocalizes via the threaded callback when speech
+  2. _build_command builds the right argv per platform: macOS ``say -r RATE`` and
+     non-macOS ``espeak-ng -s RATE``.
+  3. tts_available() reflects ``shutil.which`` for the *resolved* binary on both
+     platforms.
+  4. speak() is a graceful no-op (never raises, never spawns) when the binary is
+     unavailable, and never raises even if the spawn itself blows up.
+  5. ``yalp see --speak`` speaks the description; without --speak it does not.
+  6. the agent's ``speak`` tool vocalizes via the threaded callback when speech
      is enabled, and does not when it is disabled (default off).
+
+Internals (``_spawn``, ``tts_available``, ``_tts_binary``) are patched on the
+live :mod:`yalp.voice.tts` module, since :func:`speak` resolves them there; the
+public surface (``voice.speak`` etc.) is still imported from the ``voice``
+package exactly as production callers use it.
 """
 
 from __future__ import annotations
@@ -25,11 +34,17 @@ from yalp import voice
 from yalp.deliberative import see as see_cli
 
 
+def _force_platform(monkeypatch, system: str) -> None:
+    """Pin the OS so TTS binary selection is deterministic in tests."""
+    monkeypatch.setattr(voice.tts.platform, "system", lambda: system)
+
+
 # --- voice.speak / tts_available -------------------------------------------
 def test_speak_spawns_say_with_text(monkeypatch):
-    monkeypatch.setattr(voice, "tts_available", lambda: True)
+    _force_platform(monkeypatch, "Darwin")
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
     spawned: list[list[str]] = []
-    monkeypatch.setattr(voice, "_spawn", lambda cmd: spawned.append(cmd))
+    monkeypatch.setattr(voice.tts, "_spawn", lambda cmd: spawned.append(cmd))
 
     voice.speak("hello world")
 
@@ -40,9 +55,10 @@ def test_speak_spawns_say_with_text(monkeypatch):
 
 
 def test_speak_passes_voice_and_rate(monkeypatch):
-    monkeypatch.setattr(voice, "tts_available", lambda: True)
+    _force_platform(monkeypatch, "Darwin")
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
     spawned: list[list[str]] = []
-    monkeypatch.setattr(voice, "_spawn", lambda cmd: spawned.append(cmd))
+    monkeypatch.setattr(voice.tts, "_spawn", lambda cmd: spawned.append(cmd))
 
     voice.speak("hi", voice="Samantha", rate=180)
 
@@ -53,9 +69,9 @@ def test_speak_passes_voice_and_rate(monkeypatch):
 
 
 def test_speak_ignores_blank_text(monkeypatch):
-    monkeypatch.setattr(voice, "tts_available", lambda: True)
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
     spawned: list[list[str]] = []
-    monkeypatch.setattr(voice, "_spawn", lambda cmd: spawned.append(cmd))
+    monkeypatch.setattr(voice.tts, "_spawn", lambda cmd: spawned.append(cmd))
 
     voice.speak("   ")
     voice.speak("")
@@ -64,32 +80,103 @@ def test_speak_ignores_blank_text(monkeypatch):
 
 
 def test_speak_is_noop_when_tts_unavailable(monkeypatch):
-    monkeypatch.setattr(voice, "tts_available", lambda: False)
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: False)
 
     def _boom(cmd):  # must never be reached
         raise AssertionError("must not spawn when TTS is unavailable")
 
-    monkeypatch.setattr(voice, "_spawn", _boom)
+    monkeypatch.setattr(voice.tts, "_spawn", _boom)
 
     # Degrades gracefully: no spawn, no exception.
     voice.speak("anybody home?")
 
 
 def test_speak_never_raises_on_spawn_failure(monkeypatch):
-    monkeypatch.setattr(voice, "tts_available", lambda: True)
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
 
     def _boom(cmd):
         raise OSError("no audio device")
 
-    monkeypatch.setattr(voice, "_spawn", _boom)
+    monkeypatch.setattr(voice.tts, "_spawn", _boom)
 
     # Best-effort: a broken voice must not crash the caller.
     voice.speak("this should be swallowed")
 
 
+# --- cross-platform binary selection / argv ---------------------------------
+def test_build_command_macos_uses_say_with_r_rate(monkeypatch):
+    _force_platform(monkeypatch, "Darwin")
+
+    cmd = voice._build_command("hi", "Samantha", 180)
+
+    assert cmd[0] == voice.SAY_BINARY
+    assert "-v" in cmd and cmd[cmd.index("-v") + 1] == "Samantha"
+    assert "-r" in cmd and cmd[cmd.index("-r") + 1] == "180"
+    assert "-s" not in cmd
+    assert cmd[-1] == "hi"
+
+
+def test_build_command_non_macos_uses_espeak_with_s_rate(monkeypatch):
+    _force_platform(monkeypatch, "Linux")
+
+    cmd = voice._build_command("hi", "en", 180)
+
+    assert cmd[0] == voice.ESPEAK_BINARY
+    assert "-v" in cmd and cmd[cmd.index("-v") + 1] == "en"
+    assert "-s" in cmd and cmd[cmd.index("-s") + 1] == "180"
+    assert "-r" not in cmd
+    assert cmd[-1] == "hi"
+
+
+def test_speak_non_macos_spawns_espeak(monkeypatch):
+    _force_platform(monkeypatch, "Linux")
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(voice.tts, "_spawn", lambda cmd: spawned.append(cmd))
+
+    voice.speak("hello pi", rate=200)
+
+    cmd = spawned[0]
+    assert cmd[0] == voice.ESPEAK_BINARY
+    assert "-s" in cmd and cmd[cmd.index("-s") + 1] == "200"
+    assert cmd[-1] == "hello pi"
+
+
+def test_tts_binary_selection(monkeypatch):
+    _force_platform(monkeypatch, "Darwin")
+    assert voice._tts_binary() == voice.SAY_BINARY
+
+    _force_platform(monkeypatch, "Linux")
+    assert voice._tts_binary() == voice.ESPEAK_BINARY
+
+
 def test_tts_available_reflects_say_on_path(monkeypatch):
-    monkeypatch.setattr(voice.shutil, "which", lambda name: "/usr/bin/say")
+    _force_platform(monkeypatch, "Darwin")
+    seen: list[str] = []
+
+    def _which(name):
+        seen.append(name)
+        return "/usr/bin/say"
+
+    monkeypatch.setattr(voice.shutil, "which", _which)
     assert voice.tts_available() is True
+    assert seen == [voice.SAY_BINARY]
+
+    monkeypatch.setattr(voice.shutil, "which", lambda name: None)
+    assert voice.tts_available() is False
+
+
+def test_tts_available_reflects_espeak_on_path(monkeypatch):
+    _force_platform(monkeypatch, "Linux")
+    seen: list[str] = []
+
+    def _which(name):
+        seen.append(name)
+        return "/usr/bin/espeak-ng"
+
+    monkeypatch.setattr(voice.shutil, "which", _which)
+    assert voice.tts_available() is True
+    assert seen == [voice.ESPEAK_BINARY]
 
     monkeypatch.setattr(voice.shutil, "which", lambda name: None)
     assert voice.tts_available() is False
@@ -197,7 +284,8 @@ class _FakeProc:
 
 
 def test_wait_for_speech_joins_outstanding_processes(monkeypatch):
-    monkeypatch.setattr(voice, "tts_available", lambda: True)
+    _force_platform(monkeypatch, "Darwin")
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
     proc = _FakeProc()
     monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: proc)
     voice._live_processes.clear()
@@ -206,7 +294,7 @@ def test_wait_for_speech_joins_outstanding_processes(monkeypatch):
     assert voice._live_processes == [proc]
 
     voice.wait_for_speech()
-    # The outstanding 'say' was joined (so it isn't cut off) and the registry
+    # The outstanding TTS proc was joined (so it isn't cut off) and the registry
     # is drained afterward.
     assert proc.waited_for is not None
     assert voice._live_processes == []
@@ -219,6 +307,6 @@ def test_wait_for_speech_never_raises(monkeypatch):
 
     voice._live_processes.clear()
     voice._live_processes.append(_BoomProc())
-    # Draining speech is best-effort — a wedged 'say' must never propagate.
+    # Draining speech is best-effort — a wedged TTS proc must never propagate.
     voice.wait_for_speech()
     assert voice._live_processes == []
