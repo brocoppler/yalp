@@ -82,7 +82,8 @@ def add_parser(subparsers) -> None:
         "--speak",
         action="store_true",
         help=(
-            "Let the robot SPEAK its 'speak' tool text out loud (macOS 'say'; "
+            "Let the robot SPEAK its words out loud — its narration, scene "
+            "descriptions, the 'speak' tool, and the final report (macOS 'say'; "
             "silent no-op without it). The printed transcript is unchanged; voice "
             "is additive. Default off so nothing makes surprise noise."
         ),
@@ -124,10 +125,13 @@ def run(args) -> int:
 
     describe = _make_describe(backend)
     # Spoken OUTPUT (default OFF): thread voice.speak into the agent only when
-    # --speak is passed, so the robot's `speak` tool vocalizes its text. Headless-
-    # safe — voice.speak never raises and no-ops without a 'say' binary.
+    # --speak is passed, so the robot vocalizes its narration / scene
+    # descriptions / speak tool / final report (mirrors how `yalp see` wires
+    # voice). Headless-safe — voice.speak never raises and no-ops without a 'say'
+    # binary.
+    speak_enabled = bool(getattr(args, "speak", False))
     speak_fn = None
-    if getattr(args, "speak", False):
+    if speak_enabled:
         from .. import voice
 
         speak_fn = voice.speak
@@ -149,6 +153,13 @@ def run(args) -> int:
         else:
             _interactive(agent, format_transcript)
     finally:
+        # Voice is fire-and-forget, so drain any outstanding speech (the final
+        # report) before we exit — otherwise the last utterance is cut off the
+        # instant the process tears down. Bounded + best-effort; never raises.
+        if speak_enabled:
+            from .. import voice
+
+            voice.wait_for_speech()
         stop.set()
         runner.join(timeout=2.0)
         client.close()

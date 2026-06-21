@@ -219,6 +219,72 @@ def test_explore_sends_only_drive_goal_intents(harness):
     assert harness.backend.get_state().mode in (Mode.IDLE, Mode.DRIVE_GOAL, Mode.SAFE_STOP)
 
 
+# --- spoken OUTPUT (--speak): the agent reliably vocalizes its own words -----
+class FakeSpeak:
+    """A no-audio speak callback (simulates --speak) that records every line."""
+
+    def __init__(self):
+        self.said: list[str] = []
+
+    def __call__(self, text):
+        self.said.append(text)
+
+
+def test_agent_vocalizes_narration_and_report_when_speak_enabled(harness):
+    # The model narrates, calls a tool, then gives a final answer with no tool.
+    client = ScriptedClient([
+        [_text("Driving forward now."), _tool("drive", distance_m=0.5, speed=1.0)],
+        [_text("I drove forward."), _tool("speak", text="All clear ahead.")],
+        [_text("Final report: the path is clear.")],
+    ])
+    speak = FakeSpeak()
+    agent = Agent(client=client, reactive=harness.client,
+                  describe_scene=RecordingDescribe(), speak=speak)
+
+    agent.run_turn("drive forward and report")
+
+    # Narration, the speak-tool text, AND the final report were all spoken.
+    assert "Driving forward now." in speak.said
+    assert "I drove forward." in speak.said
+    assert "All clear ahead." in speak.said
+    assert "Final report: the path is clear." in speak.said
+    # Only the model's words are spoken — never routing notes or raw tool calls.
+    note_texts = {e.text for e in agent._transcript if e.kind == "note"}
+    tool_texts = {e.text for e in agent._transcript if e.kind == "tool"}
+    assert not (set(speak.said) & note_texts)
+    assert not (set(speak.said) & tool_texts)
+
+
+def test_agent_is_silent_without_speak_callback(harness):
+    client = ScriptedClient([
+        [_text("Driving forward now."), _tool("drive", distance_m=0.5, speed=1.0)],
+        [_text("Done.")],
+    ])
+    agent = Agent(client=client, reactive=harness.client,
+                  describe_scene=RecordingDescribe())  # no speak= -> default off
+
+    assert agent._speak is None
+    agent.run_turn("drive forward")
+    # Nothing was ever routed through the voice path.
+    assert agent._spoken == set()
+
+
+def test_agent_does_not_double_speak_identical_text(harness):
+    # The model narrates a line AND calls the speak tool with the SAME text, then
+    # repeats it once more — it must be vocalized exactly once.
+    client = ScriptedClient([
+        [_text("Mission complete."), _tool("speak", text="Mission complete.")],
+        [_text("Mission complete.")],
+    ])
+    speak = FakeSpeak()
+    agent = Agent(client=client, reactive=harness.client,
+                  describe_scene=RecordingDescribe(), speak=speak)
+
+    agent.run_turn("do the thing")
+
+    assert speak.said.count("Mission complete.") == 1
+
+
 # --- 5. collision / BLOCKED is surfaced; the agent does not reverse ----------
 def test_blocked_state_surfaced_and_no_blind_reverse():
     backend = FakeReactiveBackend(tick_hz=50.0, camera_source="synthetic")

@@ -182,3 +182,43 @@ def test_agent_vocalize_swallows_callback_errors():
     # Best-effort speech must not wedge the dispatch.
     result = agent._dispatch(_speak_tool("hello"))
     assert "spoke" in result
+
+
+# --- voice.wait_for_speech: drain the final utterance before exit -----------
+class _FakeProc:
+    def __init__(self):
+        self.waited_for = None
+
+    def poll(self):
+        return None  # still "running" so _spawn keeps it tracked
+
+    def wait(self, timeout=None):
+        self.waited_for = timeout
+
+
+def test_wait_for_speech_joins_outstanding_processes(monkeypatch):
+    monkeypatch.setattr(voice, "tts_available", lambda: True)
+    proc = _FakeProc()
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: proc)
+    voice._live_processes.clear()
+
+    voice.speak("final report")
+    assert voice._live_processes == [proc]
+
+    voice.wait_for_speech()
+    # The outstanding 'say' was joined (so it isn't cut off) and the registry
+    # is drained afterward.
+    assert proc.waited_for is not None
+    assert voice._live_processes == []
+
+
+def test_wait_for_speech_never_raises(monkeypatch):
+    class _BoomProc(_FakeProc):
+        def wait(self, timeout=None):
+            raise RuntimeError("stuck say")
+
+    voice._live_processes.clear()
+    voice._live_processes.append(_BoomProc())
+    # Draining speech is best-effort — a wedged 'say' must never propagate.
+    voice.wait_for_speech()
+    assert voice._live_processes == []

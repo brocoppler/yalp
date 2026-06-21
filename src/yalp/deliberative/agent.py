@@ -146,6 +146,9 @@ class Agent:
         self._seq = 0
         self._user_text = ""
         self._transcript: list[TranscriptEntry] = []
+        # Texts already spoken this turn, so identical narration + speak-tool text
+        # (or a repeated line) is vocalized at most once (no double-speak).
+        self._spoken: set[str] = set()
 
     # -- public API ----------------------------------------------------------
     def run_turn(self, user_text: str) -> list[TranscriptEntry]:
@@ -158,6 +161,7 @@ class Agent:
         """
         self._user_text = user_text or ""
         self._transcript = []
+        self._spoken = set()
         messages: list[dict] = [self._build_user_turn(self._user_text)]
 
         for _step in range(self.max_steps):
@@ -355,8 +359,10 @@ class Agent:
                     "(deliberative sugar — no reactive EXPLORE mode).")
         if name == "speak":
             text = str(params.get("text", "")).strip()
+            # ``_record`` vocalizes "model" lines itself (no-op unless --speak),
+            # so the speak tool needs no separate _vocalize call — and the turn's
+            # dedup means narrating the same text first won't double-speak it.
             self._record("model", text, spoken=True)
-            self._vocalize(text)  # the robot's voice (no-op unless --speak)
             return "spoke to the user."
         return f"deliberative ability '{name}' not handled."
 
@@ -447,6 +453,13 @@ class Agent:
     def _record(self, kind: str, text: str, **data: Any) -> TranscriptEntry:
         entry = TranscriptEntry(kind=kind, text=text, data=data)
         self._transcript.append(entry)
+        # Voice is additive and reliable: speak the model's OWN words/answers —
+        # the "model" lines shown in the transcript (narration, scene
+        # descriptions, the speak tool, the final report) — never routing "note"
+        # lines or raw tool calls. No-op unless --speak wired a callback; dedup
+        # guards against double-speak.
+        if kind == "model":
+            self._vocalize(text)
         return entry
 
     def _note(self, text: str, **data: Any) -> TranscriptEntry:
@@ -463,6 +476,9 @@ class Agent:
         body = (text or "").strip()
         if not body:
             return
+        if body in self._spoken:
+            return  # already said this turn — don't double-speak identical text.
+        self._spoken.add(body)
         try:
             self._speak(body)
         except Exception:  # noqa: BLE001 - voice is best-effort, never fatal

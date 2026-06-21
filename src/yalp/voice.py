@@ -28,6 +28,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from typing import Optional
 
 logger = logging.getLogger("yalp.voice")
@@ -76,19 +77,52 @@ def _build_command(text: str, voice: Optional[str], rate: Optional[int]) -> list
     return cmd
 
 
+# Outstanding fire-and-forget ``say`` processes, so a caller (e.g. the agent
+# CLI) can briefly join them before the process exits — otherwise the FINAL
+# utterance is cut off the instant the agent finishes and Python tears down.
+_live_processes: list[subprocess.Popen] = []
+
+
 def _spawn(cmd: list[str]) -> None:
     """Fire-and-forget spawn of the TTS command (factored out for mocking).
 
     Uses :func:`subprocess.Popen` and does NOT wait, so a long utterance never
-    blocks the caller. Tests monkeypatch this to record the command instead of
-    making noise.
+    blocks the caller. The handle is tracked in ``_live_processes`` so
+    :func:`wait_for_speech` can drain the last utterance before the process
+    exits. Tests monkeypatch this to record the command instead of making noise.
     """
-    subprocess.Popen(  # noqa: S603 - command is our own fixed binary + text arg
+    proc = subprocess.Popen(  # noqa: S603 - command is our own fixed binary + text arg
         cmd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    # Prune finished handles so a long interactive session can't leak them.
+    _live_processes[:] = [p for p in _live_processes if p.poll() is None]
+    _live_processes.append(proc)
+
+
+def wait_for_speech(timeout: float = 10.0) -> None:
+    """Block until outstanding fire-and-forget speech drains — best-effort.
+
+    Mid-loop speech is fire-and-forget so the loop stays responsive, but if the
+    process exits the instant the agent finishes the LAST utterance (the final
+    report) would be cut off. A caller can invoke this right before returning to
+    let that speech finish. Bounded by ``timeout`` (total seconds) so a wedged
+    ``say`` can never hang the CLI, and it NEVER raises — draining voice is
+    best-effort, exactly like :func:`speak`.
+    """
+    procs = list(_live_processes)
+    _live_processes.clear()
+    deadline = time.monotonic() + max(0.0, timeout)
+    for proc in procs:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            proc.wait(timeout=remaining)
+        except Exception:  # noqa: BLE001 - incl. TimeoutExpired; never hang/raise
+            pass
 
 
 def speak(text: str, *, voice: Optional[str] = None, rate: Optional[int] = None) -> None:
@@ -126,4 +160,4 @@ def speak(text: str, *, voice: Optional[str] = None, rate: Optional[int] = None)
                        type(exc).__name__, exc)
 
 
-__all__ = ["speak", "tts_available", "SAY_BINARY", "DEFAULT_VOICE"]
+__all__ = ["speak", "wait_for_speech", "tts_available", "SAY_BINARY", "DEFAULT_VOICE"]
