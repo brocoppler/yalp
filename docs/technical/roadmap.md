@@ -44,8 +44,8 @@ the Phase 1 hardware already in hand.
 | **I** | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. | Pi 5 + HC-SR04 + resistors | |
 | **J** | **Safety reflex** (collision-stop) | A fast local loop overrides any drive command when something's too close: commanded forward drive halts within the threshold distance on the bench. In *before* any autonomous driving. | Pi 5 + Phase 2 | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
-| **L** | 🚦 **Gate H — Person-detector fps spike** | Measure **SUSTAINED** detector fps at the chosen detection resolution (**~320×240, downscaled before inference**), **CONCURRENT with the reactive loop + camera capture + a motor-PWM stress load — never in isolation**; record the triple **(model, resolution, runtime)** with the number. Try **ONNX Runtime or ncnn with int8**, not just OpenCV DNN. PASS: **≥ 3 Hz sustained = GO** (track-by-detection: cheap tracker re-seeded by the detector). NO-GO: **≤ 1–2 Hz** → ship the blob/color tracker as a first-class deliverable (milestone **M**, own done-signal) and defer robust follow. | Pi 5 + Phase 2 | |
-| **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): track-by-detection — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): the blob/color tracker as a **first-class deliverable** — robot follows a colored target, collision-stop underneath, own bench demo. A NO-GO is a *different build, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
+| **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed:** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; HOG person detector behind a pluggable `Detector`; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. A laptop fps baseline is available via `yalp follow --benchmark`. See `software-spec.md`. | Pi 5 + Phase 2 | |
+| **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): the laptop-proven track-by-detection pipeline runs on the Pi — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): swap in the blob/color `Detector` behind the same pluggable interface — robot follows a colored target, collision-stop underneath, own bench demo. The follow *logic/steering* is already proven; only the Pi's detector fps is the open question Gate H answers. A NO-GO is a *different detector, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
 | **N** | **WiFi-degradation test** (gated milestone) | Kill the link **mid-DRIVE_GOAL** and **mid-FOLLOW** and assert: DRIVE_GOAL **safe-stops within the bounded-goal timeout**; FOLLOW **continues locally then safe-stops on target loss**. Both asserts logged green. | Pi 5 + Phase 2 | |
 | **O** | **It listens and speaks** *(separate track)* | STT + TTS bolted on **after** the text loop (0–N) works end-to-end. Allowed to lag indefinitely. | Phase 3 (mic + speaker) | |
 
@@ -95,21 +95,22 @@ mode," **D** becomes a rewrite. A runnable stub-to-stub Intent/RobotState exchan
 turns A, H, J, and M into implementations of an agreed, *demonstrated* interface
 instead of negotiations. See `software-spec.md` and `architecture.md`.
 
-### 2.2 Gate H — person-detector fps spike (decides M's shape)
+### 2.2 Gate H — person-detector fps benchmark (decides M's detector, not its logic)
 
-> **DECISION —** Before committing to follow-mode (**M**), run the **person-detector
-> fps spike** on the actual Pi 5 under load. Measure SUSTAINED fps at ~320×240
-> (downscaled before inference), **concurrent with the reactive loop + camera capture +
-> a motor-PWM stress load — never in isolation** — and record the triple (model,
+> **DECISION —** The follow *brain* — `Detector` interface, track-by-detection tracker,
+> and steering — is **already implemented and tested laptop-side** (`yalp follow`,
+> `enter_follow_mode`; HOG person detector; graceful lost/too-dark → stop). Gate H's
+> role has therefore narrowed: it is a **benchmark-confirmation** that the chosen
+> detector sustains ≥ 3 Hz on the Pi under concurrent load (reactive loop + camera
+> capture + motor-PWM stress — never in isolation). Record the triple (model,
 > resolution, runtime). Try ONNX Runtime or ncnn with int8, not just OpenCV DNN.
-> **≥ 3 Hz sustained = GO** (track-by-detection). **≤ 1–2 Hz = NO-GO.**
+> A laptop fps baseline is available via `yalp follow --benchmark`. See `software-spec.md`.
 
-The Pi 5 has no NPU (the AI HAT is deliberately skipped). Whether a real *detector*
-runs fast enough, or whether follow-mode must fall back, is the single biggest unknown
-in the reactive layer. The NO-GO path is **not a dead end**: the blob/color tracker is
-specced as a **first-class deliverable** with its own bench demo (milestone **M**,
-NO-GO branch). A low number means you ship a *different build* — a colored-target
-follower with collision-stop underneath — not a demoted one. See `software-spec.md`.
+The Pi 5 has no NPU (the AI HAT is deliberately skipped). The follow *logic/steering*
+is proven; the Pi's *detector fps* is the remaining open question. The NO-GO path is
+**not a dead end**: the blob/color tracker slots in behind the same pluggable `Detector`
+interface as a **first-class deliverable** (milestone **M**, NO-GO branch). A low
+number means you swap the detector — not redesign the follow loop. See `software-spec.md`.
 
 ### 2.3 Gate E — power / brownout bring-up (blocks motors-under-Pi)
 
@@ -164,6 +165,11 @@ follower with collision-stop underneath — not a demoted one. See `software-spe
 
 > **Status as of this writing:** Phase 1 (the brain) is in hand; Phase 2 hardware
 > parts were ORDERED 2026-06-20 and are inbound. **0 of 16 rungs green.**
+> **Laptop brain now covers all three headline behaviors:** see (`yalp` agent loop,
+> webcam, fake reactive backend), agent (full deliberative loop D1–D3), and follow
+> (`yalp follow` / `enter_follow_mode` — track-by-detection pipeline with HOG detector,
+> pluggable `Detector` interface, steering, and graceful lost/too-dark → stop). The Pi
+> is the remaining unknown for detector fps (Gate H / milestone L).
 
 - **Spent (~$200):** the CanaKit Raspberry Pi 5 4GB Starter Kit PRO (board, 27W PD
   wall supply, active-cooling case, 128GB OS card) plus the Logitech C270 webcam.
