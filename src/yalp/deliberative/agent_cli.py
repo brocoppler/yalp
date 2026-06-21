@@ -4,6 +4,8 @@ Registered with the CLI via the documented feature-module contract: this module
 exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
 ``yalp.cli.FEATURE_MODULES``.
 
+    yalp agent drive forward a bit and tell me what you see
+    yalp agent "drive forward a bit and tell me what you see"
     yalp agent --command "drive forward a bit and tell me what you see"
     yalp agent --steps 6 --command "explore the room and report"
     yalp agent                         # interactive prompt loop
@@ -36,10 +38,19 @@ def add_parser(subparsers) -> None:
         ),
     )
     parser.add_argument(
+        "words",
+        nargs="*",
+        help=(
+            "Optional command as trailing words, e.g. "
+            "'yalp agent drive forward and report'. "
+            "Takes precedence over --command when both are given."
+        ),
+    )
+    parser.add_argument(
         "--command",
         metavar="TEXT",
         default=None,
-        help="A single natural-language command to run, then exit.",
+        help="A single natural-language command to run, then exit (alias for positional words).",
     )
     parser.add_argument(
         "--steps",
@@ -88,9 +99,12 @@ def run(args) -> int:
         max_steps=args.steps,
     )
 
+    # Resolve the command: positional words take precedence over --command.
+    command = " ".join(getattr(args, "words", []) or []).strip() or args.command or None
+
     try:
-        if args.command:
-            _run_one(agent, args.command, format_transcript)
+        if command:
+            _run_one(agent, command, format_transcript)
         else:
             _interactive(agent, format_transcript)
     finally:

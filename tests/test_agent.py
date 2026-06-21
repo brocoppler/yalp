@@ -25,6 +25,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import argparse
+
 from yalp import config
 from yalp.contract.ipc import DeliberativeClient, ReactiveServer
 from yalp.contract.messages import GoalStatus, Mode
@@ -243,6 +245,58 @@ def test_blocked_state_surfaced_and_no_blind_reverse():
         assert all(d.data["params"].get("distance_m", 0) >= 0 for d in drives)
     finally:
         harness.close()
+
+
+# --- CLI parsing: positional words and --command alias -----------------------
+
+def _make_agent_parser():
+    """Build an isolated argument parser that mirrors the 'agent' subcommand."""
+    from yalp.deliberative.agent_cli import add_parser
+    root = argparse.ArgumentParser()
+    sub = root.add_subparsers(dest="subcommand")
+    add_parser(sub)
+    return root
+
+
+def test_agent_cli_positional_words():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "look", "around", "and", "report"])
+    assert " ".join(args.words) == "look around and report"
+
+
+def test_agent_cli_positional_words_quoted():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "look around and report"])
+    assert args.words == ["look around and report"]
+
+
+def test_agent_cli_command_flag_alias():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "--command", "explore the room"])
+    assert args.command == "explore the room"
+    assert (args.words or []) == []
+
+
+def test_agent_cli_positional_overrides_command_flag():
+    """Positional words take precedence — resolved in run(), checked here via words."""
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "--command", "ignored", "actual", "command"])
+    # Positional words are present and non-empty; run() will prefer them.
+    assert " ".join(args.words) == "actual command"
+
+
+def test_agent_cli_no_args_gives_empty_words():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent"])
+    assert (args.words or []) == []
+    assert args.command is None
+
+
+def test_agent_cli_steps_flag_unchanged():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "--steps", "5", "go", "forward"])
+    assert args.steps == 5
+    assert args.words == ["go", "forward"]
 
 
 # --- build_context carries the honest open-loop caveats ----------------------
