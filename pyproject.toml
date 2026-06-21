@@ -23,6 +23,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Optional voice INPUT (microphone capture + speech-to-text). Kept out of the
+# base dependencies so the core suite installs/runs with no audio stack:
+#   sounddevice    -> live mic capture (PortAudio)
+#   faster-whisper -> local on-CPU speech-to-text (CTranslate2)
+voice = ["sounddevice", "faster-whisper"]
 
 [project.scripts]
 yalp = "yalp.cli:main"

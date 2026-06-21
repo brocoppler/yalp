@@ -30,6 +30,11 @@ import shutil  # noqa: F401 - re-exported for back-compat / patchability
 import subprocess  # noqa: F401 - re-exported for back-compat / patchability
 
 from . import tts
+from .stt import (  # noqa: F401 - spoken INPUT (transcription) surface
+    STTBackend,
+    get_backend,
+    transcribe,
+)
 from .tts import (  # noqa: F401 - re-exported public + back-compat names
     DEFAULT_VOICE,
     ESPEAK_BINARY,
@@ -60,4 +65,7 @@ __all__ = [
     "DEFAULT_VOICE",
     "Microphone",
     "to_wav_bytes",
+    "transcribe",
+    "STTBackend",
+    "get_backend",
 ]
