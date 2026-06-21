@@ -501,55 +501,30 @@ def test_target_visible_survives_gaps_then_drops_after_grace():
     assert vis[-1] is False
 
 
-def test_single_missed_detection_does_not_flip_state():
-    """One missed detection mid-track must NOT flip target_visible to lost.
+def test_face_lock_survives_brief_gap_then_drops_after_grace():
+    """HYSTERESIS: a brief detection gap keeps the lock (no flicker); a SUSTAINED
+    gap beyond the grace finally drops it (no latching a dead box forever).
 
-    This is the core flicker regression: the detector fires intermittently, so a
-    lone empty detection tick has to coast the live box, not nuke it.
+    This is the inverse of the old over-strict behavior: the cheap tracker coasts
+    the box across normal detector gaps, so the state stays "tracking" instead of
+    flip-flopping acquired/lost while the user is clearly present.
     """
-    # Seed, then ONE empty detection in the middle, then detections resume.
-    det = FakeDetector(
-        [
-            [Detection((140, 90, 50, 60), 0.9)],  # seed
-            [],                                    # the single MISS
-            [Detection((142, 92, 50, 60), 0.9)],  # detections resume
-            [Detection((143, 93, 50, 60), 0.9)],
-            [Detection((144, 94, 50, 60), 0.9)],
-        ]
-    )
-    pt = PersonTracker(detector=det, detect_interval=1)
-    results = [pt.update(_bright_frame()) for _ in range(6)]
-    # The lone empty detection never flips the state: every tick stays tracking
-    # with a (detected-or-coasted) box.
-    assert all(r.target_visible is True for r in results)
-    assert all(r.bbox is not None for r in results)
-    # And a fresh detection still re-confirms (resets the grace clock) along the way.
-    assert any(r.ticks_since_last_detector_confirmation == 0 for r in results[1:])
-
-
-def test_intermittent_detection_stays_tracking_across_gaps():
-    """Normal intermittent detection (box on some ticks, nothing on others) is stable.
-
-    Simulates the live bug: with the box appearing only every few ticks and empty
-    in between, the state must stay TRACKING the whole time — no acquired/lost
-    flicker — because every gap is well within the grace.
-    """
-    # A detection every 3rd tick, empty otherwise, for many ticks.
-    seq = []
-    for i in range(18):
-        seq.append([Detection((140, 90, 50, 60), 0.9)] if i % 3 == 0 else [])
+    seq = [[Detection((140, 90, 50, 60), 0.9)]] + [[] for _ in range(20)]
     det = FakeDetector(seq)
-    pt = PersonTracker(detector=det, detect_interval=1)
-    vis = [pt.update(_bright_frame()).target_visible for _ in range(18)]
-    assert all(v is True for v in vis)  # stable tracking across every gap
+    pt = PersonTracker(
+        detector=det, detect_interval=detect_interval_for("face"), grace_ticks=6
+    )
+    vis = [pt.update(_bright_frame()).target_visible for _ in range(12)]
+    assert vis[0] is True   # acquired on the first detection
+    assert vis[1] is True   # a brief gap -> still tracking (no flip to lost)
+    assert vis[2] is True
+    assert vis[-1] is False  # sustained loss beyond grace -> genuinely released
 
 
-def test_implausible_jump_between_frames_is_not_adopted():
-    """While tracking, a transient detection that teleports across the frame is ignored.
-
-    The teleport is rejected by the sanity gate, so we never jump our lock onto the
-    bogus box — we keep COASTING the original (correct) box. The state stays
-    "tracking" (the right person), and the teleport bbox is never adopted.
+def test_implausible_jump_between_frames_is_rejected():
+    """While tracking, a transient detection that teleports across the frame is
+    NOT adopted — we keep COASTING the original (correct) box (hysteresis), never
+    jumping to the spurious teleport. The state stays "tracking" the right person.
     """
     det = FakeDetector(
         [
@@ -561,8 +536,67 @@ def test_implausible_jump_between_frames_is_not_adopted():
     r0 = pt.update(_bright_frame())  # detect: seed on the left
     r1 = pt.update(_bright_frame())  # detector reruns -> teleport rejected, coast
     assert r0.target_visible is True
+    assert r0.bbox == (20, 90, 50, 60)
     assert r1.target_visible is True          # still tracking the original box
+    # The teleport box was NOT latched; we keep tracking the original (coasted) box.
+    assert r1.bbox != (290, 90, 40, 50)
     assert r1.bbox == (20, 90, 50, 60)        # the teleport was NOT adopted
+
+
+# --------------------------------------------------------------------------- #
+# HYSTERESIS / lost-grace window — intermittent detection must NOT flip state
+# --------------------------------------------------------------------------- #
+def test_single_missed_detection_does_not_flip_state():
+    """A single missed detection must NOT flip the state to lost (hysteresis)."""
+    box = [Detection((120, 80, 50, 90), 0.9)]
+    seq = [box, [], box]  # acquire, ONE missed cycle, re-confirm
+    det = FakeDetector(seq)
+    pt = PersonTracker(detector=det, detect_interval=1, grace_ticks=10)
+    vis = [pt.update(_bright_frame()).target_visible for _ in range(3)]
+    assert vis == [True, True, True]  # the gap was bridged, never lost
+
+
+def test_intermittent_detection_stays_tracking_across_gaps():
+    """Box on some ticks, NOTHING on others (normal intermittent detection): as
+    long as gaps stay within the grace, the follow state stays TRACKING — no
+    acquired/lost flip-flop."""
+    box = [Detection((120, 80, 50, 90), 0.9)]
+    seq = [box, [], [], box, [], box, [], [], box]  # gaps always < grace
+    det = FakeDetector(seq)
+    pt = PersonTracker(detector=det, detect_interval=1, grace_ticks=10)
+    ctrl = FollowController(coast_ticks=10)
+    visible = []
+    for _ in range(len(seq)):
+        res = pt.update(_bright_frame())
+        visible.append(ctrl.decide(res, 320, 240, brightness=180).target_visible)
+    assert all(visible), visible  # stable tracking across the gaps
+
+
+def test_sustained_no_detection_beyond_grace_transitions_to_lost():
+    """After SUSTAINED no-detection beyond the grace, transition lost -> searching
+    (a real departure still settles within ~the grace)."""
+    box = [Detection((120, 80, 50, 90), 0.9)]
+    det = FakeDetector([box] + [[] for _ in range(30)])
+    pt = PersonTracker(detector=det, detect_interval=1, grace_ticks=6)
+    ctrl = FollowController(coast_ticks=6)
+    visible = []
+    for _ in range(12):
+        res = pt.update(_bright_frame())
+        visible.append(ctrl.decide(res, 320, 240, brightness=180).target_visible)
+    assert visible[0] is True   # acquired
+    assert visible[1] is True   # a brief gap is still tracking (hysteresis)
+    assert visible[-1] is False  # sustained loss beyond grace -> lost -> searching
+    # And it does not latch forever: once dropped it stays dropped.
+    assert visible[-2] is False
+
+
+def test_grace_window_is_at_least_the_detector_cadence():
+    """The grace must span a normal detector gap, else a coasted box reads stale
+    every cycle (the original flip-flop). Guard that invariant."""
+    from yalp import config
+
+    assert config.FOLLOW_LOST_GRACE_TICKS >= config.FOLLOW_DETECT_INTERVAL_TICKS
+    assert config.FOLLOW_LOST_GRACE_TICKS >= config.FOLLOW_FACE_DETECT_INTERVAL_TICKS
 
 
 # --------------------------------------------------------------------------- #

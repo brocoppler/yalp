@@ -158,6 +158,23 @@ FOLLOW_STOP_BBOX_HEIGHT: float = 0.60  # bbox height / frame height = "close eno
 # report, because vision tracking is unreliable in the dark.
 FOLLOW_DARK_BRIGHTNESS: float = 16.0
 
+# HYSTERESIS / lost-grace window (the real fix for the acquired/lost FLICKER).
+# Track-by-detection runs the slow detector only every N ticks and the cheap
+# tracker COASTS the box in between; the detector also fires intermittently, so a
+# brief, NORMAL gap between detector hits must NOT read as "lost". As long as a
+# valid (detected-or-coasted) box exists whose last SUCCESSFUL detection is
+# younger than this grace, the target stays TRACKING (target_visible True) — the
+# coasted box that steers / draws the green preview is NOT "stale". Only after the
+# grace elapses with no fresh detection (and the tracker can no longer hold a box)
+# does FOLLOW transition LOST -> stop -> "searching: no target". Kept SHORT (~1s)
+# so a real departure still settles promptly — this is hysteresis, not latching a
+# dead box forever. FOLLOW_LOST_GRACE_TICKS (derived from REACTIVE_TICK_HZ below)
+# is the tick-domain window used by the tracker and the controller.
+FOLLOW_LOST_GRACE_S: float = 0.9
+# Back-compat alias: the old name some callers/tests pass through. The grace
+# window supersedes the old "coast a few ticks then drop" policy.
+FOLLOW_COAST_TICKS: int = 3
+
 # Localhost IPC endpoint for the reactive <-> deliberative socket (JSON lines).
 # TCP 127.0.0.1 in dev; a Unix-domain socket once co-located on the Pi.
 IPC_HOST: str = "127.0.0.1"
@@ -173,28 +190,20 @@ SAFE_STOP_THRESHOLD_M: float = 0.30
 REACTIVE_TICK_HZ: float = 20.0
 
 # --- FOLLOW hysteresis: the lost-grace window (the acquired/lost flicker fix) --
-# Standing in front of the camera must read as a STABLE "tracking" state, not an
-# acquired/lost flicker. Track-by-detection only fires the DETECTOR intermittently
-# (every few ticks) and the cheap tracker COASTS the box in between, so a brief,
-# normal detection gap must NOT read as "lost". The grace window keeps a coasted
-# box "tracking" (target_visible True) as long as a valid (detected-or-coasted)
-# box exists whose last SUCCESSFUL detection is younger than the grace — a coasted
-# box within the window is NOT "stale". Only after the grace elapses with NO fresh
-# detection (and the tracker can no longer hold a box) does FOLLOW transition to
-# LOST -> stop -> "searching: no target". Kept SHORT (~1s) so a real departure
-# still settles within about a second, after which a truly dead box is genuinely
-# released — the grace does NOT latch a dead box forever.
-FOLLOW_LOST_GRACE_S: float = 0.9
-# Tick equivalent of the grace at the default reactive tick rate (~18 ticks at
-# 20 Hz). Both the tracker (its coast budget) and the steering controller (its
-# "stale" gate) use this SINGLE window, so the published STATE always matches the
-# drawn green box: if a box is being used to steer/draw, the state is "tracking".
-FOLLOW_LOST_GRACE_TICKS: int = max(1, round(FOLLOW_LOST_GRACE_S * REACTIVE_TICK_HZ))
-# The coast budget IS the grace window now. (Was a too-strict 3 ticks, which
-# dropped a live box on the very first detection gap and caused the flicker: it
-# required a FRESH detection essentially every tick. The grace lets the coasted
-# box bridge the normal gaps between detector hits.)
-FOLLOW_COAST_TICKS: int = FOLLOW_LOST_GRACE_TICKS
+# Tick-domain equivalent of FOLLOW_LOST_GRACE_S above (derived from the default
+# reactive tick rate, ~18 ticks at 20 Hz). Standing in front of the camera must
+# read as a STABLE "tracking" state, not an acquired/lost flicker: track-by-
+# detection only fires the DETECTOR intermittently (every few ticks) and the cheap
+# tracker COASTS the box in between, so a brief, NORMAL detection gap must NOT read
+# as "lost". A coasted box younger than this window stays "tracking"
+# (target_visible True) — it is NOT "stale" — and only past it does FOLLOW
+# genuinely let go (-> "searching: no target"); the grace does NOT latch a dead
+# box forever. It is the SINGLE window used by both the tracker (its coast budget)
+# and the steering controller (its "stale" gate), so the published STATE always
+# matches the drawn green box. Kept deliberately >= the detector cadence
+# (FOLLOW_*_DETECT_INTERVAL_TICKS) so a normal gap between detector hits never
+# reads as lost (the flip-flop bug).
+FOLLOW_LOST_GRACE_TICKS: int = max(1, int(round(FOLLOW_LOST_GRACE_S * REACTIVE_TICK_HZ)))
 
 # Independent watchdog timeout (ms): the motor GPIO is zeroed if the reactive
 # tick's heartbeat is older than this (software-spec.md §2.6).

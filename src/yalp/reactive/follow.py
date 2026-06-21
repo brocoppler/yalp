@@ -87,7 +87,7 @@ class FollowController:
         max_forward: float = 1.0,
         min_forward: float = 0.1,
         stop_bbox_h: float = config.FOLLOW_STOP_BBOX_HEIGHT,
-        coast_ticks: int = config.FOLLOW_COAST_TICKS,
+        coast_ticks: int = config.FOLLOW_LOST_GRACE_TICKS,
         track_min_score: float = config.FOLLOW_TRACK_MIN_SCORE,
         dark_brightness: float = config.FOLLOW_DARK_BRIGHTNESS,
     ) -> None:
@@ -117,10 +117,13 @@ class FollowController:
             )
 
         # 2. Lost / unconfirmed / stale -> stop, never drive on a stale box (§4).
-        #    ``coast_ticks`` is the lost-GRACE window (hysteresis): a coasted box
-        #    within it is still "tracking" (the cheap tracker bridges the normal
-        #    gap between detector hits), so it is NOT stale. Only once the box has
-        #    gone un-reconfirmed for LONGER than the grace is it truly stale.
+        #    HYSTERESIS: ``coast_ticks`` is the lost-GRACE window. A box coasted by
+        #    the cheap tracker across a NORMAL gap between detector hits is NOT
+        #    stale — it stays "tracking" (the cheap tracker bridges the gap) until
+        #    the grace window elapses with no fresh detection. Only once the box has
+        #    gone un-reconfirmed for LONGER than the grace does it read as stale and
+        #    stop. This keeps the published STATE consistent with the drawn/steered
+        #    box and kills the acquired/lost flip-flop while the user is present.
         stale = result.ticks_since_last_detector_confirmation > self.coast_ticks
         no_box = (not result.target_visible) or result.bbox is None
         weak = result.score < self.track_min_score
