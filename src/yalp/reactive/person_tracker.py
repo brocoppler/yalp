@@ -8,13 +8,18 @@ validate** the box. The fast tracker gives smoothness; the slow detector gives
 
 Two seams keep this honest and portable:
 
-  * **The detector is pluggable** behind :class:`Detector`. The laptop default is
-    OpenCV's built-in **HOG people detector** (:class:`HogPersonDetector`), which
-    ships with ``opencv-python`` and needs **no model-file download**. On the Pi we
-    would swap in a faster detector (MobileNet-SSD / YOLO-nano via onnxruntime or
-    ncnn) **behind this same interface** — Gate H (roadmap.md) decides whether the
-    Pi sustains the ``config.GATE_H_GO_HZ`` floor that makes track-by-detection
-    viable. Nothing else in FOLLOW changes when that swap happens.
+  * **The detector is pluggable** behind :class:`Detector`. The laptop/desk
+    default is the bundled-Haar-cascade **face detector** (:class:`FaceDetector`),
+    because a webcam at desk range frames only the user's HEAD + UPPER TORSO, which
+    the full-body **HOG people detector** (:class:`HogPersonDetector`) — trained on
+    standing bodies — cannot see. HOG remains the right choice for the eventual
+    ROBOT looking across a room at a *standing* person, and ``AutoDetector`` tries
+    face then falls back to HOG. All ship with ``opencv-python`` and need **no
+    model-file download**. On the Pi we would swap in a faster detector
+    (MobileNet-SSD / YOLO-nano via onnxruntime or ncnn) **behind this same
+    interface** — Gate H (roadmap.md) decides whether the Pi sustains the
+    ``config.GATE_H_GO_HZ`` floor that makes track-by-detection viable. Nothing
+    else in FOLLOW changes when that swap happens.
   * **The between-detection tracker is pluggable too.** We prefer a real OpenCV
     legacy tracker (CSRT/KCF) when the installed OpenCV exposes one — handling the
     ``cv2.legacy.*`` vs ``cv2.Tracker*_create`` vs *missing* differences across
@@ -137,6 +142,149 @@ def _squash(weight: float) -> float:
 
 
 # --------------------------------------------------------------------------- #
+# The desk-range default: a Haar-cascade FACE detector
+# --------------------------------------------------------------------------- #
+class FaceDetector:
+    """OpenCV Haar-cascade FACE detector — the right default at *desk* range.
+
+    A laptop webcam frames only the user's HEAD + UPPER TORSO, which the full-body
+    HOG detector (trained on standing people) cannot see — so HOG fails at desk
+    range and FOLLOW just says "I lost you". This detector uses OpenCV's **bundled**
+    frontal-face Haar cascade (``cv2.data.haarcascades`` — ships with
+    ``opencv-python``, **no download**), returns the **largest face** as the target,
+    and expands that box **downward** (and slightly wider) to approximate
+    head+shoulders for a steadier distance proxy. The center/steering come from
+    that box; its size is the distance proxy. It implements the same
+    :class:`Detector` interface as HOG, so FOLLOW is unchanged behind it.
+
+    ``upper_body=True`` additionally tries OpenCV's upper-body cascade as a
+    fallback when no frontal face is found (e.g. the user looked away).
+    """
+
+    def __init__(
+        self,
+        *,
+        detect_width: int = config.FOLLOW_DETECT_WIDTH,
+        expand_down: float = config.FOLLOW_FACE_EXPAND_DOWN,
+        upper_body: bool = False,
+    ) -> None:
+        import cv2  # lazy: only when a real detector is built
+
+        self._cv2 = cv2
+        self.detect_width = int(detect_width)
+        self.expand_down = float(expand_down)
+        base = cv2.data.haarcascades
+        self._face = cv2.CascadeClassifier(base + "haarcascade_frontalface_default.xml")
+        if self._face.empty():  # pragma: no cover - broken opencv data dir
+            raise RuntimeError("could not load bundled frontalface Haar cascade")
+        self._upper = None
+        if upper_body:
+            up = cv2.CascadeClassifier(base + "haarcascade_upperbody.xml")
+            self._upper = None if up.empty() else up
+
+    def detect(self, frame) -> List[Detection]:
+        if frame is None:
+            return []
+        cv2 = self._cv2
+        h, w = frame.shape[:2]
+        scale = 1.0
+        img = frame
+        if w > self.detect_width:
+            scale = self.detect_width / float(w)
+            img = cv2.resize(frame, (self.detect_width, max(1, int(round(h * scale)))))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+
+        faces = self._face.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24)
+        )
+        score = 0.9
+        if len(faces) == 0 and self._upper is not None:
+            faces = self._upper.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=3, minSize=(48, 48)
+            )
+            score = 0.6
+
+        inv = 1.0 / scale if scale > 0 else 1.0
+        out: List[Detection] = []
+        for (fx, fy, fw, fh) in faces:
+            bbox = self._expand(
+                int(round(fx * inv)), int(round(fy * inv)),
+                int(round(fw * inv)), int(round(fh * inv)), w, h,
+            )
+            out.append(Detection(bbox=bbox, score=score))
+        # Return only the largest face as the target (steadier than juggling
+        # several); the tracker also picks max-area, but being explicit is clearer.
+        if not out:
+            return out
+        return [max(out, key=lambda d: d.area)]
+
+    def _expand(self, x: int, y: int, w: int, h: int, fw: int, fh: int) -> Bbox:
+        """Grow a face box DOWN (and a bit wider) to approximate head+shoulders."""
+        new_h = int(round(h * (1.0 + self.expand_down)))
+        widen = int(round(w * 0.3))
+        nx = max(0, x - widen)
+        nw = min(fw - nx, w + 2 * widen)
+        ny = max(0, y)
+        nh = min(fh - ny, new_h)
+        return (nx, ny, nw, nh)
+
+
+class AutoDetector:
+    """Try the FACE detector first; fall back to HOG when no face is found.
+
+    Good when the user may sit at a desk *or* stand across the room: the cheap
+    face pass handles desk range, and the (slower) full-body HOG pass catches the
+    standing case. The HOG detector is built lazily on first fallback.
+    """
+
+    def __init__(self, *, detect_width: int = config.FOLLOW_DETECT_WIDTH) -> None:
+        self.detect_width = int(detect_width)
+        self._face = FaceDetector(detect_width=detect_width)
+        self._hog: Optional[HogPersonDetector] = None
+
+    def detect(self, frame) -> List[Detection]:
+        faces = self._face.detect(frame)
+        if faces:
+            return faces
+        if self._hog is None:
+            self._hog = HogPersonDetector(detect_width=self.detect_width)
+        return self._hog.detect(frame)
+
+
+def build_detector(
+    name: Optional[str] = None, *, detect_width: int = config.FOLLOW_DETECT_WIDTH
+) -> Detector:
+    """Construct a detector by name: ``face`` (default), ``hog`` or ``auto``.
+
+    The default ``face`` is reliable at *desk* range (head+shoulders webcam
+    framing); ``hog`` is the full-body detector for the robot/room range; ``auto``
+    tries face then falls back to hog. All three share the :class:`Detector`
+    interface, so the eventual robot can swap in a faster detector (Gate H)
+    without touching FOLLOW.
+    """
+    key = (name or config.FOLLOW_DETECTOR_DEFAULT).strip().lower()
+    if key == "face":
+        return FaceDetector(detect_width=detect_width)
+    if key == "hog":
+        return HogPersonDetector(detect_width=detect_width)
+    if key == "auto":
+        return AutoDetector(detect_width=detect_width)
+    raise ValueError(f"unknown detector {name!r} (choose face, hog or auto)")
+
+
+def detect_interval_for(name: Optional[str] = None) -> int:
+    """Default re-detect cadence (ticks) for a detector name.
+
+    The face cascade is cheap, so face/auto re-detect every couple ticks; HOG is
+    slower, so it uses the longer ``FOLLOW_DETECT_INTERVAL_TICKS``.
+    """
+    key = (name or config.FOLLOW_DETECTOR_DEFAULT).strip().lower()
+    if key in ("face", "auto"):
+        return config.FOLLOW_FACE_DETECT_INTERVAL_TICKS
+    return config.FOLLOW_DETECT_INTERVAL_TICKS
+
+
+# --------------------------------------------------------------------------- #
 # Between-detection tracker (cv2 if available; in-repo hold otherwise)
 # --------------------------------------------------------------------------- #
 def _resolve_cv2_tracker_factory():
@@ -225,11 +373,23 @@ class PersonTracker:
         detect_interval: int = config.FOLLOW_DETECT_INTERVAL_TICKS,
         track_min_score: float = config.FOLLOW_TRACK_MIN_SCORE,
         score_decay: float = 0.92,
+        max_coast_ticks: int = config.FOLLOW_COAST_TICKS,
+        min_box_area_frac: float = config.FOLLOW_MIN_BOX_AREA_FRAC,
+        edge_margin_frac: float = config.FOLLOW_EDGE_MARGIN_FRAC,
+        max_jump_frac: float = config.FOLLOW_MAX_JUMP_FRAC,
     ) -> None:
         self._detector = detector
         self.detect_interval = max(1, int(detect_interval))
         self.track_min_score = float(track_min_score)
         self.score_decay = float(score_decay)
+        # After this many ticks coasting on the cheap tracker WITHOUT a fresh
+        # detector confirmation, stop claiming the box is visible — a fresh
+        # detection (not a coasting tracker) is required to re-lock.
+        self.max_coast_ticks = max(0, int(max_coast_ticks))
+        # Sanity-rejection thresholds (drop implausible one-off detections).
+        self.min_box_area_frac = float(min_box_area_frac)
+        self.edge_margin_frac = float(edge_margin_frac)
+        self.max_jump_frac = float(max_jump_frac)
 
         self._cv2_factory = None
         self._cv2_resolved = False
@@ -270,17 +430,46 @@ class PersonTracker:
     def _detect_and_reseed(self, frame) -> TrackResult:
         detections = self._get_detector().detect(frame)
         self._ticks_since_detector = 0
-        if not detections:
-            # The detector ran and confirmed nobody is there — drop the box.
+        h, w = frame.shape[:2]
+        prev = self._bbox
+        # Drop implausible one-off detections (tiny, hard against a frame edge
+        # with no continuity, or an implausible jump) so a far-edge false positive
+        # like the observed x=-0.83 can never get latched into a stale lock.
+        plausible = [d for d in detections if self._plausible(d.bbox, w, h, prev)]
+        if not plausible:
+            # No trustworthy detection — drop the box and report lost.
             self._bbox, self._score, self._tracker = None, 0.0, None
             return TrackResult(False, None, 0.0, 0, True)
 
-        best = max(detections, key=lambda d: d.area)
+        best = max(plausible, key=lambda d: d.area)
         self._bbox = best.bbox
         self._score = best.score
         self._tracker = self._make_tracker(frame, best.bbox)
         visible = self._score >= self.track_min_score
         return TrackResult(visible, self._bbox, self._score, 0, True)
+
+    def _plausible(self, bbox: Bbox, fw: int, fh: int, prev: Optional[Bbox]) -> bool:
+        """Reject implausible detections (sanity gate before latching a box)."""
+        x, y, w, h = bbox
+        if w <= 0 or h <= 0 or fw <= 0 or fh <= 0:
+            return False
+        # Too tiny to be a real target at this range.
+        if (w * h) < self.min_box_area_frac * (fw * fh):
+            return False
+        cx = x + w / 2.0
+        if prev is None:
+            # A FRESH box (no track to provide continuity) jammed against a left
+            # or right edge is almost always a false positive — reject it.
+            margin = self.edge_margin_frac * fw
+            if cx < margin or cx > (fw - margin):
+                return False
+        else:
+            # We are already tracking: reject an implausible teleport away from
+            # the current box (a transient detection elsewhere in the frame).
+            pcx = prev[0] + prev[2] / 2.0
+            if abs(cx - pcx) > self.max_jump_frac * fw:
+                return False
+        return True
 
     def _cheap_track(self, frame) -> TrackResult:
         self._ticks_since_detector += 1
@@ -296,7 +485,11 @@ class PersonTracker:
 
         self._bbox = bbox
         self._score *= self.score_decay
-        visible = self._score >= self.track_min_score
+        # Require a FRESH detection (not a coasting tracker) to keep the lock:
+        # once we have coasted past max_coast_ticks without a detector
+        # confirmation, report not-visible so a dead box is dropped promptly.
+        fresh_enough = self._ticks_since_detector <= self.max_coast_ticks
+        visible = fresh_enough and (self._score >= self.track_min_score)
         return TrackResult(visible, self._bbox, self._score,
                            self._ticks_since_detector, False)
 
@@ -316,5 +509,9 @@ __all__ = [
     "TrackResult",
     "Detector",
     "HogPersonDetector",
+    "FaceDetector",
+    "AutoDetector",
+    "build_detector",
+    "detect_interval_for",
     "PersonTracker",
 ]

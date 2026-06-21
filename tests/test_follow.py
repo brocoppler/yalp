@@ -27,9 +27,16 @@ from yalp.reactive.follow import (
     REASON_REACHED,
     REASON_STALE,
     FollowController,
+    FollowDecision,
+    FollowReporter,
     frame_brightness,
 )
-from yalp.reactive.person_tracker import Detection, PersonTracker, TrackResult
+from yalp.reactive.person_tracker import (
+    Detection,
+    PersonTracker,
+    TrackResult,
+    detect_interval_for,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -357,6 +364,168 @@ def test_follow_stale_box_stops_via_backend():
     assert state.target_visible is False
     assert state.ticks_since_last_detector_confirmation == 20
     assert dec.reason == REASON_STALE
+
+
+# --------------------------------------------------------------------------- #
+# Desk-range detector selection (FIX 1) — no camera / no OpenCV needed
+# --------------------------------------------------------------------------- #
+def test_follow_cli_defaults_to_face_detector():
+    """`yalp follow` defaults to the desk-range FACE detector (not HOG)."""
+    import argparse
+
+    from yalp import config
+    from yalp.reactive import follow_cli
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers()
+    follow_cli.add_parser(sub)
+    args = parser.parse_args(["follow"])
+    assert args.detector is None  # unset -> resolved to the config default
+    resolved = args.detector or config.FOLLOW_DETECTOR_DEFAULT
+    assert resolved == "face"
+    # face/auto re-detect more often than the slower HOG.
+    assert detect_interval_for("face") <= detect_interval_for("hog")
+    assert detect_interval_for(None) == detect_interval_for("face")
+
+
+def test_follow_cli_accepts_detector_choices():
+    import argparse
+
+    from yalp.reactive import follow_cli
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers()
+    follow_cli.add_parser(sub)
+    for name in ("face", "hog", "auto"):
+        assert parser.parse_args(["follow", "--detector", name]).detector == name
+
+
+# --------------------------------------------------------------------------- #
+# Full detect -> track -> steer path with an injected fake detector (FIX 1/2)
+# --------------------------------------------------------------------------- #
+def _steer_from_detection(bbox) -> FollowDecision:
+    """Run a single detection through the real tracker + controller."""
+    frame = _bright_frame()  # 240x320
+    det = FakeDetector([[Detection(bbox, 0.9)]])
+    pt = PersonTracker(detector=det, detect_interval=detect_interval_for("face"))
+    res = pt.update(frame)
+    ctrl = FollowController()
+    return ctrl.decide(res, frame_w=320, frame_h=240, brightness=180)
+
+
+def test_face_detection_centered_drives_forward():
+    dec = _steer_from_detection((140, 100, 40, 40))  # centered, small/far
+    assert dec.target_visible is True
+    assert abs(dec.turn) < 1e-9
+    assert dec.forward > 0.0
+
+
+def test_face_detection_offcenter_turns_toward():
+    dec = _steer_from_detection((10, 100, 40, 90))  # off to the LEFT
+    assert dec.target_visible is True
+    assert dec.turn < 0  # turn left toward the person
+
+
+def test_face_detection_large_stops():
+    dec = _steer_from_detection((110, 20, 100, 200))  # big bbox -> close
+    assert dec.target_visible is True
+    assert dec.forward == 0.0
+    assert dec.reason == REASON_REACHED
+
+
+def test_one_off_edge_detection_is_not_latched():
+    """A single far-edge false positive (the observed x=-0.83) must NOT latch.
+
+    The sanity gate drops a FRESH detection jammed against the frame edge, so the
+    tracker never claims it visible and cannot coast on it for many ticks.
+    """
+    # One detection hard against the LEFT edge, then nothing.
+    det = FakeDetector([[Detection((0, 100, 18, 36), 0.9)], [], [], [], []])
+    pt = PersonTracker(detector=det, detect_interval=detect_interval_for("face"))
+    results = [pt.update(_bright_frame()) for _ in range(6)]
+    assert all(r.target_visible is False for r in results)
+    assert all(r.bbox is None for r in results)
+
+
+def test_target_visible_flips_false_promptly_after_face_lost():
+    """Once the detector stops returning a face, the lock drops within a few ticks.
+
+    A fresh detection — not a coasting tracker — is required to stay locked, so a
+    dead box can't be held for ~6 ticks like the observed stale coast.
+    """
+    seq = [[Detection((140, 90, 50, 60), 0.9)]] + [[] for _ in range(10)]
+    det = FakeDetector(seq)
+    pt = PersonTracker(detector=det, detect_interval=detect_interval_for("face"))
+    visibility = [pt.update(_bright_frame()).target_visible for _ in range(8)]
+    assert visibility[0] is True  # acquired on the first detection
+    # It must go (and stay) not-visible well before 6 ticks of stale coasting.
+    assert visibility[-1] is False
+    assert any(v is False for v in visibility[1:4])
+
+
+def test_implausible_jump_between_frames_is_rejected():
+    """While tracking, a transient detection that teleports across the frame is dropped."""
+    det = FakeDetector(
+        [
+            [Detection((20, 90, 50, 60), 0.9)],      # seed on the left
+            [Detection((290, 90, 40, 50), 0.9)],     # teleport to the right -> reject
+        ]
+    )
+    pt = PersonTracker(detector=det, detect_interval=1)
+    r0 = pt.update(_bright_frame())  # detect: seed on the left
+    pt.update(_bright_frame())       # cheap-track hold (counter ticks up)
+    r2 = pt.update(_bright_frame())  # detector reruns -> teleport rejected
+    assert r0.target_visible is True
+    assert r2.target_visible is False  # the teleport was not latched
+
+
+# --------------------------------------------------------------------------- #
+# Readable output: transitions + heartbeat, warm-up quiet (FIX 3)
+# --------------------------------------------------------------------------- #
+def _vis_decision() -> FollowDecision:
+    return FollowDecision(True, 0.1, 0.4, "tracking", "follow", error_x=0.1, bbox_h=0.4)
+
+
+def _lost_decision() -> FollowDecision:
+    return FollowDecision(False, 0.0, 0.0, "I lost you", REASON_LOST)
+
+
+def test_reporter_emits_on_acquire_and_lose_transitions():
+    rep = FollowReporter(heartbeat_s=1.5)
+    # First visible decision -> ACQUIRE line.
+    acq = rep.update(_vis_decision(), now=0.0)
+    assert acq is not None and "acquired" in acq
+    # Same visible state again right away -> quiet (no spam).
+    assert rep.update(_vis_decision(), now=0.1) is None
+    # Target lost -> LOSE line.
+    lost = rep.update(_lost_decision(), now=0.2)
+    assert lost is not None and "lost" in lost.lower()
+
+
+def test_reporter_heartbeat_is_periodic_not_per_tick():
+    rep = FollowReporter(heartbeat_s=1.5)
+    rep.update(_vis_decision(), now=0.0)  # acquire
+    # Within the heartbeat window: quiet.
+    assert rep.update(_vis_decision(), now=0.5) is None
+    assert rep.update(_vis_decision(), now=1.0) is None
+    # Past the window: one heartbeat summarizing the action.
+    hb = rep.update(_vis_decision(), now=2.0)
+    assert hb is not None and "tracking" in hb
+
+
+def test_reporter_is_silent_during_warmup():
+    rep = FollowReporter()
+    # Warm-up: even a "lost / too dark" decision is suppressed entirely.
+    assert rep.update(_lost_decision(), now=0.0, warming_up=True) is None
+    # First real (post-warmup) frame with a target -> acquire, not a stale "lost".
+    line = rep.update(_vis_decision(), now=0.1, warming_up=False)
+    assert line is not None and "acquired" in line
+
+
+def test_reporter_reports_safe_stop_as_lost():
+    rep = FollowReporter()
+    line = rep.update(_vis_decision(), now=0.0, safe_stop=True)
+    assert line is not None and "lost" in line.lower()
 
 
 def test_enter_follow_mode_is_fire_and_forget():

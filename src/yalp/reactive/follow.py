@@ -182,9 +182,94 @@ def decision_line(decision: Optional[FollowDecision]) -> str:
     )
 
 
+def _action_phrase(decision: FollowDecision) -> str:
+    """A compact 'what am I doing' phrase for a visible target."""
+    if decision.turn > 0:
+        steer = "turn right"
+    elif decision.turn < 0:
+        steer = "turn left"
+    else:
+        steer = "centered"
+    drive = "hold (close enough)" if decision.forward <= 0.0 else "forward"
+    return f"{steer} -> {drive}"
+
+
+def _searching_phrase(decision: Optional[FollowDecision], safe_stop: bool) -> str:
+    """A compact 'why am I stopped' phrase when there is no visible target."""
+    if safe_stop:
+        return "SAFE_STOP — collision-stop overrides follow"
+    if decision is None:
+        return "no target yet"
+    if decision.reason == REASON_DARK:
+        return "no target: too dark to see"
+    if decision.reason == REASON_STALE:
+        return "no target: box went stale"
+    return "no target"
+
+
+class FollowReporter:
+    """Turn a per-tick stream of decisions into READABLE output.
+
+    The raw loop produces one decision per tick; printing every tick spams an
+    identical line and makes it impossible to tell what is happening. This reporter
+    prints only what matters:
+
+      * a clear line when it **acquires** the target (👁  acquired you),
+      * a clear line when it **loses** it (❌  lost you — stop),
+      * and a periodic **heartbeat** (~every ``heartbeat_s`` seconds) summarizing
+        the current action while nothing else changes.
+
+    It also **quiets the warm-up**: while ``warming_up`` is True (the camera is
+    still auto-exposing) it stays silent and does not latch a transition, so the
+    first real frame — not the warm-up noise — is what counts as "acquired"/"lost".
+
+    :meth:`update` returns the line to print, or ``None`` to stay quiet this tick.
+    This is the testable decision function (no stdout coupling).
+    """
+
+    def __init__(self, *, heartbeat_s: float = config.FOLLOW_HEARTBEAT_S) -> None:
+        self.heartbeat_s = float(heartbeat_s)
+        self._was_visible: Optional[bool] = None
+        self._last_heartbeat: Optional[float] = None
+
+    def update(
+        self,
+        decision: Optional[FollowDecision],
+        now: float,
+        *,
+        warming_up: bool = False,
+        safe_stop: bool = False,
+    ) -> Optional[str]:
+        # Quiet the warm-up window entirely (no "too dark / lost" noise).
+        if warming_up:
+            return None
+
+        visible = bool(decision is not None and decision.target_visible and not safe_stop)
+
+        # State CHANGE — always announce immediately.
+        if visible != self._was_visible:
+            self._was_visible = visible
+            self._last_heartbeat = now
+            if visible:
+                return "👁  acquired you — centering / approaching"
+            return f"❌  lost you — stop ({_searching_phrase(decision, safe_stop)})"
+
+        # No change — emit at most one heartbeat per ``heartbeat_s``.
+        if self._last_heartbeat is None or (now - self._last_heartbeat) >= self.heartbeat_s:
+            self._last_heartbeat = now
+            if visible and decision is not None:
+                return (
+                    f"tracking: x={decision.error_x:+.2f} size={decision.bbox_h:.2f}"
+                    f" -> {_action_phrase(decision)}"
+                )
+            return f"searching: {_searching_phrase(decision, safe_stop)}"
+        return None
+
+
 __all__ = [
     "FollowDecision",
     "FollowController",
+    "FollowReporter",
     "frame_brightness",
     "decision_line",
     "REASON_FOLLOW",

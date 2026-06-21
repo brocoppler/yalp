@@ -61,6 +61,43 @@ TICK_BUDGET_MS: int = 33
 FOLLOW_DETECT_WIDTH: int = 384
 FOLLOW_DETECT_INTERVAL_TICKS: int = 5
 
+# Which detector `yalp follow` uses by default. The laptop default is "face"
+# (OpenCV's bundled Haar cascade) because at desk range a webcam frames only the
+# user's HEAD + UPPER TORSO, which the full-body HOG detector cannot see. "hog"
+# is the full standing-body detector (the eventual ROBOT looking across a room at
+# a standing person); "auto" tries face first and falls back to hog. The eventual
+# robot swaps a faster detector (MobileNet-SSD / YOLO-nano) in behind the same
+# Detector interface — Gate H (roadmap.md). Env-overridable for quick A/B.
+FOLLOW_DETECTOR_DEFAULT: str = os.environ.get("YALP_FOLLOW_DETECTOR", "face")
+
+# The face cascade is cheap, so re-detect far more often than HOG (every couple
+# ticks) — that keeps the cheap tracker from coasting on a dead box for long.
+FOLLOW_FACE_DETECT_INTERVAL_TICKS: int = 2
+
+# Expand a detected face box DOWNWARD by this fraction of its height to
+# approximate head+shoulders, giving a steadier distance proxy than the face
+# alone. Width is widened modestly for the shoulders too.
+FOLLOW_FACE_EXPAND_DOWN: float = 1.4
+
+# Sanity rejection of implausible detections (kills one-off edge false positives
+# like the observed x=-0.83 latch). A candidate box is dropped when its area is
+# below FOLLOW_MIN_BOX_AREA_FRAC of the frame; when it is a FRESH box (no current
+# track for continuity) whose center sits within FOLLOW_EDGE_MARGIN_FRAC of a
+# left/right frame edge; or when it jumps more than FOLLOW_MAX_JUMP_FRAC of the
+# frame width away from the box we are already tracking.
+FOLLOW_MIN_BOX_AREA_FRAC: float = 0.004
+FOLLOW_EDGE_MARGIN_FRAC: float = 0.08
+FOLLOW_MAX_JUMP_FRAC: float = 0.6
+
+# Camera warm-up: ignore (and don't print) the first few FOLLOW ticks while the
+# webcam auto-exposes, so the "too dark / lost" noise during warm-up is quieted.
+FOLLOW_WARMUP_TICKS: int = 6
+
+# Live read-out cadence: print a heartbeat summarizing the current action at most
+# this often (seconds). Acquire/lose transitions print immediately; otherwise we
+# stay quiet instead of spamming an identical line every tick.
+FOLLOW_HEARTBEAT_S: float = 1.5
+
 # A held/tracked box below this confidence (0..1) is treated as not-visible.
 FOLLOW_TRACK_MIN_SCORE: float = 0.20
 
@@ -75,7 +112,9 @@ FOLLOW_STOP_BBOX_HEIGHT: float = 0.60  # bbox height / frame height = "close eno
 # re-confirmation before STOPPING and reporting "I lost you" (never drive blind
 # on a stale box, §2.2/§4); and treat a frame dimmer than this mean brightness
 # (0..255) as too dark to track (the lux-floor proxy for GOOD_LIGHT_LUX, §5).
-FOLLOW_COAST_TICKS: int = 8
+# Kept SHORT so a lost target is reported promptly (no 6-tick stale coasting):
+# a fresh detection — not just a coasting tracker — is required to stay locked.
+FOLLOW_COAST_TICKS: int = 3
 FOLLOW_DARK_BRIGHTNESS: float = 16.0
 
 # Localhost IPC endpoint for the reactive <-> deliberative socket (JSON lines).
@@ -122,6 +161,14 @@ class Config:
     tick_budget_ms: int = TICK_BUDGET_MS
     follow_detect_width: int = FOLLOW_DETECT_WIDTH
     follow_detect_interval_ticks: int = FOLLOW_DETECT_INTERVAL_TICKS
+    follow_detector_default: str = FOLLOW_DETECTOR_DEFAULT
+    follow_face_detect_interval_ticks: int = FOLLOW_FACE_DETECT_INTERVAL_TICKS
+    follow_face_expand_down: float = FOLLOW_FACE_EXPAND_DOWN
+    follow_min_box_area_frac: float = FOLLOW_MIN_BOX_AREA_FRAC
+    follow_edge_margin_frac: float = FOLLOW_EDGE_MARGIN_FRAC
+    follow_max_jump_frac: float = FOLLOW_MAX_JUMP_FRAC
+    follow_warmup_ticks: int = FOLLOW_WARMUP_TICKS
+    follow_heartbeat_s: float = FOLLOW_HEARTBEAT_S
     follow_track_min_score: float = FOLLOW_TRACK_MIN_SCORE
     follow_turn_deadband: float = FOLLOW_TURN_DEADBAND
     follow_turn_gain: float = FOLLOW_TURN_GAIN
@@ -169,6 +216,14 @@ __all__ = [
     "TICK_BUDGET_MS",
     "FOLLOW_DETECT_WIDTH",
     "FOLLOW_DETECT_INTERVAL_TICKS",
+    "FOLLOW_DETECTOR_DEFAULT",
+    "FOLLOW_FACE_DETECT_INTERVAL_TICKS",
+    "FOLLOW_FACE_EXPAND_DOWN",
+    "FOLLOW_MIN_BOX_AREA_FRAC",
+    "FOLLOW_EDGE_MARGIN_FRAC",
+    "FOLLOW_MAX_JUMP_FRAC",
+    "FOLLOW_WARMUP_TICKS",
+    "FOLLOW_HEARTBEAT_S",
     "FOLLOW_TRACK_MIN_SCORE",
     "FOLLOW_TURN_DEADBAND",
     "FOLLOW_TURN_GAIN",

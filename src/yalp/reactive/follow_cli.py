@@ -6,9 +6,18 @@ exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
 
     yalp follow                 # follow a real person on the real webcam (Ctrl-C)
     yalp follow --seconds 10    # auto-stop after 10 s
+    yalp follow --detector hog  # use the full-body detector (robot/room range)
     yalp follow --preview       # also show an OpenCV window (if a display exists)
     yalp follow --synthetic     # no-camera demo (synthetic frames; will report lost)
-    yalp follow --benchmark     # print the laptop detector/tracker/FOLLOW fps baseline
+    yalp follow --benchmark     # print the selected detector/tracker/FOLLOW fps baseline
+
+DETECTOR (``--detector``): the default ``face`` (OpenCV's bundled Haar cascade)
+is reliable at DESK range, where a webcam frames only the user's head+shoulders —
+the full-body ``hog`` detector cannot see that and just reports "lost". ``hog`` is
+the full standing-body detector for the eventual ROBOT looking across a room;
+``auto`` tries face then falls back to hog. All three sit behind the same pluggable
+Detector interface, so the eventual robot swaps in a faster detector (Gate H)
+without changing FOLLOW.
 
 REAL EYES + FAKE WHEELS: the wheels are simulated by ``FakeReactiveBackend`` but
 the camera is real. Each tick grabs the latest frame from the reactive layer's
@@ -68,6 +77,17 @@ def add_parser(subparsers) -> None:
         ),
     )
     parser.add_argument(
+        "--detector",
+        choices=("face", "hog", "auto"),
+        default=None,  # resolved to config.FOLLOW_DETECTOR_DEFAULT ("face")
+        help=(
+            "Person detector: 'face' (DEFAULT) — bundled Haar face cascade, reliable "
+            "at desk range (head+shoulders webcam framing); 'hog' — full standing-body "
+            "detector (robot/room range); 'auto' — face, falling back to hog. The "
+            "eventual robot swaps a faster detector in behind the same interface (Gate H)."
+        ),
+    )
+    parser.add_argument(
         "--synthetic",
         action="store_true",
         help=(
@@ -87,45 +107,77 @@ def add_parser(subparsers) -> None:
 
 def run(args) -> int:
     """Handler for ``yalp follow``. Returns a process exit code."""
+    from .. import config
+
     source = "synthetic" if getattr(args, "synthetic", False) else "webcam"
+    detector = getattr(args, "detector", None) or config.FOLLOW_DETECTOR_DEFAULT
     if getattr(args, "benchmark", False):
-        return _benchmark(source=source, seconds=args.seconds or 4.0)
+        return _benchmark(source=source, seconds=args.seconds or 4.0, detector=detector)
     return _live(
         source=source,
         seconds=args.seconds,
         preview=bool(getattr(args, "preview", False)),
         hz=max(1.0, float(args.hz)),
+        detector=detector,
     )
 
 
 # --------------------------------------------------------------------------- #
 # Live FOLLOW
 # --------------------------------------------------------------------------- #
-def _live(*, source: str, seconds: Optional[float], preview: bool, hz: float) -> int:
+def _live(
+    *, source: str, seconds: Optional[float], preview: bool, hz: float, detector: str
+) -> int:
+    from .. import config
     from ..contract.messages import Intent, Mode
     from .fake_backend import FakeReactiveBackend
-    from .follow import decision_line
+    from .follow import FollowReporter, frame_brightness
 
-    backend = FakeReactiveBackend(camera_source=source, tick_hz=hz)
+    tracker = _build_tracker(detector)
+    backend = FakeReactiveBackend(camera_source=source, tick_hz=hz, tracker=tracker)
     backend.start()
     # Enter FOLLOW (this is exactly what `enter_follow_mode` / "follow me" does).
     backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))
 
     print(
-        f"yalp follow — REAL EYES + FAKE WHEELS (camera={backend.camera().source}). "
+        f"yalp follow — REAL EYES + FAKE WHEELS "
+        f"(camera={backend.camera().source}, detector={detector}). "
         f"{'Stopping after %.0fs.' % seconds if seconds else 'Ctrl-C to stop.'}"
     )
+    print("warming up camera…")
+
+    reporter = FollowReporter()
     previewer = _Previewer() if preview else None
+    dark = config.FOLLOW_DARK_BRIGHTNESS
+    warmup_ticks = config.FOLLOW_WARMUP_TICKS
+    exposed = False
+    i = 0
     dt = 1.0 / hz
     deadline = (time.monotonic() + seconds) if seconds else None
     try:
         while deadline is None or time.monotonic() < deadline:
             t0 = time.monotonic()
+            i += 1
             state = backend.tick()
             decision = backend.last_follow_decision
-            print(_line(state, decision, decision_line))
+            frame = backend.camera().latest()
+            brightness = frame_brightness(frame)
+            safe_stop = getattr(state, "mode", None) == Mode.SAFE_STOP
+
+            # Quiet warm-up: stay silent until the camera is actually exposed (or
+            # we have waited the warm-up window), so the "too dark" startup noise
+            # never reaches the user.
+            if not exposed and (brightness >= dark or i >= warmup_ticks):
+                exposed = True
+            warming_up = not exposed
+
+            line = reporter.update(
+                decision, t0, warming_up=warming_up, safe_stop=safe_stop
+            )
+            if line is not None:
+                print(line)
             if previewer is not None:
-                previewer.show(backend.camera().latest(), state, decision)
+                previewer.show(frame, state, decision, brightness)
             elapsed = time.monotonic() - t0
             if dt > elapsed:
                 time.sleep(dt - elapsed)
@@ -138,26 +190,38 @@ def _live(*, source: str, seconds: Optional[float], preview: bool, hz: float) ->
     return 0
 
 
-def _line(state, decision, decision_line) -> str:
-    # SAFE_STOP (collision) overrides FOLLOW entirely — surface it clearly.
-    from ..contract.messages import Mode
+def _build_tracker(detector: str):
+    """Build a PersonTracker with the selected detector, or None on failure.
 
-    if getattr(state, "mode", None) == Mode.SAFE_STOP:
-        return "SAFE_STOP -> stop (collision-stop overrides follow)"
-    return decision_line(decision)
+    Returning ``None`` lets ``FakeReactiveBackend`` fall back to its lazy default
+    so a missing/odd OpenCV build still runs FOLLOW (degrading to "lost") instead
+    of crashing the CLI.
+    """
+    try:
+        from .person_tracker import PersonTracker, build_detector, detect_interval_for
+
+        det = build_detector(detector)
+        return PersonTracker(detector=det, detect_interval=detect_interval_for(detector))
+    except Exception as exc:  # pragma: no cover - opencv missing / bad build
+        print(f"[detector '{detector}' unavailable ({type(exc).__name__}: {exc}) — "
+              f"using default]")
+        return None
 
 
 # --------------------------------------------------------------------------- #
 # Benchmark (Gate H de-risk)
 # --------------------------------------------------------------------------- #
-def _benchmark(*, source: str, seconds: float) -> int:
+def _benchmark(*, source: str, seconds: float, detector: str) -> int:
     from .. import config
     from ..camera import Camera
     from ..contract.messages import Intent, Mode
     from .fake_backend import FakeReactiveBackend
-    from .person_tracker import HogPersonDetector, PersonTracker
+    from .person_tracker import PersonTracker, build_detector, detect_interval_for
 
-    print(f"yalp follow --benchmark — laptop fps baseline (source={source})\n")
+    print(
+        f"yalp follow --benchmark — laptop fps baseline "
+        f"(source={source}, detector={detector})\n"
+    )
 
     cam = Camera(source=source)
     cam.start()
@@ -168,24 +232,34 @@ def _benchmark(*, source: str, seconds: float) -> int:
         return 1
 
     try:
-        detector = HogPersonDetector()
+        det = build_detector(detector)
     except Exception as exc:  # pragma: no cover - opencv missing
-        print(f"could not build the HOG detector ({type(exc).__name__}: {exc}).")
+        print(f"could not build the '{detector}' detector "
+              f"({type(exc).__name__}: {exc}).")
         cam.stop()
         return 1
 
+    width = getattr(det, "detect_width", config.FOLLOW_DETECT_WIDTH)
+
     # 1. Detector-only throughput (the Gate H number, in isolation).
-    det_fps = _rate(seconds, lambda: detector.detect(cam.latest()))
+    det_fps = _rate(seconds, lambda: det.detect(cam.latest()))
 
     # 2. Cheap tracker-only throughput (detect once, then track between detections).
-    pt = PersonTracker(detector=detector, detect_interval=10_000)
+    pt = PersonTracker(detector=det, detect_interval=10_000)
     pt.update(cam.latest())  # one detection to seed
     trk_fps = _rate(seconds, lambda: pt.update(cam.latest()))
 
     cam.stop()
 
-    # 3. Combined FOLLOW tick rate (tracker + controller + state publish).
-    backend = FakeReactiveBackend(camera_source=source, tick_hz=1000.0)
+    # 3. Combined FOLLOW tick rate (tracker + controller + state publish) using the
+    #    SELECTED detector, at its normal re-detect cadence.
+    bench_tracker = PersonTracker(
+        detector=build_detector(detector),
+        detect_interval=detect_interval_for(detector),
+    )
+    backend = FakeReactiveBackend(
+        camera_source=source, tick_hz=1000.0, tracker=bench_tracker
+    )
     backend.start()
     backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))
     backend.tick()  # adopt FOLLOW
@@ -194,7 +268,7 @@ def _benchmark(*, source: str, seconds: float) -> int:
 
     gate = config.GATE_H_GO_HZ
     verdict = "GO" if det_fps >= gate else "NO-GO"
-    print(f"  detector (HOG @ {detector.detect_width}px) : {det_fps:6.1f} Hz")
+    print(f"  detector ({detector} @ {width}px) : {det_fps:6.1f} Hz")
     print(f"  cheap tracker (between detections)         : {trk_fps:6.1f} Hz")
     print(f"  combined FOLLOW tick rate                  : {follow_fps:6.1f} Hz")
     print()
@@ -204,7 +278,7 @@ def _benchmark(*, source: str, seconds: float) -> int:
         f"({det_fps:.1f} Hz vs {gate} Hz)"
     )
     print(
-        "\n  NOTE: this is the LAPTOP ceiling (OpenCV HOG, no NPU swap). The Pi 5\n"
+        "\n  NOTE: this is the LAPTOP ceiling (OpenCV, no NPU swap). The Pi 5\n"
         "  is slower — Gate H must be re-run on the Pi under concurrent load, and\n"
         "  on the Pi we'd swap in a faster detector (MobileNet-SSD / YOLO-nano)\n"
         "  behind the same Detector interface."
@@ -240,22 +314,44 @@ class _Previewer:
         except Exception:
             self._disable("opencv unavailable")
 
-    def show(self, frame, state, decision) -> None:
+    def show(self, frame, state, decision, brightness: float = 0.0) -> None:
         if not self._ok or frame is None:
             return
         try:
             import cv2
 
             img = frame.copy()
+            visible = decision is not None and decision.target_visible
+            # BGR: green when tracking, red when lost.
+            color = (0, 200, 0) if visible else (0, 0, 255)
+
             bbox = getattr(state, "target_bbox", None)
             if bbox is not None:
                 x, y, w, h = (int(v) for v in bbox)
-                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            label = "lost" if decision is None or not decision.target_visible else (
-                f"turn={decision.turn:+.2f} fwd={decision.forward:.2f}"
-            )
-            cv2.putText(img, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (0, 255, 0), 2, cv2.LINE_AA)
+                cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+
+            status = "TRACKING" if visible else "LOST"
+            cv2.putText(img, status, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                        color, 2, cv2.LINE_AA)
+
+            # Steering decision: a turn arrow + forward/stop, or the lost reason.
+            if visible and decision is not None:
+                if decision.turn > 0.02:
+                    steer = "-> RIGHT"
+                elif decision.turn < -0.02:
+                    steer = "<- LEFT"
+                else:
+                    steer = "CENTER"
+                drive = "STOP" if decision.forward <= 0.0 else "FORWARD"
+                steer_label = f"{steer} | {drive}"
+            else:
+                steer_label = decision.status if decision is not None else "no target"
+            cv2.putText(img, steer_label, (8, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        color, 2, cv2.LINE_AA)
+
+            cv2.putText(img, f"brightness={brightness:.0f}", (8, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
+
             cv2.imshow(self.WINDOW, img)
             cv2.waitKey(1)
         except Exception as exc:  # headless build / no display
