@@ -11,15 +11,20 @@ Two seams keep this honest and portable:
   * **The detector is pluggable** behind :class:`Detector`. The laptop/desk
     default is the bundled-Haar-cascade **face detector** (:class:`FaceDetector`),
     because a webcam at desk range frames only the user's HEAD + UPPER TORSO, which
-    the full-body **HOG people detector** (:class:`HogPersonDetector`) — trained on
-    standing bodies — cannot see. HOG remains the right choice for the eventual
-    ROBOT looking across a room at a *standing* person, and ``AutoDetector`` tries
-    face then falls back to HOG. All ship with ``opencv-python`` and need **no
-    model-file download**. On the Pi we would swap in a faster detector
-    (MobileNet-SSD / YOLO-nano via onnxruntime or ncnn) **behind this same
-    interface** — Gate H (roadmap.md) decides whether the Pi sustains the
-    ``config.GATE_H_GO_HZ`` floor that makes track-by-detection viable. Nothing
-    else in FOLLOW changes when that swap happens.
+    the full-body detectors — trained on standing bodies — cannot see. For the
+    ROBOT looking across a room the right default is the ORIENTATION-AGNOSTIC
+    :class:`DnnPersonDetector`: a real **body** detector run through OpenCV's
+    BUILT-IN ``cv2.dnn`` module (MobileNet-SSD, **no new pip dependency** — only a
+    downloadable, cached model file) that fires from ANY angle — front, **back**,
+    side — so follow keeps working when the user walks AWAY. :class:`HogPersonDetector`
+    is OpenCV's built-in (download-free) standing-body alternative, and
+    ``AutoDetector`` prefers the cv2.dnn person detector with a face fallback for
+    close-ups. The cv2.dnn detector is also the **Gate H** candidate: Gate H
+    (roadmap.md) decides whether the Pi sustains the ``config.GATE_H_GO_HZ`` floor
+    that makes track-by-detection viable. Nothing else in FOLLOW changes across the
+    swap — the model loads lazily from a cached file (see
+    :func:`ensure_dnn_model_files`), so this module still imports with no OpenCV and
+    no model present, and tests inject a fake net.
   * **The between-detection tracker is pluggable too.** We prefer a real OpenCV
     legacy tracker (CSRT/KCF) when the installed OpenCV exposes one — handling the
     ``cv2.legacy.*`` vs ``cv2.Tracker*_create`` vs *missing* differences across
@@ -229,57 +234,255 @@ class FaceDetector:
         return (nx, ny, nw, nh)
 
 
-class AutoDetector:
-    """Try the FACE detector first; fall back to HOG when no face is found.
+# --------------------------------------------------------------------------- #
+# The room-range, ORIENTATION-AGNOSTIC default: a cv2.dnn person detector
+# --------------------------------------------------------------------------- #
+def ensure_dnn_model_files(
+    model_dir: Optional[str] = None,
+    *,
+    prototxt_url: str = config.FOLLOW_DNN_PROTOTXT_URL,
+    caffemodel_url: str = config.FOLLOW_DNN_CAFFEMODEL_URL,
+    prototxt_name: str = config.FOLLOW_DNN_PROTOTXT_NAME,
+    caffemodel_name: str = config.FOLLOW_DNN_CAFFEMODEL_NAME,
+    download: bool = True,
+) -> Tuple[str, str]:
+    """Locate (and, if missing, download once) the MobileNet-SSD model files.
 
-    Good when the user may sit at a desk *or* stand across the room: the cheap
-    face pass handles desk range, and the (slower) full-body HOG pass catches the
-    standing case. The HOG detector is built lazily on first fallback.
+    Returns ``(prototxt_path, caffemodel_path)`` for files cached under
+    ``model_dir`` (default :data:`config.FOLLOW_MODEL_CACHE_DIR`). This is **lazy**:
+    it is only ever called when a real :class:`DnnPersonDetector` net is first
+    built — never at import and never in tests (which inject a fake net). Network
+    access only happens when a file is actually missing.
+
+    GRACEFUL FAILURE: if a file is missing and the download fails (offline, blocked
+    mirror, …) this raises a clear :class:`RuntimeError` that tells the operator the
+    exact filenames, the cache path to drop them into, and the source URLs — never a
+    cryptic stack trace deep inside OpenCV.
+    """
+    import os
+    from pathlib import Path
+
+    cache = Path(model_dir or config.FOLLOW_MODEL_CACHE_DIR).expanduser()
+    proto = cache / prototxt_name
+    model = cache / caffemodel_name
+    if proto.exists() and model.exists():
+        return str(proto), str(model)
+
+    wants = [(prototxt_url, proto), (caffemodel_url, model)]
+    missing = [dest.name for _, dest in wants if not dest.exists()]
+
+    def _instructions(extra: str = "") -> str:
+        return (
+            f"Person detector model files are missing{(' — ' + extra) if extra else ''}.\n"
+            f"  Needed files : {prototxt_name}, {caffemodel_name}\n"
+            f"  Cache path   : {cache}\n"
+            f"  Sources      : {prototxt_url}\n"
+            f"                 {caffemodel_url}\n"
+            f"Drop both files into the cache path above (or set "
+            f"YALP_MODEL_CACHE_DIR / YALP_DNN_*_URL), then retry. To use the "
+            f"webcam-friendly desk detector instead, run with '--detector face'."
+        )
+
+    if not download:
+        raise FileNotFoundError(_instructions(f"missing {', '.join(missing)}"))
+
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        for url, dest in wants:
+            if not dest.exists():
+                _download_file(url, dest)
+    except Exception as exc:  # offline / blocked / partial write
+        raise RuntimeError(_instructions(f"download failed: {exc}")) from exc
+
+    return str(proto), str(model)
+
+
+def _download_file(url: str, dest) -> None:
+    """Download ``url`` to ``dest`` atomically (temp file + rename), stdlib only."""
+    import os
+    import tempfile
+    import urllib.request
+    from pathlib import Path
+
+    dest = Path(dest)
+    fd, tmp = tempfile.mkstemp(dir=str(dest.parent), suffix=".part")
+    os.close(fd)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp, open(tmp, "wb") as out:
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                out.write(chunk)
+        os.replace(tmp, str(dest))
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:  # pragma: no cover - best-effort cleanup
+                pass
+
+
+class DnnPersonDetector:
+    """Orientation-agnostic person detector via OpenCV's BUILT-IN ``cv2.dnn``.
+
+    This is the REAL person detector for the robot's FOLLOW: a **body** detector
+    (not a face detector), so it fires whether the person faces the camera, turns
+    their **back**, or is seen from the **side** — which is exactly what makes
+    robot-follow work when the user walks AWAY. It runs MobileNet-SSD (Caffe) with
+    ``cv2.dnn.readNetFromCaffe`` (NO new pip dependency — only a downloadable model
+    file), keeps the Pascal-VOC ``person`` class (index 15), applies a confidence
+    threshold, and returns the **largest** person as the target.
+
+    Laziness / mockability (so tests need neither the model nor a camera):
+
+      * ``cv2`` is imported lazily, only inside :meth:`detect` / net construction.
+      * The net is built lazily on the FIRST :meth:`detect` call (never at import
+        or construction), via :func:`ensure_dnn_model_files` (download-once-cache).
+      * Tests inject a fake ``net`` (with a ``setInput``/``forward`` pair returning
+        canned raw detections) so the model loader is never invoked.
+    """
+
+    def __init__(
+        self,
+        *,
+        net=None,
+        confidence: float = config.FOLLOW_DNN_CONFIDENCE,
+        input_size: int = config.FOLLOW_DNN_INPUT_SIZE,
+        person_class_id: int = config.FOLLOW_DNN_PERSON_CLASS_ID,
+        model_dir: Optional[str] = None,
+        loader=ensure_dnn_model_files,
+    ) -> None:
+        self._net = net  # injected fake (tests) or None -> lazy real load
+        self.confidence = float(confidence)
+        self.input_size = int(input_size)
+        self.person_class_id = int(person_class_id)
+        self.model_dir = model_dir
+        self._loader = loader
+        # Reported for the benchmark read-out (the net resizes to a square input,
+        # so the effective "detect width" is the network input edge, not the frame).
+        self.detect_width = int(input_size)
+
+    # -- lazy net (real load only on first use) ------------------------------
+    def _get_net(self):
+        if self._net is None:
+            import cv2  # lazy: only when a REAL net is actually built
+
+            proto, model = self._loader(self.model_dir)
+            self._net = cv2.dnn.readNetFromCaffe(proto, model)
+        return self._net
+
+    def detect(self, frame) -> List[Detection]:
+        if frame is None:
+            return []
+        import cv2  # lazy
+
+        net = self._get_net()
+        h, w = frame.shape[:2]
+        # MobileNet-SSD preprocessing: scale 1/127.5, mean 127.5, 300x300 input.
+        blob = cv2.dnn.blobFromImage(
+            frame,
+            scalefactor=0.007843,
+            size=(self.input_size, self.input_size),
+            mean=127.5,
+        )
+        net.setInput(blob)
+        raw = net.forward()  # shape (1, 1, N, 7): [_, class, conf, x1, y1, x2, y2]
+
+        out: List[Detection] = []
+        n = raw.shape[2]
+        for i in range(n):
+            cls = int(raw[0, 0, i, 1])
+            if cls != self.person_class_id:  # keep ONLY the person class
+                continue
+            conf = float(raw[0, 0, i, 2])
+            if conf < self.confidence:  # confidence threshold
+                continue
+            x1 = raw[0, 0, i, 3] * w
+            y1 = raw[0, 0, i, 4] * h
+            x2 = raw[0, 0, i, 5] * w
+            y2 = raw[0, 0, i, 6] * h
+            bx = max(0, int(round(x1)))
+            by = max(0, int(round(y1)))
+            bw = int(round(x2 - x1))
+            bh = int(round(y2 - y1))
+            if bw <= 0 or bh <= 0:
+                continue
+            out.append(Detection(bbox=(bx, by, bw, bh), score=conf))
+        if not out:
+            return out
+        # The nearest person is the largest box -> the FOLLOW target.
+        return [max(out, key=lambda d: d.area)]
+
+
+class AutoDetector:
+    """Prefer the orientation-agnostic PERSON detector; fall back to FACE close-up.
+
+    Blend (documented): at room range a standing person — from ANY angle — is best
+    caught by the cv2.dnn :class:`DnnPersonDetector`, so we try it FIRST. When it
+    finds nobody (e.g. a desk-range close-up that frames only head+shoulders, which
+    a whole-body detector can miss) we fall back to the cheap :class:`FaceDetector`.
+    Both are built lazily. If the person detector cannot load at all (offline / no
+    model file), we remember that and quietly run face-only thereafter — so FOLLOW
+    still works without the download instead of crashing.
     """
 
     def __init__(self, *, detect_width: int = config.FOLLOW_DETECT_WIDTH) -> None:
         self.detect_width = int(detect_width)
-        self._face = FaceDetector(detect_width=detect_width)
-        self._hog: Optional[HogPersonDetector] = None
+        self._person: Optional[DnnPersonDetector] = None
+        self._person_failed = False
+        self._face: Optional[FaceDetector] = None
 
     def detect(self, frame) -> List[Detection]:
-        faces = self._face.detect(frame)
-        if faces:
-            return faces
-        if self._hog is None:
-            self._hog = HogPersonDetector(detect_width=self.detect_width)
-        return self._hog.detect(frame)
+        if not self._person_failed:
+            try:
+                if self._person is None:
+                    self._person = DnnPersonDetector()
+                people = self._person.detect(frame)
+                if people:
+                    return people
+            except Exception:
+                # No model / offline / bad build -> stop trying, use face only.
+                self._person_failed = True
+        if self._face is None:
+            self._face = FaceDetector(detect_width=self.detect_width)
+        return self._face.detect(frame)
 
 
 def build_detector(
     name: Optional[str] = None, *, detect_width: int = config.FOLLOW_DETECT_WIDTH
 ) -> Detector:
-    """Construct a detector by name: ``face`` (default), ``hog`` or ``auto``.
+    """Construct a detector by name: ``face`` (default), ``hog``, ``person`` or ``auto``.
 
     The default ``face`` is reliable at *desk* range (head+shoulders webcam
-    framing); ``hog`` is the full-body detector for the robot/room range; ``auto``
-    tries face then falls back to hog. All three share the :class:`Detector`
-    interface, so the eventual robot can swap in a faster detector (Gate H)
-    without touching FOLLOW.
+    framing); ``hog`` is OpenCV's built-in standing-body detector; ``person`` is
+    the ORIENTATION-AGNOSTIC cv2.dnn MobileNet-SSD body detector (front/back/side
+    at room range — what the ROBOT's follow defaults to); ``auto`` prefers the
+    person detector and falls back to face for close-ups. All share the
+    :class:`Detector` interface, so FOLLOW is unchanged behind any of them. The
+    ``person`` net + model files load lazily on first use (never here / at import).
     """
     key = (name or config.FOLLOW_DETECTOR_DEFAULT).strip().lower()
     if key == "face":
         return FaceDetector(detect_width=detect_width)
     if key == "hog":
         return HogPersonDetector(detect_width=detect_width)
+    if key == "person":
+        return DnnPersonDetector()
     if key == "auto":
         return AutoDetector(detect_width=detect_width)
-    raise ValueError(f"unknown detector {name!r} (choose face, hog or auto)")
+    raise ValueError(f"unknown detector {name!r} (choose face, hog, person or auto)")
 
 
 def detect_interval_for(name: Optional[str] = None) -> int:
     """Default re-detect cadence (ticks) for a detector name.
 
-    The face cascade is cheap, so face/auto re-detect every couple ticks; HOG is
-    slower, so it uses the longer ``FOLLOW_DETECT_INTERVAL_TICKS``.
+    The face cascade is cheap, so face re-detects every couple ticks; the slower
+    HOG / cv2.dnn ``person`` / ``auto`` (person-first) detectors use the longer
+    ``FOLLOW_DETECT_INTERVAL_TICKS``.
     """
     key = (name or config.FOLLOW_DETECTOR_DEFAULT).strip().lower()
-    if key in ("face", "auto"):
+    if key == "face":
         return config.FOLLOW_FACE_DETECT_INTERVAL_TICKS
     return config.FOLLOW_DETECT_INTERVAL_TICKS
 
@@ -510,7 +713,9 @@ __all__ = [
     "Detector",
     "HogPersonDetector",
     "FaceDetector",
+    "DnnPersonDetector",
     "AutoDetector",
+    "ensure_dnn_model_files",
     "build_detector",
     "detect_interval_for",
     "PersonTracker",

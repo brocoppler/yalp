@@ -61,14 +61,59 @@ TICK_BUDGET_MS: int = 33
 FOLLOW_DETECT_WIDTH: int = 384
 FOLLOW_DETECT_INTERVAL_TICKS: int = 5
 
-# Which detector `yalp follow` uses by default. The laptop default is "face"
+# Which detector `yalp follow` uses by default. The laptop/desk default is "face"
 # (OpenCV's bundled Haar cascade) because at desk range a webcam frames only the
-# user's HEAD + UPPER TORSO, which the full-body HOG detector cannot see. "hog"
-# is the full standing-body detector (the eventual ROBOT looking across a room at
-# a standing person); "auto" tries face first and falls back to hog. The eventual
-# robot swaps a faster detector (MobileNet-SSD / YOLO-nano) in behind the same
-# Detector interface — Gate H (roadmap.md). Env-overridable for quick A/B.
+# user's HEAD + UPPER TORSO, which the full-body detectors cannot see. "hog" is
+# OpenCV's built-in standing-body detector; "person" is the ORIENTATION-AGNOSTIC
+# MobileNet-SSD body detector (front/back/side at room range — what the ROBOT's
+# follow defaults to, so it keeps tracking when the user walks AWAY); "auto"
+# prefers the person detector at range and falls back to face for close-ups.
+# Env-overridable for quick A/B. NOTE: the eventual robot defaults to "person";
+# "face" is the desk-only convenience default here.
 FOLLOW_DETECTOR_DEFAULT: str = os.environ.get("YALP_FOLLOW_DETECTOR", "face")
+
+# --- Orientation-agnostic DNN person detector (Gate H candidate) -------------
+# A REAL person detector that fires from ANY angle (front/back/side) at room
+# range, run via OpenCV's BUILT-IN cv2.dnn module (NO new pip dependency). The
+# default is MobileNet-SSD (Caffe), which detects the Pascal-VOC "person" class
+# (index 15) from a 300x300 input. The model files are NOT bundled (binaries are
+# gitignored); they are downloaded once on first use and cached under
+# FOLLOW_MODEL_CACHE_DIR. All values are env-overridable so the operator can pin
+# a mirror or pre-seed the cache. See person_tracker.DnnPersonDetector.
+FOLLOW_MODEL_CACHE_DIR: str = os.environ.get(
+    "YALP_MODEL_CACHE_DIR", os.path.expanduser("~/.cache/yalp/models")
+)
+# Pascal-VOC class index for "person" in the MobileNet-SSD output.
+FOLLOW_DNN_PERSON_CLASS_ID: int = int(
+    os.environ.get("YALP_DNN_PERSON_CLASS_ID", "15")
+)
+# Square network input edge (MobileNet-SSD expects 300x300).
+FOLLOW_DNN_INPUT_SIZE: int = int(os.environ.get("YALP_DNN_INPUT_SIZE", "300"))
+# Minimum detection confidence (0..1) to accept a person box.
+FOLLOW_DNN_CONFIDENCE: float = float(
+    os.environ.get("YALP_DNN_CONFIDENCE", "0.5")
+)
+# Cached model filenames (what to drop into FOLLOW_MODEL_CACHE_DIR by hand if the
+# automatic download is blocked / offline).
+FOLLOW_DNN_PROTOTXT_NAME: str = os.environ.get(
+    "YALP_DNN_PROTOTXT_NAME", "MobileNetSSD_deploy.prototxt"
+)
+FOLLOW_DNN_CAFFEMODEL_NAME: str = os.environ.get(
+    "YALP_DNN_CAFFEMODEL_NAME", "MobileNetSSD_deploy.caffemodel"
+)
+# Stable, reputable download sources for the MobileNet-SSD deploy files (prototxt
+# + caffemodel from the same repo, so the layer names match). Env-overridable so
+# the operator can point at an internal mirror.
+FOLLOW_DNN_PROTOTXT_URL: str = os.environ.get(
+    "YALP_DNN_PROTOTXT_URL",
+    "https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/"
+    "MobileNetSSD_deploy.prototxt",
+)
+FOLLOW_DNN_CAFFEMODEL_URL: str = os.environ.get(
+    "YALP_DNN_CAFFEMODEL_URL",
+    "https://github.com/djmv/MobilNet_SSD_opencv/raw/master/"
+    "MobileNetSSD_deploy.caffemodel",
+)
 
 # The face cascade is cheap, so re-detect far more often than HOG (every couple
 # ticks) — that keeps the cheap tracker from coasting on a dead box for long.
@@ -162,6 +207,10 @@ class Config:
     follow_detect_width: int = FOLLOW_DETECT_WIDTH
     follow_detect_interval_ticks: int = FOLLOW_DETECT_INTERVAL_TICKS
     follow_detector_default: str = FOLLOW_DETECTOR_DEFAULT
+    follow_model_cache_dir: str = FOLLOW_MODEL_CACHE_DIR
+    follow_dnn_person_class_id: int = FOLLOW_DNN_PERSON_CLASS_ID
+    follow_dnn_input_size: int = FOLLOW_DNN_INPUT_SIZE
+    follow_dnn_confidence: float = FOLLOW_DNN_CONFIDENCE
     follow_face_detect_interval_ticks: int = FOLLOW_FACE_DETECT_INTERVAL_TICKS
     follow_face_expand_down: float = FOLLOW_FACE_EXPAND_DOWN
     follow_min_box_area_frac: float = FOLLOW_MIN_BOX_AREA_FRAC
@@ -217,6 +266,14 @@ __all__ = [
     "FOLLOW_DETECT_WIDTH",
     "FOLLOW_DETECT_INTERVAL_TICKS",
     "FOLLOW_DETECTOR_DEFAULT",
+    "FOLLOW_MODEL_CACHE_DIR",
+    "FOLLOW_DNN_PERSON_CLASS_ID",
+    "FOLLOW_DNN_INPUT_SIZE",
+    "FOLLOW_DNN_CONFIDENCE",
+    "FOLLOW_DNN_PROTOTXT_NAME",
+    "FOLLOW_DNN_CAFFEMODEL_NAME",
+    "FOLLOW_DNN_PROTOTXT_URL",
+    "FOLLOW_DNN_CAFFEMODEL_URL",
     "FOLLOW_FACE_DETECT_INTERVAL_TICKS",
     "FOLLOW_FACE_EXPAND_DOWN",
     "FOLLOW_MIN_BOX_AREA_FRAC",

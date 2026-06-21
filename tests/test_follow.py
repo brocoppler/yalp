@@ -396,7 +396,7 @@ def test_follow_cli_accepts_detector_choices():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers()
     follow_cli.add_parser(sub)
-    for name in ("face", "hog", "auto"):
+    for name in ("face", "hog", "person", "auto"):
         assert parser.parse_args(["follow", "--detector", name]).detector == name
 
 

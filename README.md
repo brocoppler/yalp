@@ -63,11 +63,30 @@ pattern when no camera is available.
 | `yalp follow` | **FOLLOW mode** (track-by-detection, software-spec.md §4): detect/track the nearest person on the real webcam and steer the simulated wheels toward them (turn to center, drive forward until close; clean stop when lost/stale or too dark). |
 
 `yalp follow` flags: `--seconds N` (auto-stop), `--preview` (OpenCV overlay window
-if a display is available; headless-safe), `--synthetic` (no-camera demo), and
-`--benchmark` — print the laptop detector / tracker / FOLLOW-tick fps baseline and
-compare it to the **Gate H** GO threshold (`config.GATE_H_GO_HZ`). The laptop uses
-OpenCV's built-in HOG people detector (no model download); on the Pi we'd swap in a
-faster detector behind the same interface.
+if a display is available; headless-safe), `--synthetic` (no-camera demo),
+`--detector {face,hog,person,auto}`, and `--benchmark` — print the **selected**
+detector / tracker / FOLLOW-tick fps baseline and compare it to the **Gate H** GO
+threshold (`config.GATE_H_GO_HZ`).
+
+`--detector` picks the person detector:
+
+- `face` (**default**, desk-only) — OpenCV's bundled Haar face cascade; reliable at
+  desk range where the webcam frames only your head + shoulders.
+- `hog` — OpenCV's built-in standing-body detector (no model download).
+- `person` — **ORIENTATION-AGNOSTIC** cv2.dnn MobileNet-SSD body detector: tracks a
+  person from **any angle** (front, **back**, side) at room range, so follow keeps
+  working when you walk **away** with your back turned. This is the **robot's**
+  default (face is desk-only) and the **Gate H** detector candidate. It uses
+  OpenCV's built-in `cv2.dnn` (**no new pip dependency**) and downloads a small
+  model file once, cached under `~/.cache/yalp/models` (override with
+  `YALP_MODEL_CACHE_DIR`); offline it fails with clear instructions for dropping the
+  file in by hand. Try it: `yalp follow --detector person`, then stand back and turn
+  around — it should still track.
+- `auto` — prefers `person` at range, falls back to `face` for close-ups.
+
+Benchmark the Gate H candidate with `yalp follow --benchmark --detector person`. The
+laptop fps is a **ceiling**, not the gate verdict — Gate H is measured on the Pi
+(under concurrent load) later.
 
 ## Viewing the spec hub
 

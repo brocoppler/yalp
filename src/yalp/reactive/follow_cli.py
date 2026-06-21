@@ -4,20 +4,27 @@ Registered with the CLI via the documented feature-module contract: this module
 exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
 ``yalp.cli.FEATURE_MODULES``.
 
-    yalp follow                 # follow a real person on the real webcam (Ctrl-C)
-    yalp follow --seconds 10    # auto-stop after 10 s
-    yalp follow --detector hog  # use the full-body detector (robot/room range)
-    yalp follow --preview       # also show an OpenCV window (if a display exists)
-    yalp follow --synthetic     # no-camera demo (synthetic frames; will report lost)
-    yalp follow --benchmark     # print the selected detector/tracker/FOLLOW fps baseline
+    yalp follow                    # follow a real person on the real webcam (Ctrl-C)
+    yalp follow --seconds 10       # auto-stop after 10 s
+    yalp follow --detector person  # ORIENTATION-AGNOSTIC body detector (walk away!)
+    yalp follow --detector hog     # OpenCV's built-in standing-body detector
+    yalp follow --preview          # also show an OpenCV window (if a display exists)
+    yalp follow --synthetic        # no-camera demo (synthetic frames; will report lost)
+    yalp follow --benchmark        # print the SELECTED detector/tracker/FOLLOW fps baseline
 
-DETECTOR (``--detector``): the default ``face`` (OpenCV's bundled Haar cascade)
-is reliable at DESK range, where a webcam frames only the user's head+shoulders —
-the full-body ``hog`` detector cannot see that and just reports "lost". ``hog`` is
-the full standing-body detector for the eventual ROBOT looking across a room;
-``auto`` tries face then falls back to hog. All three sit behind the same pluggable
-Detector interface, so the eventual robot swaps in a faster detector (Gate H)
-without changing FOLLOW.
+DETECTOR (``--detector``): the default ``face`` (OpenCV's bundled Haar cascade) is
+reliable at DESK range, where a webcam frames only the user's head+shoulders — the
+full-body detectors cannot see that and just report "lost". ``person`` is the
+ORIENTATION-AGNOSTIC cv2.dnn MobileNet-SSD body detector: it tracks a person from
+ANY angle (front, BACK, side) at room range, so robot-follow keeps working when the
+user walks AWAY — this is the ROBOT's default (face is desk-only) and the Gate H
+detector candidate. ``hog`` is OpenCV's built-in standing-body detector; ``auto``
+prefers ``person`` and falls back to ``face`` for close-ups. All sit behind the
+same pluggable Detector interface, so FOLLOW is unchanged behind any of them. Test
+``person`` on the laptop: ``yalp follow --detector person``, then stand back and
+turn around — it should still track. The ``person`` model file downloads once and
+is cached (cv2.dnn — NO new pip dependency); offline, it fails with clear
+instructions for dropping the file in by hand.
 
 REAL EYES + FAKE WHEELS: the wheels are simulated by ``FakeReactiveBackend`` but
 the camera is real. Each tick grabs the latest frame from the reactive layer's
@@ -27,10 +34,10 @@ OWNED camera, runs the track-by-detection tracker, and steers toward the person
 collision-stop / SAFE_STOP overrides everything underneath.
 
 ``--benchmark`` de-risks **Gate H** (roadmap.md): it measures the *laptop* ceiling
-for the person-detector fps (the OpenCV HOG detector here; on the Pi we'd swap in a
-faster detector behind the same interface) and compares it to
-``config.GATE_H_GO_HZ``. The Pi will be slower — this is the laptop ceiling, not
-the gate verdict.
+for the SELECTED detector's fps (run ``--benchmark --detector person`` for the
+cv2.dnn person-detector baseline — the Gate H candidate) and compares it to
+``config.GATE_H_GO_HZ``. The Pi will be slower — the laptop fps is a CEILING, not
+the gate verdict; Gate H is the number measured on the Pi later.
 """
 
 from __future__ import annotations
@@ -78,13 +85,16 @@ def add_parser(subparsers) -> None:
     )
     parser.add_argument(
         "--detector",
-        choices=("face", "hog", "auto"),
+        choices=("face", "hog", "person", "auto"),
         default=None,  # resolved to config.FOLLOW_DETECTOR_DEFAULT ("face")
         help=(
-            "Person detector: 'face' (DEFAULT) — bundled Haar face cascade, reliable "
-            "at desk range (head+shoulders webcam framing); 'hog' — full standing-body "
-            "detector (robot/room range); 'auto' — face, falling back to hog. The "
-            "eventual robot swaps a faster detector in behind the same interface (Gate H)."
+            "Person detector: 'face' (DEFAULT, desk-only) — bundled Haar face cascade, "
+            "reliable at desk range (head+shoulders webcam framing); 'hog' — OpenCV's "
+            "built-in standing-body detector; 'person' — ORIENTATION-AGNOSTIC cv2.dnn "
+            "MobileNet-SSD body detector that tracks from ANY angle (front/back/side) at "
+            "room range, so follow keeps working when you walk AWAY (the ROBOT's default; "
+            "downloads a cached model file on first use); 'auto' — person, falling back to "
+            "face for close-ups. Stand back and turn around to test 'person' on the laptop."
         ),
     )
     parser.add_argument(
