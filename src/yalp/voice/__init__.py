@@ -30,7 +30,6 @@ import shutil  # noqa: F401 - re-exported for back-compat / patchability
 import subprocess  # noqa: F401 - re-exported for back-compat / patchability
 
 from . import tts
-from .microphone import Microphone  # noqa: F401 - spoken INPUT (capture) surface
 from .tts import (  # noqa: F401 - re-exported public + back-compat names
     DEFAULT_VOICE,
     ESPEAK_BINARY,
@@ -41,6 +40,10 @@ from .tts import (  # noqa: F401 - re-exported public + back-compat names
     speak,
     tts_available,
     wait_for_speech,
+)
+from .microphone import (  # noqa: F401 - spoken INPUT (audio capture) surface
+    Microphone,
+    to_wav_bytes,
 )
 
 # The live fire-and-forget process registry. Bound to the SAME list object as
@@ -56,4 +59,5 @@ __all__ = [
     "ESPEAK_BINARY",
     "DEFAULT_VOICE",
     "Microphone",
+    "to_wav_bytes",
 ]

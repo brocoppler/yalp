@@ -1,22 +1,29 @@
 """Threaded microphone capture with a single-slot latest-chunk buffer.
 
-This MIRRORS :mod:`yalp.camera` for audio. The capture thread does nothing but
-loop record -> write into a single-slot, last-write-wins "latest chunk" buffer.
-Callers pull the *newest* recorded audio and never block on the device read — a
-non-blocking :meth:`latest` returns whatever was last published (or ``None``),
-while :meth:`record_once` blocks (push-to-talk style) until one chunk is ready.
+This MIRRORS :mod:`yalp.camera`, but for AUDIO instead of video. The
+reactive/voice process owns the microphone and the blocking record runs in its
+own capture thread that does nothing but loop record -> write into a single-slot,
+last-write-wins "latest chunk" buffer. Callers always pull the *newest* recorded
+audio and never block on the device read — a non-blocking :meth:`latest` returns
+whatever was last published (or ``None``), while :meth:`record_once` blocks
+(push-to-talk style) until one chunk is ready.
 
 For laptop-first development this is reusable and hardware-optional. Three
-sources are supported so it runs with or without a microphone:
+sources are supported so it runs with or without a real microphone:
 
-  (a) ``microphone`` — ``sounddevice``/PortAudio live capture.
-  (b) ``file``       — a WAV file path, decoded via the stdlib ``wave`` module.
+  (a) ``microphone`` — live capture via ``sounddevice`` (PortAudio).
+  (b) ``file``       — a WAV file path, decoded via the stdlib ``wave`` module
+                       and looped as the "live" audio.
   (c) ``synthetic``  — numpy-generated audio when no mic / lib is available.
 
 If a microphone (or ``sounddevice``) cannot be opened, the Microphone
 automatically falls back to synthetic audio, so tests and dev never require real
-hardware. Audio chunks are mono ``float32`` numpy arrays shaped ``(n,)`` at
-``sample_rate``.
+hardware or audio I/O.
+
+Audio is always handed back as a **mono float32 numpy array** (shape ``(n,)``)
+sampled at ``sample_rate`` Hz, normalised to roughly ``[-1, 1]`` — the format the
+downstream STT layer expects. :func:`to_wav_bytes` encodes such an array to
+16-bit PCM WAV bytes for backends that consume WAV.
 """
 
 from __future__ import annotations
@@ -48,7 +55,9 @@ except Exception as exc:  # pragma: no cover - exercised only without sounddevic
 else:
     _SD_IMPORT_ERROR = None
 
-# Default capture parameters. 16 kHz mono is the Whisper-friendly default.
+# Default capture parameters. 16 kHz mono is the Whisper-friendly default; these
+# mirror the ``VOICE_*`` config defaults but are also exposed as module
+# constants for callers/tests that want them directly.
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_CHANNELS = 1
 DEFAULT_RECORD_SECONDS = 5.0
@@ -57,7 +66,7 @@ DEFAULT_RECORD_SECONDS = 5.0
 # to cover device-open plus a full ``record_seconds`` capture.
 DEFAULT_AUDIO_TIMEOUT = 10.0
 
-Audio = "np.ndarray"  # mono float32, shape (n,)
+Audio = "np.ndarray"  # mono float32, shape (n,), sampled at sample_rate Hz.
 
 
 class Microphone:
@@ -68,11 +77,11 @@ class Microphone:
     source:
         ``"microphone"``, ``"file"``, or ``"synthetic"``.
     sample_rate:
-        PCM sample rate in Hz.
+        Capture/decode sample rate in Hz.
     channels:
-        Capture channel count (audio is collapsed to mono on publish).
+        Capture channel count (audio is always collapsed to mono on publish).
     record_seconds:
-        How many seconds of audio to capture per chunk.
+        How many seconds of audio make up one captured chunk.
     path:
         WAV file path for the ``file`` source.
     device:
@@ -86,7 +95,7 @@ class Microphone:
         sample_rate: int = VOICE_SAMPLE_RATE,
         channels: int = VOICE_CHANNELS,
         record_seconds: float = VOICE_RECORD_SECONDS,
-        path: Optional[str] = (VOICE_AUDIO_FILE or None),
+        path: Optional[str] = VOICE_AUDIO_FILE or None,
         device: Optional[object] = None,
     ) -> None:
         self.source = source
@@ -96,7 +105,8 @@ class Microphone:
         self.path = path
         self.device = device
 
-        self._file_audio: Optional[np.ndarray] = None  # loaded WAV samples
+        self._file_audio: Optional[np.ndarray] = None  # the loaded/looped WAV samples
+        self._file_pos = 0  # read cursor into the looped file audio
         self._latest: Optional[np.ndarray] = None  # single-slot latest chunk
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -105,11 +115,13 @@ class Microphone:
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> "Microphone":
-        """Resolve the source and start the background capture thread.
+        """Open the source and start the background capture thread.
 
-        Falls back to synthetic audio if a microphone or file is unavailable.
-        Returns ``self`` for convenient chaining.
+        Falls back to synthetic audio if a microphone or WAV file cannot be
+        opened. Returns ``self`` for convenient chaining.
         """
+        if self._thread is not None and self._thread.is_alive():
+            return self
         self._configure_source()
         self._stop.clear()
         self._thread = threading.Thread(
@@ -141,15 +153,14 @@ class Microphone:
         with self._lock:
             return None if self._latest is None else self._latest.copy()
 
-    def record_once(
-        self, timeout: float = DEFAULT_AUDIO_TIMEOUT
-    ) -> np.ndarray:
+    def record_once(self, timeout: float = DEFAULT_AUDIO_TIMEOUT) -> np.ndarray:
         """Block until one chunk is available, then return it (push-to-talk).
 
-        Starts the capture thread if it is not already running. Raises
-        ``TimeoutError`` if no chunk arrives within ``timeout`` seconds.
+        Starts the capture thread if it is not already running, then waits for
+        the next recorded chunk. This is the convenience the CLI uses to "capture
+        one utterance". Raises :class:`TimeoutError` if no chunk arrives in time.
         """
-        if self._thread is None:
+        if self._thread is None or not self._thread.is_alive():
             self.start()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -168,27 +179,34 @@ class Microphone:
     def _configure_source(self) -> None:
         """Resolve the configured source, falling back to synthetic on failure."""
         if self.source == "microphone":
-            if sd is None or not self._has_input_device():
-                logger.info(
-                    "no microphone available (sounddevice=%s) — using synthetic audio",
-                    "missing" if sd is None else "no input device",
+            if sd is None:
+                logger.warning(
+                    "sounddevice unavailable (%s) — falling back to synthetic audio",
+                    _SD_IMPORT_ERROR,
+                )
+                self.source = "synthetic"
+                return
+            if not self._has_input_device():
+                logger.warning(
+                    "no audio input device available — falling back to synthetic audio"
                 )
                 self.source = "synthetic"
                 return
         elif self.source == "file":
-            audio = self._load_wav(self.path)
+            audio = self._load_wav(self.path) if self.path else None
             if audio is None:
-                logger.info(
-                    "audio file %r missing/unreadable — using synthetic audio",
+                logger.warning(
+                    "could not read WAV %r — falling back to synthetic audio",
                     self.path,
                 )
                 self.source = "synthetic"
                 return
             self._file_audio = audio
+            self._file_pos = 0
         # "synthetic" needs no setup.
 
     def _has_input_device(self) -> bool:
-        """True if sounddevice reports at least one usable input device."""
+        """True if ``sounddevice`` reports at least one usable input device."""
         if sd is None:  # pragma: no cover - guarded by caller
             return False
         try:
@@ -204,7 +222,12 @@ class Microphone:
         return False
 
     def _load_wav(self, path: Optional[str]) -> Optional[np.ndarray]:
-        """Decode a WAV file into a mono float32 numpy array, or None on failure."""
+        """Load a WAV file into a mono float32 numpy array, or None on failure.
+
+        Uses only the standard-library :mod:`wave` module plus numpy — no
+        ``soundfile`` dependency. PCM is normalised to ``[-1, 1]`` and any
+        multi-channel audio is averaged down to mono.
+        """
         if not path:
             return None
         try:
@@ -227,7 +250,7 @@ class Microphone:
         elif sample_width == 4:
             data = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
         elif sample_width == 1:
-            # 8-bit WAV is unsigned, centered at 128.
+            # 8-bit WAV is unsigned, centred at 128.
             data = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
         else:  # pragma: no cover - exotic widths
             return None
@@ -237,32 +260,33 @@ class Microphone:
 
     def _capture_loop(self) -> None:
         # Capture one chunk per iteration into the single-slot latest buffer.
-        # For 'file' (a fixed array) we still pace politely so the loop is cheap.
         while not self._stop.is_set():
-            t0 = time.monotonic()
             chunk = self._grab_one()
             if chunk is not None:
                 with self._lock:
                     self._latest = chunk
                     self._chunk_count += 1
-            # Pace so we don't busy-spin between captures; the live mic blocks in
-            # sd.wait() for ~record_seconds already.
-            elapsed = time.monotonic() - t0
-            pace = 0.05 if self.source != "synthetic" else self.record_seconds
-            if pace > elapsed:
-                # Sleep in small slices so stop() stays responsive.
-                self._stop.wait(min(pace - elapsed, 0.1))
+            # Pace politely so we don't busy-spin. Live mic capture already
+            # blocks in ``sd.wait()`` for ~record_seconds; for the synthetic and
+            # file sources (which return instantly) sleep a short slice so
+            # ``stop()`` stays responsive but the thread does not spin hot.
+            pace = 0.05 if self.source == "microphone" else min(self.record_seconds, 0.5)
+            if self._stop.wait(pace):
+                break
+
+    def _frames_per_chunk(self) -> int:
+        return max(1, int(round(self.record_seconds * self.sample_rate)))
 
     def _grab_one(self) -> Optional[np.ndarray]:
         if self.source == "microphone" and sd is not None:
-            return self._record_microphone()
+            return self._record_live()
         if self.source == "file" and self._file_audio is not None:
-            return self._file_audio.copy()
+            return self._next_file_chunk()
         return self._synthetic_chunk()
 
-    def _record_microphone(self) -> Optional[np.ndarray]:
+    def _record_live(self) -> Optional[np.ndarray]:  # pragma: no cover - needs PortAudio
         """Record one ``record_seconds`` chunk from the live mic (mono float32)."""
-        frames = int(self.record_seconds * self.sample_rate)
+        frames = self._frames_per_chunk()
         try:
             rec = sd.rec(
                 frames,
@@ -272,44 +296,69 @@ class Microphone:
                 device=self.device,
             )
             sd.wait()
-        except Exception:  # pragma: no cover - PortAudio runtime error
-            logger.warning("microphone capture failed — emitting synthetic audio")
+        except Exception as exc:
+            logger.warning("live audio capture failed (%s); using synthetic", exc)
             return self._synthetic_chunk()
-        audio = np.asarray(rec, dtype=np.float32)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        return np.ascontiguousarray(audio, dtype=np.float32)
+        rec = np.asarray(rec, dtype=np.float32)
+        if rec.ndim > 1:
+            rec = rec.mean(axis=1)
+        return np.ascontiguousarray(rec, dtype=np.float32)
+
+    def _next_file_chunk(self) -> np.ndarray:
+        """Return the next ``record_seconds`` slice of the looped file audio."""
+        assert self._file_audio is not None
+        frames = self._frames_per_chunk()
+        audio = self._file_audio
+        n = audio.shape[0]
+        if n == 0:
+            return np.zeros(frames, dtype=np.float32)
+        out = np.empty(frames, dtype=np.float32)
+        pos = self._file_pos
+        filled = 0
+        while filled < frames:
+            take = min(frames - filled, n - pos)
+            out[filled : filled + take] = audio[pos : pos + take]
+            filled += take
+            pos += take
+            if pos >= n:
+                pos = 0
+        self._file_pos = pos
+        return out
 
     def _synthetic_chunk(self) -> np.ndarray:
-        """A deterministic-ish mono float32 chunk: low noise + a tone burst."""
-        n = int(self.record_seconds * self.sample_rate)
-        t = np.arange(n, dtype=np.float32) / float(self.sample_rate)
+        """A deterministic-ish mono float32 chunk: low noise + a 440 Hz tone burst."""
+        frames = self._frames_per_chunk()
+        t = np.arange(frames, dtype=np.float32) / float(self.sample_rate)
         # Low-amplitude pseudo-random noise (seeded by the chunk index so it is
         # reproducible within a run but changes between chunks).
-        rng = np.random.default_rng(self._chunk_count + 1)
-        noise = (rng.standard_normal(n).astype(np.float32)) * 0.01
-        # A short 440 Hz tone burst over the first ~40% of the chunk.
-        tone = np.zeros(n, dtype=np.float32)
-        burst = int(n * 0.4)
-        if burst > 0:
-            tone[:burst] = 0.2 * np.sin(2.0 * np.pi * 440.0 * t[:burst])
-        return np.ascontiguousarray(noise + tone, dtype=np.float32)
+        rng = np.random.default_rng(1234 + self._chunk_count)
+        noise = (rng.standard_normal(frames).astype(np.float32)) * 0.01
+        # A 440 Hz tone burst over the first half of the chunk.
+        tone = 0.2 * np.sin(2.0 * np.pi * 440.0 * t).astype(np.float32)
+        burst = np.zeros(frames, dtype=np.float32)
+        half = frames // 2
+        burst[:half] = tone[:half]
+        return np.ascontiguousarray(burst + noise, dtype=np.float32)
 
 
 def to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     """Encode a mono float32 numpy array to 16-bit PCM WAV bytes.
 
     The STT layer consumes WAV bytes; this packs a ``(n,)`` float32 array in
-    ``[-1, 1]`` (or any float range — it is clipped) into a single-channel,
-    16-bit-PCM WAV container using the stdlib ``wave`` module + ``io.BytesIO``.
+    ``[-1, 1]`` (multi-channel input is averaged to mono; out-of-range values are
+    clipped) into a single-channel, 16-bit-PCM WAV container using only the
+    standard-library :mod:`wave` module plus :mod:`io`.
     """
-    arr = np.asarray(audio, dtype=np.float32).reshape(-1)
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.ndim > 1:
+        arr = arr.mean(axis=1)
+    arr = arr.reshape(-1)
     clipped = np.clip(arr, -1.0, 1.0)
     pcm = (clipped * 32767.0).astype(np.int16)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav:
         wav.setnchannels(1)
-        wav.setsampwidth(2)  # 16-bit
+        wav.setsampwidth(2)  # 16-bit PCM
         wav.setframerate(int(sample_rate))
         wav.writeframes(pcm.tobytes())
     return buf.getvalue()
