@@ -145,6 +145,18 @@ def add_parser(subparsers) -> None:
             "YALP_FOLLOW_DETECTOR environment variable when given."
         ),
     )
+    parser.add_argument(
+        "--no-voice-stop",
+        dest="no_voice_stop",
+        action="store_true",
+        help=(
+            "Disable the hands-free voice 'stop' during a voice-initiated FOLLOW "
+            "tail. By default, when following was started via --listen, a "
+            "background mic listener ends FOLLOW the moment you say 'stop' (or "
+            "'halt') — roughly a 2-3s lag for the spoken window. Ctrl-C and 'q' "
+            "(in a preview window) remain instant stops regardless of this flag."
+        ),
+    )
     parser.set_defaults(handler=run)
 
 
@@ -282,12 +294,40 @@ def _maybe_follow_tail(backend, args) -> None:
 
     preview = _resolve_preview(args)
     seconds = getattr(args, "follow_seconds", None)
+
+    # Hands-free voice "stop": the live follow loop itself listens to nothing, so
+    # without this the only ways out are Ctrl-C / 'q' / --follow-seconds. When the
+    # follow was started by VOICE (--listen) we spin up a background daemon that
+    # listens for a spoken "stop"/"halt" and sets the shared stop_event the loop
+    # already polls (~15 Hz). ON by default for the --listen path; --no-voice-stop
+    # disables it. The stop_event is created regardless and passed to the loop so
+    # teardown is uniform however the loop exits.
+    stop_event = threading.Event()
+    voice_stop = bool(getattr(args, "listen", False)) and not bool(
+        getattr(args, "no_voice_stop", False)
+    )
+    listener: Optional[threading.Thread] = None
+
+    stop_hint = (
+        "Say 'stop'/'halt', Ctrl-C, or 'q' to stop."
+        if voice_stop
+        else ("Stopping after %.0fs." % seconds if seconds else "Ctrl-C to stop.")
+    )
     print(
         "\n>>> following you — live camera "
-        f"({'preview window' if preview else 'status output'}). "
-        f"{'Stopping after %.0fs.' % seconds if seconds else 'Ctrl-C to stop.'}"
+        f"({'preview window' if preview else 'status output'}). {stop_hint}"
     )
     try:
+        if voice_stop:
+            # daemon so it can never block process exit; best-effort + never-raise.
+            listener = threading.Thread(
+                target=_listen_for_voice_stop,
+                args=(stop_event,),
+                name="yalp-voice-stop",
+                daemon=True,
+            )
+            listener.start()
+
         from ..reactive.follow_runner import run_follow_loop
 
         run_follow_loop(
@@ -295,6 +335,7 @@ def _maybe_follow_tail(backend, args) -> None:
             preview=preview,
             owns_ticking=False,
             seconds=seconds,
+            stop_event=stop_event,
         )
     except KeyboardInterrupt:  # pragma: no cover - interactive
         print("\n[stopped]")
@@ -302,6 +343,12 @@ def _maybe_follow_tail(backend, args) -> None:
         import logging
 
         logging.getLogger(__name__).warning("follow tail failed: %s", exc)
+    finally:
+        # However the loop exited (voice stop, Ctrl-C, 'q', timeout, or error),
+        # signal the listener and reclaim its thread so the mic is released.
+        stop_event.set()
+        if listener is not None:
+            listener.join(timeout=2.0)
 
 
 def _run_one(agent, command: str, fmt) -> None:
@@ -365,6 +412,89 @@ def _listen_for_command() -> Optional[str]:
         return None
     print(f">>> [heard: {transcript}]")
     return transcript
+
+
+# Spoken phrases that end a voice-initiated FOLLOW tail. Kept tiny + centralized
+# so the matching is trivially unit-testable and easy to extend.
+_STOP_PHRASES = ("stop", "halt")
+
+
+def _is_stop_phrase(text: str) -> bool:
+    """True if ``text`` contains a stop word ('stop'/'halt'). Pure + forgiving.
+
+    Lowercases and strips, then does a substring match so natural utterances
+    ("please stop", "HALT now") trigger while non-stop transcripts ("follow me",
+    "", "top") do not. Never raises — a falsy/None input returns ``False``.
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(phrase in t for phrase in _STOP_PHRASES)
+
+
+def _listen_for_voice_stop(stop_event, *, record_seconds: float = 2.0) -> None:
+    """Background daemon: end a voice FOLLOW tail when the user says "stop".
+
+    Loops grabbing SHORT (~2s) mic windows and transcribing each through ONE
+    persistent STT backend instance; on a stop phrase it sets ``stop_event``
+    (which :func:`run_follow_loop` already polls ~15 Hz) and returns. Runs until
+    ``stop_event`` is set by anyone (voice match here, or the follow loop's own
+    Ctrl-C / 'q' / timeout exit, signalled via the ``finally`` in the caller).
+
+    Best-effort, mirroring the never-raises ethos of the rest of the voice path:
+
+    * Voice/Microphone/STT are imported + constructed lazily here; if anything is
+      unavailable it logs ONCE and returns a no-op (never raises).
+    * ONE :class:`~yalp.voice.Microphone` and ONE STT backend instance are made
+      and reused across windows, so the (heavy) faster-whisper model loads ONCE
+      — we call ``backend.transcribe(...)`` directly, NOT the module-level
+      ``voice.transcribe()`` which rebuilds a backend (and model) per call.
+    * Each window is wrapped in try/except: any capture/STT error is swallowed
+      (logged at debug) and the loop continues. An error NEVER sets the
+      stop_event — a failed/empty transcription must never falsely stop FOLLOW.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    # Lazy, best-effort imports: a base without the voice extra simply no-ops.
+    try:
+        from ..voice import Microphone
+        from ..voice.microphone import to_wav_bytes
+        from ..voice.stt import get_backend
+    except Exception as exc:  # voice deps unavailable -> disable, never raise
+        log.info("voice-stop listener unavailable (%s) — disabled", exc)
+        return
+
+    # Build the mic + STT backend ONCE (model loads once, reused every window).
+    try:
+        kwargs = {"record_seconds": float(record_seconds)}
+        if config.VOICE_SOURCE == "file" and config.VOICE_AUDIO_FILE:
+            kwargs["path"] = config.VOICE_AUDIO_FILE
+        mic = Microphone(source=config.VOICE_SOURCE, **kwargs)
+        backend = get_backend()
+    except Exception as exc:  # setup failed (e.g. model missing) -> disable
+        log.info("voice-stop listener setup failed (%s) — disabled", exc)
+        return
+
+    try:
+        with mic:
+            while not stop_event.is_set():
+                try:
+                    # A FRESH window each iteration (record_once blocks for the
+                    # newest chunk) so we never re-transcribe a stale buffer.
+                    audio = mic.record_once()
+                    wav_bytes = to_wav_bytes(audio, mic.sample_rate)
+                    transcript = backend.transcribe(wav_bytes)
+                except Exception as exc:  # capture/STT hiccup -> skip this window
+                    log.debug("voice-stop window failed: %s", exc)
+                    continue
+                if _is_stop_phrase(transcript):
+                    stop_event.set()
+                    print(">>> [voice: stop]")
+                    break
+    except Exception as exc:  # defensive: mic context / loop failure -> give up
+        log.debug("voice-stop listener loop failed: %s", exc)
 
 
 def _camera_source(args) -> str:

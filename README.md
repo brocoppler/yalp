@@ -82,6 +82,7 @@ yalp agent [words...]           # natural-language command, e.g. yalp agent foll
            [--preview/--no-preview]  # FOLLOW tail: live OpenCV window vs status lines
            [--follow-seconds N] # cap a FOLLOW tail at N seconds (default: until Ctrl-C)
            [--follow-detector {face,hog,person,auto}]  # follow detector (default: person)
+           [--no-voice-stop]    # disable the hands-free "stop" listener during a voice FOLLOW
 ```
 
 Positional words and `--command` always take precedence over `--listen`; combine
@@ -94,6 +95,15 @@ exits a heartbeat after the handoff. The agent opens a **live preview window** a
 `yalp follow`, reusing the backend already running). `q`/Esc in the window or
 `--follow-seconds N` also stops it.
 
+- **Say "stop" to end a voice follow (hands-free).** When following was started
+  by VOICE (`yalp agent --listen`), a background mic listener runs alongside the
+  follow loop: say **"stop"** (or **"halt"**) and FOLLOW ends — roughly a 2-3s
+  lag for the spoken window to be captured and transcribed. It's best-effort and
+  never falsely stops (a failed/empty transcription is ignored) and never
+  crashes (no voice deps → it quietly no-ops). `--no-voice-stop` disables the
+  listener; **Ctrl-C** and **`q`/Esc** (in a preview window) remain instant
+  stops either way. The listener is only started on the `--listen` path (a typed
+  `yalp agent "follow me"` has no mic listener — use Ctrl-C / `q`).
 - `--preview` / `--no-preview` force the preview window on/off. The default is
   AUTO: preview ON when stdout is a TTY **and** a cv2 GUI is available, OFF
   otherwise.
