@@ -202,6 +202,13 @@ sudo apt-get install libportaudio2
 `YALP_STT_MODEL=base` for better accuracy. On a 4 GB Raspberry Pi 5 keep the
 model at `tiny`.
 
+**"follow me" not heard?** The CLI now reports the captured mic level on an empty
+result. A **very low peak** (e.g. `>>> [heard nothing — mic input very low (peak
+0.002)…]`) means your OS input device/level is the problem, not Yalp — pick the
+right device and turn up the input in System Settings ▸ Sound ▸ Input. If the peak
+looks healthy but no words were recognized, give yourself more time with
+`YALP_VOICE_RECORD_SECONDS=7` or more accuracy with `YALP_STT_MODEL=base`.
+
 **Precedence** — positional words and `--command` always win over `--listen`, so
 typed commands are never overridden accidentally.
 

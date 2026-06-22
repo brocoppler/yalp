@@ -98,7 +98,27 @@ def test_listen_for_command_returns_transcript(monkeypatch, capsys):
     assert "[heard: follow me]" in out
 
 
+def _mic_yielding(array):
+    """Build a context-manager mic stub class returning ``array`` from record_once."""
+
+    class _Mic:
+        def __init__(self, *args, **kwargs):
+            self.sample_rate = config.VOICE_SAMPLE_RATE
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def record_once(self, *args, **kwargs):
+            return array
+
+    return _Mic
+
+
 def test_listen_for_command_empty_transcript_returns_none(monkeypatch, capsys):
+    """The default _StubMic yields a silent (zeros) array -> very-low diagnostic."""
     import yalp.voice as voice
 
     monkeypatch.setattr(voice, "Microphone", _StubMic, raising=False)
@@ -106,7 +126,51 @@ def test_listen_for_command_empty_transcript_returns_none(monkeypatch, capsys):
         voice, "transcribe", lambda wav, *, backend=None: "   ", raising=False
     )
     assert agent_cli._listen_for_command() is None
-    assert "[heard nothing]" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "heard nothing" in out
+    assert "very low" in out
+
+
+def test_listen_for_command_low_mic_reports_level(monkeypatch, capsys):
+    """A near-silent capture -> 'very low' diagnostic + the measured peak."""
+    import yalp.voice as voice
+
+    quiet = np.full(64, 0.001, dtype=np.float32)
+    monkeypatch.setattr(voice, "Microphone", _mic_yielding(quiet), raising=False)
+    monkeypatch.setattr(
+        voice, "transcribe", lambda wav, *, backend=None: "", raising=False
+    )
+    assert agent_cli._listen_for_command() is None
+    out = capsys.readouterr().out
+    assert "very low" in out
+    assert "0.001" in out
+
+
+def test_listen_for_command_ok_level_no_speech(monkeypatch, capsys):
+    """A loud capture with no recognized words -> the OK-level branch + peak."""
+    import yalp.voice as voice
+
+    loud = np.full(64, 0.5, dtype=np.float32)
+    monkeypatch.setattr(voice, "Microphone", _mic_yielding(loud), raising=False)
+    monkeypatch.setattr(
+        voice, "transcribe", lambda wav, *, backend=None: "", raising=False
+    )
+    assert agent_cli._listen_for_command() is None
+    out = capsys.readouterr().out
+    assert "no speech recognized" in out
+    assert "0.500" in out
+
+
+def test_listen_for_command_no_audio_captured(monkeypatch, capsys):
+    """record_once returning None -> the 'no audio captured' branch."""
+    import yalp.voice as voice
+
+    monkeypatch.setattr(voice, "Microphone", _mic_yielding(None), raising=False)
+    monkeypatch.setattr(
+        voice, "transcribe", lambda wav, *, backend=None: "", raising=False
+    )
+    assert agent_cli._listen_for_command() is None
+    assert "no audio captured" in capsys.readouterr().out
 
 
 def test_listen_for_command_swallows_capture_failure(monkeypatch):

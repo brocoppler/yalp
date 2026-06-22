@@ -371,6 +371,26 @@ def _interactive(agent, fmt) -> None:
         _run_one(agent, command, fmt)
 
 
+# Below this captured peak amplitude (float32 mono, range ~[-1, 1]) we treat the
+# mic input as effectively silent and point the user at their OS input device /
+# level rather than at Yalp's capture/STT path (which is healthy at peak ~0.3+).
+LISTEN_MIN_PEAK = 0.03
+
+
+def _peak_amplitude(audio) -> float:
+    """Peak absolute amplitude of a numpy audio array; 0.0 for None/empty.
+
+    Best-effort + never raises: used purely to make a silent/low mic
+    self-diagnosing in the empty-result message.
+    """
+    try:
+        import numpy as np
+
+        return float(np.abs(audio).max()) if audio is not None and audio.size else 0.0
+    except Exception:
+        return 0.0
+
+
 def _listen_for_command() -> Optional[str]:
     """Capture ONE spoken command via the microphone and transcribe it.
 
@@ -390,7 +410,10 @@ def _listen_for_command() -> Optional[str]:
     from ..voice import Microphone
     from ..voice.microphone import to_wav_bytes
 
-    print(">>> [listening… speak your command]")
+    secs = float(getattr(config, "VOICE_RECORD_SECONDS", 0.0) or 0.0)
+    print(f">>> [listening ~{secs:.0f}s — speak now…]")
+    audio = None
+    peak = 0.0
     try:
         # Honor the configured source; only the 'file' source needs an explicit
         # path (the Microphone auto-falls back to synthetic audio otherwise).
@@ -399,8 +422,14 @@ def _listen_for_command() -> Optional[str]:
             kwargs["path"] = config.VOICE_AUDIO_FILE
         with Microphone(source=config.VOICE_SOURCE, **kwargs) as mic:
             audio = mic.record_once()
-        wav_bytes = to_wav_bytes(audio, mic.sample_rate)
-        transcript = (voice.transcribe(wav_bytes) or "").strip()
+        # Measure the captured level BEFORE encoding so a silent/low mic is
+        # immediately diagnosable from the empty-result message below.
+        peak = _peak_amplitude(audio)
+        if audio is None:
+            transcript = ""
+        else:
+            wav_bytes = to_wav_bytes(audio, mic.sample_rate)
+            transcript = (voice.transcribe(wav_bytes) or "").strip()
     except Exception as exc:  # never crash the CLI on capture/STT failure
         import logging
 
@@ -408,7 +437,20 @@ def _listen_for_command() -> Optional[str]:
         return None
 
     if not transcript:
-        print(">>> [heard nothing]")
+        if audio is None:
+            print(">>> [heard nothing — no audio captured (mic unavailable?).]")
+        elif peak < LISTEN_MIN_PEAK:
+            print(
+                f">>> [heard nothing — mic input very low (peak {peak:.3f}). "
+                "Check System Settings ▸ Sound ▸ Input: device selected and "
+                "level up.]"
+            )
+        else:
+            print(
+                f">>> [heard nothing — captured audio (peak {peak:.3f}) but no "
+                "speech recognized. Speak clearly, or try YALP_STT_MODEL=base / "
+                "YALP_VOICE_RECORD_SECONDS=7.]"
+            )
         return None
     print(f">>> [heard: {transcript}]")
     return transcript
