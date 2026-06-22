@@ -46,7 +46,7 @@ cp .env.example .env
 
 # 4. Sanity-check the install
 yalp --help        # shows all available commands
-pytest             # 134 tests, all should pass
+pytest             # 243 tests, all should pass
 ```
 
 ## Commands
@@ -246,21 +246,40 @@ Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
 
 ## What's implemented / What's next
 
-**Done (laptop phase — works today):**
-- `yalp see` — VLM vision Q&A, optional image file input, voice output
-- `yalp agent` — full deliberative loop against the fake reactive backend
-- `yalp follow` — FOLLOW mode with `face`, `hog`, `person` (orientation-agnostic),
-  and `auto` detectors; 134 tests pass
-- Voice output (TTS) via `--speak` (macOS `say` / Linux `espeak-ng`)
-- Voice input (push-to-talk STT) via `--listen` — local faster-whisper transcription,
-  optional `[voice]` extra, hardware-free CI path; see
-  [docs/technical/audio.md](docs/technical/audio.md)
+**The laptop "brain" is COMPLETE** — the full voice → follow → voice-stop loop runs
+end to end on the laptop ("real eyes, fake wheels"), and **243 tests pass**:
 
-**Next:**
-- Hardware path — real reactive layer (motors, ultrasonic, camera) runs on the Pi;
-  see [docs/technical/roadmap.md](docs/technical/roadmap.md) for the gate ladder and
-  [docs/technical/hardware-runbook.md](docs/technical/hardware-runbook.md) for
-  bring-up steps
+- `yalp see` — single-frame vision: webcam → Claude → spoken/typed scene description.
+- `yalp agent` — deliberative loop (Claude) driving abilities against the reactive
+  layer (simulated motors on the laptop).
+- `yalp follow` — standalone reactive person-tracker (live camera).
+- **Voice OUTPUT** — cross-platform TTS via `--speak` (macOS `say`, Linux/Pi `espeak-ng`).
+- **Voice INPUT** — push-to-talk `yalp agent --listen`: records a ~5 s window, transcribes
+  locally with faster-whisper (default `tiny`), and runs the transcript as a command.
+- **Voice-driven FOLLOW** — saying "follow me" brings up the camera and follows live
+  (room-range `person` detector by default), staying in follow until you say
+  "stop"/"halt" (hands-free) or press Ctrl-C / `q`.
+- All laptop-first and fully testable with synthetic/fake audio and a synthetic camera —
+  no hardware required. Optional voice deps: `pip install -e ".[voice]"`; see
+  [docs/technical/audio.md](docs/technical/audio.md).
+
+**Honest caveats:** `RealReactiveBackend` (real GPIO motors + HC-SR04) is still a STUB —
+on-robot wheels/sensor are not implemented yet. On macOS a cosmetic objc "libavdevice
+implemented in both cv2 and av" warning may print (transcription unaffected). Interaction
+is fixed-duration push-to-talk; voice-activity-detection and a "hey Yalp" wake-word are
+future upgrades.
+
+**Next target — Raspberry Pi 5 bring-up.** Move the proven brain onto the Pi 5 hardware.
+What can proceed **now (no battery pack needed)**: flash Raspberry Pi OS Lite 64-bit
+(headless, SSH, Wi-Fi); install Python 3.11+ + gpiozero/lgpio; GPIO first-light / LED
+blink (milestone G); build & bench-check the HC-SR04 1k/2k voltage divider to ~3.3 V
+(milestone I); wire the drivetrain + sensor with power off (§5) — no soldering needed.
+What **waits on the inbound 4×AA NiMH battery holder**: Gate E (power/brownout, F),
+"hello motors" (H), collision-stop reflex (J), and the detector-fps gates (K/L) — i.e.
+anything where motors actually spin. Then: implement `RealReactiveBackend` so the same
+brain drives real wheels. See
+[docs/technical/roadmap.md](docs/technical/roadmap.md) for the gate ladder and
+[docs/technical/hardware-runbook.md](docs/technical/hardware-runbook.md) for bring-up steps.
 
 ## Viewing the spec hub
 

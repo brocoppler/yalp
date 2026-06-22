@@ -175,23 +175,39 @@ yalp follow --synthetic --seconds 10  # no-camera demo, auto-stops after 10 s
 
 ---
 
-## When the Raspberry Pi arrives
+## Next target — Raspberry Pi 5 bring-up
 
-At this point the **laptop phase is complete** — `yalp see`, `yalp agent`, and
-`yalp follow` all work end-to-end against the simulated robot. The real robot body
-comes later and changes very little of the brain:
+At this point the **laptop "brain" is complete** — `yalp see`, `yalp agent`, and
+`yalp follow` all work end-to-end against the simulated robot, including the full
+**voice → follow → voice-stop loop** (243 tests pass). The next phase moves that
+proven brain onto the Pi 5 hardware; it changes very little of the brain itself.
+`RealReactiveBackend` (real GPIO motors + HC-SR04) is still a stub — implementing it
+so the same brain drives real wheels is the goal.
+
+**You can start now — no battery pack needed:**
 
 1. **Flash the Pi.** Use Raspberry Pi Imager to write **Raspberry Pi OS Lite
    (64-bit)** to the microSD card, **headless** — enable SSH and Wi-Fi at flash
    time (no monitor or keyboard needed). You develop the brain on the laptop and
    talk to the Pi over SSH.
-2. **Swap the fake backend for the real one.** The deliberative brain you built on
-   the laptop stays the same; you replace the *fake* reactive backend with the
-   real on-Pi reactive layer (motors, ultrasonic, camera). The two layers talk
-   over the same localhost socket contract, so the brain doesn't know the
-   difference.
+2. **Install the GPIO stack:** Python 3.11+ plus `gpiozero` / `lgpio`.
+3. **GPIO first light (milestone G):** blink an LED / toggle one pin.
+4. **HC-SR04 divider (milestone I):** build and *meter* the 1k/2k voltage divider to
+   ~3.3 V before it touches a GPIO pin.
+5. **Wire the drivetrain + sensor with power off (§5).** No soldering — the parts are
+   pre-headered.
 
-The order in which to bring up the body — power, GPIO, motors, the ultrasonic
-sensor, the safety reflex, then follow-mode — is laid out as a checklist of gates
-in [docs/technical/roadmap.md](docs/technical/roadmap.md). Follow that ladder;
-each rung has a concrete "done" signal you can verify.
+**Waits on the inbound 4×AA NiMH battery holder** (anything where motors spin): Gate E
+power/brownout (F), "hello motors" (H), the collision-stop reflex (J), and the
+detector-fps gates (K/L).
+
+**Then swap the fake backend for the real one.** The deliberative brain you built on
+the laptop stays the same; you replace the *fake* reactive backend with the real on-Pi
+reactive layer (motors, ultrasonic, camera). The two layers talk over the same
+localhost socket contract, so the brain doesn't know the difference.
+
+The full bring-up order is a checklist of gates in
+[docs/technical/roadmap.md](docs/technical/roadmap.md), with step-by-step bench
+instructions in
+[docs/technical/hardware-runbook.md](docs/technical/hardware-runbook.md). Follow that
+ladder; each rung has a concrete "done" signal you can verify.
