@@ -100,6 +100,37 @@ def add_parser(subparsers) -> None:
             "dev/CI and never crashes the CLI if capture or STT fails."
         ),
     )
+    parser.add_argument(
+        "--preview",
+        dest="preview",
+        action="store_true",
+        default=None,
+        help=(
+            "When a command ends in FOLLOW mode ('follow me'), open a live OpenCV "
+            "preview window and follow until Ctrl-C. Default: AUTO — preview ON "
+            "when stdout is a TTY and a cv2 GUI is available, OFF on headless "
+            "(where it prints readable status lines instead)."
+        ),
+    )
+    parser.add_argument(
+        "--no-preview",
+        dest="preview",
+        action="store_false",
+        help=(
+            "Force the FOLLOW tail to print status lines instead of opening a "
+            "preview window (still follows until Ctrl-C). Headless-safe."
+        ),
+    )
+    parser.add_argument(
+        "--follow-seconds",
+        type=float,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap a FOLLOW tail at N seconds (default: follow until Ctrl-C). Only "
+            "applies when a command ends in FOLLOW mode."
+        ),
+    )
     parser.set_defaults(handler=run)
 
 
@@ -172,6 +203,11 @@ def run(args) -> int:
             _run_one(agent, command, format_transcript)
         else:
             _interactive(agent, format_transcript)
+        # STAY-AND-FOLLOW: if the run ended in FOLLOW mode ("follow me", typed or
+        # via --listen), don't exit a heartbeat later — bring up the live camera
+        # loop on the EXISTING backend (it is still ticking on its thread) and
+        # follow until the user stops it. Best-effort; never crashes the CLI.
+        _maybe_follow_tail(backend, args)
     finally:
         # Voice is fire-and-forget, so drain any outstanding speech (the final
         # report) before we exit — otherwise the last utterance is cut off the
@@ -185,6 +221,70 @@ def run(args) -> int:
         client.close()
         server.stop()
     return 0
+
+
+def _resolve_preview(args) -> bool:
+    """Decide whether the FOLLOW tail shows a preview window.
+
+    ``--preview`` / ``--no-preview`` force it; the default (``None``) is AUTO:
+    preview ON when stdout is a TTY *and* a cv2 GUI is actually available, OFF on
+    headless (where readable status lines print instead). GUI is probed lazily so
+    headless runs / tests never need a display.
+    """
+    pref = getattr(args, "preview", None)
+    if pref is not None:
+        return bool(pref)
+    import sys
+
+    from ..reactive.follow_runner import gui_available
+
+    try:
+        is_tty = bool(sys.stdout.isatty())
+    except Exception:
+        is_tty = False
+    return is_tty and gui_available()
+
+
+def _maybe_follow_tail(backend, args) -> None:
+    """If the run ended in FOLLOW mode, enter the live follow loop; else no-op.
+
+    Reuses the EXISTING backend (already ticking on its background thread), so we
+    pass ``owns_ticking=False`` — the loop only renders / monitors the published
+    state and must NOT tick again (double-ticking would corrupt the simulation).
+    Best-effort and never-crash, mirroring the rest of the CLI: any error logs a
+    warning and returns so teardown still runs cleanly.
+    """
+    from ..contract.messages import Mode
+
+    try:
+        state = backend.get_state()
+    except Exception:  # pragma: no cover - defensive
+        return
+    if getattr(state, "mode", None) != Mode.FOLLOW:
+        return
+
+    preview = _resolve_preview(args)
+    seconds = getattr(args, "follow_seconds", None)
+    print(
+        "\n>>> following you — live camera "
+        f"({'preview window' if preview else 'status output'}). "
+        f"{'Stopping after %.0fs.' % seconds if seconds else 'Ctrl-C to stop.'}"
+    )
+    try:
+        from ..reactive.follow_runner import run_follow_loop
+
+        run_follow_loop(
+            backend,
+            preview=preview,
+            owns_ticking=False,
+            seconds=seconds,
+        )
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        print("\n[stopped]")
+    except Exception as exc:  # never crash the CLI on a follow-tail failure
+        import logging
+
+        logging.getLogger(__name__).warning("follow tail failed: %s", exc)
 
 
 def _run_one(agent, command: str, fmt) -> None:

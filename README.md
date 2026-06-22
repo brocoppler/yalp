@@ -79,13 +79,27 @@ yalp agent [words...]           # natural-language command, e.g. yalp agent foll
            [--synthetic]        # use synthetic camera frames instead of webcam
            [--speak]            # read each response aloud (macOS `say` / Linux `espeak-ng`)
            [--listen]           # capture one spoken command via mic, transcribe, then run it
+           [--preview/--no-preview]  # FOLLOW tail: live OpenCV window vs status lines
+           [--follow-seconds N] # cap a FOLLOW tail at N seconds (default: until Ctrl-C)
 ```
 
 Positional words and `--command` always take precedence over `--listen`; combine
 `--listen --speak` for a fully hands-free loop.
 
-Natural-language commands like `yalp agent "follow me"` route through
-`enter_follow_mode` into FOLLOW.
+**"follow me" now stays and follows.** A command that ends in FOLLOW mode —
+`yalp agent "follow me"` (typed) or `yalp agent --listen` (spoken) — no longer
+exits a heartbeat after the handoff. The agent opens a **live preview window** and
+**follows you until Ctrl-C** (the same real-camera + simulated-wheels loop as
+`yalp follow`, reusing the backend already running). `q`/Esc in the window or
+`--follow-seconds N` also stops it.
+
+- `--preview` / `--no-preview` force the preview window on/off. The default is
+  AUTO: preview ON when stdout is a TTY **and** a cv2 GUI is available, OFF
+  otherwise.
+- **Headless / Raspberry Pi:** with no display, the FOLLOW tail prints readable
+  `FollowReporter` status lines instead of opening a window — no GUI required,
+  and Ctrl-C exits cleanly. cv2 is imported lazily so headless runs are
+  unaffected.
 
 Positional words and `--command` always take precedence over `--listen`; combine
 `--listen --speak` for a fully hands-free loop.
