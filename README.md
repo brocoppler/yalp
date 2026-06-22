@@ -81,6 +81,7 @@ yalp agent [words...]           # natural-language command, e.g. yalp agent foll
            [--listen]           # capture one spoken command via mic, transcribe, then run it
            [--preview/--no-preview]  # FOLLOW tail: live OpenCV window vs status lines
            [--follow-seconds N] # cap a FOLLOW tail at N seconds (default: until Ctrl-C)
+           [--follow-detector {face,hog,person,auto}]  # follow detector (default: person)
 ```
 
 Positional words and `--command` always take precedence over `--listen`; combine
@@ -96,6 +97,14 @@ exits a heartbeat after the handoff. The agent opens a **live preview window** a
 - `--preview` / `--no-preview` force the preview window on/off. The default is
   AUTO: preview ON when stdout is a TTY **and** a cv2 GUI is available, OFF
   otherwise.
+- **"follow me" defaults to the room-range `person` detector.** Unlike `yalp
+  follow` (desk-only `face` default), the agent/voice path assumes the user is
+  standing across the room, so it pre-builds the orientation-agnostic cv2.dnn
+  MobileNet-SSD body detector — follow keeps tracking from any angle as you walk
+  away. Override with `--follow-detector {face,hog,person,auto}`; the
+  `YALP_FOLLOW_DETECTOR` environment variable is also honored (the flag wins). If
+  the chosen detector/model is unavailable it falls back gracefully (never
+  crashes).
 - **Headless / Raspberry Pi:** with no display, the FOLLOW tail prints readable
   `FollowReporter` status lines instead of opening a window — no GUI required,
   and Ctrl-C exits cleanly. cv2 is imported lazily so headless runs are

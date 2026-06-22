@@ -131,6 +131,20 @@ def add_parser(subparsers) -> None:
             "applies when a command ends in FOLLOW mode."
         ),
     )
+    parser.add_argument(
+        "--follow-detector",
+        choices=("face", "hog", "person", "auto"),
+        default=None,
+        help=(
+            "Person detector for 'follow me': 'person' (DEFAULT for the agent/voice "
+            "follow path) — cv2.dnn MobileNet-SSD, ROOM-RANGE and ORIENTATION-AGNOSTIC "
+            "(tracks from any angle, so follow keeps working when you stand across the "
+            "room / walk away); 'face' — desk-only bundled Haar face cascade "
+            "(head+shoulders framing); 'hog' — OpenCV's built-in standing-body detector; "
+            "'auto' — person, falling back to face for close-ups. Overrides the "
+            "YALP_FOLLOW_DETECTOR environment variable when given."
+        ),
+    )
     parser.set_defaults(handler=run)
 
 
@@ -151,7 +165,10 @@ def run(args) -> int:
     # Default is the real webcam (auto-falling back to synthetic); --synthetic
     # forces the synthetic test-pattern. describe_scene reads frames from THIS
     # same shared camera (see _make_describe), so the device is opened only once.
-    backend = _make_backend(synthetic=bool(getattr(args, "synthetic", False)))
+    backend = _make_backend(
+        synthetic=bool(getattr(args, "synthetic", False)),
+        detector=getattr(args, "follow_detector", None),
+    )
     server = ReactiveServer(host="127.0.0.1", port=0, mailbox=backend.mailbox)
     server.start()
     stop = threading.Event()
@@ -359,19 +376,53 @@ def _camera_source(args) -> str:
     return "synthetic" if getattr(args, "synthetic", False) else "webcam"
 
 
-def _make_backend(synthetic: bool):
-    """Build the run's single FakeReactiveBackend, choosing the camera source.
+def _make_backend(synthetic: bool, detector: Optional[str] = None):
+    """Build the run's single FakeReactiveBackend, choosing the camera + tracker.
 
     The reactive layer owns the camera, so the SOURCE is decided here, once: the
     real webcam by default (REAL EYES + FAKE WHEELS — Camera auto-falls-back to
     synthetic if no device opens), or the synthetic test-pattern when
     ``--synthetic`` is passed. ``describe_scene`` later reads frames from *this*
     same camera, so the webcam is opened at most once per run.
+
+    FOLLOW DETECTOR: we PRE-BUILD the PersonTracker up front (exactly like ``yalp
+    follow`` does) so the first "follow me" tick doesn't fall into
+    ``FakeReactiveBackend``'s lazy HOG default — HOG is brittle (loses the target
+    on a turn / partial view), which is wrong for the agent/voice use case where
+    the user stands across the room. Detector NAME precedence:
+      1. the explicit ``detector`` arg (the ``--follow-detector`` flag);
+      2. else ``YALP_FOLLOW_DETECTOR`` if it is explicitly set in the environment;
+      3. else ``"person"`` — the ROOM-RANGE, orientation-agnostic MobileNet-SSD
+         body detector (NOT ``config.FOLLOW_DETECTOR_DEFAULT``, which is the
+         desk-only ``"face"`` default meant for ``yalp follow``).
+    If the tracker can't be built (model/OpenCV unavailable), we pass NO tracker
+    and let the existing lazy fallback happen — never crash.
     """
+    import os
+
     from ..reactive.fake_backend import FakeReactiveBackend
+    from ..reactive.follow_runner import build_follow_tracker
 
     source = "synthetic" if synthetic else "webcam"
-    return FakeReactiveBackend(tick_hz=50.0, camera_source=source)
+
+    if detector is not None:
+        det = detector
+    elif "YALP_FOLLOW_DETECTOR" in os.environ:
+        det = os.environ["YALP_FOLLOW_DETECTOR"]
+    else:
+        det = "person"
+
+    tracker = build_follow_tracker(det)
+    if tracker is None:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "follow detector '%s' unavailable — falling back to the lazy default "
+            "tracker (follow may be less robust)",
+            det,
+        )
+        return FakeReactiveBackend(tick_hz=50.0, camera_source=source)
+    return FakeReactiveBackend(tick_hz=50.0, camera_source=source, tracker=tracker)
 
 
 def _make_describe(backend):

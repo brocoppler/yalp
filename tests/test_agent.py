@@ -543,6 +543,113 @@ def test_describe_scene_reads_from_shared_backend_camera(monkeypatch):
     assert captured["frame"] is None
 
 
+# --- FOLLOW detector: agent/voice path defaults to room-range 'person' -------
+def _patch_tracker(monkeypatch):
+    """Capture the detector NAME passed to build_follow_tracker; return a stub tracker.
+
+    Patches the symbol imported INTO agent_cli (it does ``from ..reactive.
+    follow_runner import build_follow_tracker`` inside _make_backend), so we
+    monkeypatch the source module — no real model download / OpenCV needed.
+    """
+    import yalp.reactive.follow_runner as follow_runner
+
+    seen = {}
+
+    def fake_build(detector):
+        seen["detector"] = detector
+        return object()  # a non-None stand-in tracker
+
+    monkeypatch.setattr(follow_runner, "build_follow_tracker", fake_build)
+    return seen
+
+
+def test_make_backend_default_prebuilds_person_tracker(monkeypatch):
+    """No --follow-detector and no env var => pre-build the room-range 'person' tracker."""
+    from yalp.deliberative.agent_cli import _make_backend
+
+    monkeypatch.delenv("YALP_FOLLOW_DETECTOR", raising=False)
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+    seen = _patch_tracker(monkeypatch)
+
+    backend = _make_backend(synthetic=False)
+
+    assert seen["detector"] == "person"
+    assert backend is not None
+    assert backend._tracker is not None  # tracker was passed up front
+
+
+@pytest.mark.parametrize("name", ["face", "hog", "person", "auto"])
+def test_make_backend_explicit_detector_reaches_tracker(monkeypatch, name):
+    """--follow-detector NAME selects that detector (the name reaches build_follow_tracker)."""
+    from yalp.deliberative.agent_cli import _make_backend
+
+    monkeypatch.delenv("YALP_FOLLOW_DETECTOR", raising=False)
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+    seen = _patch_tracker(monkeypatch)
+
+    _make_backend(synthetic=True, detector=name)
+
+    assert seen["detector"] == name
+
+
+def test_make_backend_honors_env_var(monkeypatch):
+    """With no flag, YALP_FOLLOW_DETECTOR (when set) chooses the detector."""
+    from yalp.deliberative.agent_cli import _make_backend
+
+    monkeypatch.setenv("YALP_FOLLOW_DETECTOR", "hog")
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+    seen = _patch_tracker(monkeypatch)
+
+    _make_backend(synthetic=True)
+
+    assert seen["detector"] == "hog"
+
+
+def test_make_backend_flag_overrides_env_var(monkeypatch):
+    """The --follow-detector flag wins over YALP_FOLLOW_DETECTOR."""
+    from yalp.deliberative.agent_cli import _make_backend
+
+    monkeypatch.setenv("YALP_FOLLOW_DETECTOR", "hog")
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+    seen = _patch_tracker(monkeypatch)
+
+    _make_backend(synthetic=True, detector="person")
+
+    assert seen["detector"] == "person"
+
+
+def test_make_backend_graceful_fallback_when_tracker_none(monkeypatch):
+    """If build_follow_tracker returns None, _make_backend still works (no tracker, no raise)."""
+    import yalp.reactive.follow_runner as follow_runner
+    from yalp.deliberative.agent_cli import _make_backend
+
+    monkeypatch.delenv("YALP_FOLLOW_DETECTOR", raising=False)
+    monkeypatch.setattr("yalp.reactive.fake_backend.Camera", _FakeCamera)
+    _FakeCamera.instances = []
+    monkeypatch.setattr(follow_runner, "build_follow_tracker", lambda detector: None)
+
+    backend = _make_backend(synthetic=True)
+
+    assert backend is not None
+    assert backend._tracker is None  # lazy fallback left intact
+
+
+def test_agent_cli_follow_detector_flag_parses():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "--follow-detector", "person", "follow", "me"])
+    assert args.follow_detector == "person"
+
+
+def test_agent_cli_follow_detector_defaults_none():
+    parser = _make_agent_parser()
+    args = parser.parse_args(["agent", "follow", "me"])
+    assert getattr(args, "follow_detector", "MISSING") is None
+
+
 # --- build_context carries the honest open-loop caveats ----------------------
 def test_build_context_states_open_loop_caveats():
     from yalp.contract.messages import RobotState
