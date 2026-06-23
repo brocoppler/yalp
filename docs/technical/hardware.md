@@ -182,9 +182,48 @@ ASCII wiring sketch:
    └──────────────┘
 ```
 
-![Blueprint wiring and system diagram for the yalp rover — Raspberry Pi 5 GPIO header connected to DRV8833 motor driver, HC-SR04 ultrasonic with resistor divider, and dual TT gear motors; power rails shown separately](../images/yalp-wiring-diagram.png)
+Wiring diagram (rendered). The same connections as the ASCII sketch above, drawn as a Mermaid figure so the rendered labels are exact (the ASCII block stays as the plain-text fallback for viewers without Mermaid):
 
-*Wiring / system diagram — blueprint illustration for spatial orientation. **Canonical pin assignments are the GPIO table and ASCII sketch above**; a few pin labels in the rendered illustration are imprecise, so use the table as the authoritative reference when wiring.*
+```mermaid
+flowchart LR
+    USB["27W USB-C PD<br/>Pi supply (5V/5A)"]
+    BAT["4xAA NiMH pack<br/>~6V — motor supply"]
+    PI["Raspberry Pi 5<br/>3.3V GPIO header"]
+    DRV["DRV8833<br/>motor driver"]
+    ML["Left TT motor"]
+    MR["Right TT motor"]
+    US["HC-SR04<br/>ultrasonic"]
+    CAPS["Bulk 470–1000µF<br/>+ 0.1µF ceramic"]
+    GND(["Common ground"])
+
+    USB -->|"5V/5A — Pi only"| PI
+
+    PI -->|"GPIO12 HW PWM0 → AIN1 / left speed"| DRV
+    PI -->|"GPIO17 → AIN2 / left dir"| DRV
+    PI -->|"GPIO13 HW PWM1 → BIN1 / right speed"| DRV
+    PI -->|"GPIO22 → BIN2 / right dir"| DRV
+    PI -->|"GPIO24 → STBY/EN — TB6612 only; DRV8833 nSLEEP = 3.3V"| DRV
+    PI -->|"GPIO5 → TRIG (3.3V)"| US
+    US -->|"ECHO → GPIO6 via 1k/2k divider, 5V→3.3V"| PI
+    PI -->|"5V → VCC"| US
+
+    BAT -->|"~6V → VM, separate motor rail"| DRV
+    CAPS -.->|"across VM↔GND"| DRV
+
+    DRV -->|"AOUT1/2"| ML
+    DRV -->|"BOUT1/2"| MR
+
+    PI ---|"GND"| GND
+    DRV ---|"GND"| GND
+    BAT ---|"GND"| GND
+    CAPS ---|"GND"| GND
+```
+
+*Wiring diagram (Mermaid) — **the canonical rendered wiring reference**, exact to the §5 GPIO pin table and ASCII sketch above. Pins: GPIO12/13 are the two hardware-PWM speed lines (AIN1/BIN1), GPIO17/22 the plain-GPIO direction lines (AIN2/BIN2), GPIO5/6 the HC-SR04 TRIG/ECHO (ECHO via the 1k/2k divider), GPIO24 the optional TB6612 STBY. The motor rail (4×AA → VM, with bulk + ceramic caps) is separate from the Pi's USB-C supply; the common ground ties Pi ↔ driver ↔ battery (§2). Renders on GitHub.*
+
+![Stylized wiring overview for the yalp rover — Raspberry Pi 5 GPIO header connected to DRV8833 motor driver, HC-SR04 ultrasonic with resistor divider, and dual TT gear motors; power rails shown separately](../images/yalp-wiring-diagram.png)
+
+*Stylized overview only — an AI-generated illustration for spatial feel, **not** a wiring reference: some rendered pin labels are garbled. **For exact connections use the Mermaid figure and the §5 GPIO pin table above**, which are authoritative.*
 
 > **DECISION —** Motors run **phase/enable**, not four software-PWM inputs. PWM one input per channel on a **hardware-PWM** pin (GPIO12/13), drive the other input as plain GPIO for direction. This is forced by the Pi 5 exposing only **2 hardware-PWM lines**, and it's the better design anyway: it kills the software-PWM speed jitter that would otherwise compound the open-loop drift (§3).
 

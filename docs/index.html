@@ -787,6 +787,10 @@ A single cloud-routed loop has a fatal flaw: every decision takes a 2–3 second
       The LLM sets intent. The reactive layer executes it and keeps it safe.
 ```
 
+![Annotated desk scene of the yalp rover labelling the two control loops — "Claude - deliberative loop" in the cloud, "vision / follow" as the reactive layer on the Pi, and "collision-stop 0.30 m" as the safety threshold](../images/yalp-annotated-build.png)
+
+*Annotated build — the two-loop split made physical: deliberative (Claude, cloud) above the line; reactive (vision/follow, collision-stop) on the Pi below it.*
+
 The two layers map cleanly onto the project's "what can it really do" buckets: snappy/reliable things (follow, stop, avoid) are **local reflexes**; clumsy things (explore-and-describe, visual Q&A) are **cloud thinking** that tolerates latency because they are not time-critical.
 
 ---
@@ -974,6 +978,10 @@ The value is in **reading the patterns**, not adopting the stacks wholesale.
 
 ## 1. Bill of Materials
 
+![Exploded assembly view of the yalp rover showing each component — Raspberry Pi 5, Logitech C270 webcam, DRV8833 motor driver, TT gear motors, ball caster, HC-SR04 ultrasonic, and 4×AA battery holder — separated and labelled](../images/yalp-exploded-assembly.png)
+
+*Exploded assembly view — every v1 component laid out before it meets the cardboard deck.*
+
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
 > **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is today a **Step-A stub** (`RealReactiveBackend` raises `NotImplementedError`) carrying the on-Pi hardware TODO — motor control via `gpiozero` phase/enable on the §5 pins, the HC-SR04 read, and collision-stop — behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
@@ -1145,6 +1153,49 @@ ASCII wiring sketch:
    │                            tap ───► GPIO6  (safe 3.3V)
    └──────────────┘
 ```
+
+Wiring diagram (rendered). The same connections as the ASCII sketch above, drawn as a Mermaid figure so the rendered labels are exact (the ASCII block stays as the plain-text fallback for viewers without Mermaid):
+
+```mermaid
+flowchart LR
+    USB["27W USB-C PD<br/>Pi supply (5V/5A)"]
+    BAT["4xAA NiMH pack<br/>~6V — motor supply"]
+    PI["Raspberry Pi 5<br/>3.3V GPIO header"]
+    DRV["DRV8833<br/>motor driver"]
+    ML["Left TT motor"]
+    MR["Right TT motor"]
+    US["HC-SR04<br/>ultrasonic"]
+    CAPS["Bulk 470–1000µF<br/>+ 0.1µF ceramic"]
+    GND(["Common ground"])
+
+    USB -->|"5V/5A — Pi only"| PI
+
+    PI -->|"GPIO12 HW PWM0 → AIN1 / left speed"| DRV
+    PI -->|"GPIO17 → AIN2 / left dir"| DRV
+    PI -->|"GPIO13 HW PWM1 → BIN1 / right speed"| DRV
+    PI -->|"GPIO22 → BIN2 / right dir"| DRV
+    PI -->|"GPIO24 → STBY/EN — TB6612 only; DRV8833 nSLEEP = 3.3V"| DRV
+    PI -->|"GPIO5 → TRIG (3.3V)"| US
+    US -->|"ECHO → GPIO6 via 1k/2k divider, 5V→3.3V"| PI
+    PI -->|"5V → VCC"| US
+
+    BAT -->|"~6V → VM, separate motor rail"| DRV
+    CAPS -.->|"across VM↔GND"| DRV
+
+    DRV -->|"AOUT1/2"| ML
+    DRV -->|"BOUT1/2"| MR
+
+    PI ---|"GND"| GND
+    DRV ---|"GND"| GND
+    BAT ---|"GND"| GND
+    CAPS ---|"GND"| GND
+```
+
+*Wiring diagram (Mermaid) — **the canonical rendered wiring reference**, exact to the §5 GPIO pin table and ASCII sketch above. Pins: GPIO12/13 are the two hardware-PWM speed lines (AIN1/BIN1), GPIO17/22 the plain-GPIO direction lines (AIN2/BIN2), GPIO5/6 the HC-SR04 TRIG/ECHO (ECHO via the 1k/2k divider), GPIO24 the optional TB6612 STBY. The motor rail (4×AA → VM, with bulk + ceramic caps) is separate from the Pi's USB-C supply; the common ground ties Pi ↔ driver ↔ battery (§2). Renders on GitHub.*
+
+![Stylized wiring overview for the yalp rover — Raspberry Pi 5 GPIO header connected to DRV8833 motor driver, HC-SR04 ultrasonic with resistor divider, and dual TT gear motors; power rails shown separately](../images/yalp-wiring-diagram.png)
+
+*Stylized overview only — an AI-generated illustration for spatial feel, **not** a wiring reference: some rendered pin labels are garbled. **For exact connections use the Mermaid figure and the §5 GPIO pin table above**, which are authoritative.*
 
 > **DECISION —** Motors run **phase/enable**, not four software-PWM inputs. PWM one input per channel on a **hardware-PWM** pin (GPIO12/13), drive the other input as plain GPIO for direction. This is forced by the Pi 5 exposing only **2 hardware-PWM lines**, and it's the better design anyway: it kills the software-PWM speed jitter that would otherwise compound the open-loop drift (§3).
 
