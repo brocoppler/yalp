@@ -19,6 +19,8 @@ captures/
 *.png
 # ...but keep the committed test asset:
 !tests/assets/sample.jpg
+# ...and keep documentation blueprint illustrations:
+!docs/images/*.png
 
 # --- Detector model weights (downloaded once + cached, never committed) ---
 # The cv2.dnn person detector (MobileNet-SSD) caches its model files under

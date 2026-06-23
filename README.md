@@ -8,6 +8,10 @@ and vision Q&A. Development is **laptop-first** — the whole brain is built and
 on a laptop against a *fake* reactive backend (your laptop webcam stands in for
 the robot's camera); only the real reactive layer needs the Pi.
 
+![Blueprint-style beauty shot of the assembled yalp rover — differential-drive chassis with webcam, HC-SR04 ultrasonic, and Raspberry Pi 5 mounted on a cardboard deck](docs/images/yalp-hero.png)
+
+*Assembled yalp rover — blueprint illustration of the v1 cardboard chassis.*
+
 ## Repository layout
 
 ```
@@ -245,6 +249,10 @@ All voice knobs live in `.env` (see `.env.example` to override):
 Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
 
 ## What's implemented / What's next
+
+![Annotated desk scene showing the yalp rover with labelled components — "Claude - deliberative loop", "vision / follow", and "collision-stop 0.30 m" callouts](docs/images/yalp-annotated-build.png)
+
+*Annotated build overview — labels the deliberative-loop (cloud), the vision/follow reactive layer, and the 0.30 m collision-stop threshold.*
 
 **The laptop "brain" is COMPLETE** — the full voice → follow → voice-stop loop runs
 end to end on the laptop ("real eyes, fake wheels"), and **243 tests pass**:

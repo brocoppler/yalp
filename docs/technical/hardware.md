@@ -6,6 +6,10 @@
 
 ## 1. Bill of Materials
 
+![Exploded assembly view of the yalp rover showing each component — Raspberry Pi 5, Logitech C270 webcam, DRV8833 motor driver, TT gear motors, ball caster, HC-SR04 ultrasonic, and 4×AA battery holder — separated and labelled](../images/yalp-exploded-assembly.png)
+
+*Exploded assembly view — every v1 component laid out before it meets the cardboard deck.*
+
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
 > **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is today a **Step-A stub** (`RealReactiveBackend` raises `NotImplementedError`) carrying the on-Pi hardware TODO — motor control via `gpiozero` phase/enable on the §5 pins, the HC-SR04 read, and collision-stop — behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
@@ -177,6 +181,10 @@ ASCII wiring sketch:
    │                            tap ───► GPIO6  (safe 3.3V)
    └──────────────┘
 ```
+
+![Blueprint wiring and system diagram for the yalp rover — Raspberry Pi 5 GPIO header connected to DRV8833 motor driver, HC-SR04 ultrasonic with resistor divider, and dual TT gear motors; power rails shown separately](../images/yalp-wiring-diagram.png)
+
+*Wiring / system diagram — blueprint illustration for spatial orientation. **Canonical pin assignments are the GPIO table and ASCII sketch above**; a few pin labels in the rendered illustration are imprecise, so use the table as the authoritative reference when wiring.*
 
 > **DECISION —** Motors run **phase/enable**, not four software-PWM inputs. PWM one input per channel on a **hardware-PWM** pin (GPIO12/13), drive the other input as plain GPIO for direction. This is forced by the Pi 5 exposing only **2 hardware-PWM lines**, and it's the better design anyway: it kills the software-PWM speed jitter that would otherwise compound the open-loop drift (§3).
 

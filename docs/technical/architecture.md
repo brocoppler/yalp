@@ -46,6 +46,10 @@ A single cloud-routed loop has a fatal flaw: every decision takes a 2–3 second
       The LLM sets intent. The reactive layer executes it and keeps it safe.
 ```
 
+![Annotated desk scene of the yalp rover labelling the two control loops — "Claude - deliberative loop" in the cloud, "vision / follow" as the reactive layer on the Pi, and "collision-stop 0.30 m" as the safety threshold](../images/yalp-annotated-build.png)
+
+*Annotated build — the two-loop split made physical: deliberative (Claude, cloud) above the line; reactive (vision/follow, collision-stop) on the Pi below it.*
+
 The two layers map cleanly onto the project's "what can it really do" buckets: snappy/reliable things (follow, stop, avoid) are **local reflexes**; clumsy things (explore-and-describe, visual Q&A) are **cloud thinking** that tolerates latency because they are not time-critical.
 
 ---
