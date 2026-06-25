@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 
+from yalp import config
 from yalp.reactive.hardware import FakeMotorDriver
 from yalp.reactive.watchdog import MotorWatchdog
 
@@ -40,12 +41,17 @@ def test_regular_heartbeats_never_trip() -> None:
         for _ in range(40):
             wd.heartbeat()
             time.sleep(0.005)
+        # While running (before teardown), the watchdog never tripped, so it
+        # never issued a safety stop.
+        assert wd.tripped is False
+        assert wd.trip_count == 0
+        assert driver.stop_count == 0
     finally:
         wd.stop()
 
+    # No trip ever occurred; the only stop is the idempotent teardown stop.
     assert wd.tripped is False
     assert wd.trip_count == 0
-    assert driver.stop_count == 0
 
 
 def test_withholding_heartbeats_trips_and_stops_motors() -> None:
@@ -134,3 +140,26 @@ def test_start_is_idempotent() -> None:
         assert wd._thread is first, "start() must not replace a live thread"
     finally:
         wd.stop()
+
+
+def test_stop_issues_final_motor_stop() -> None:
+    """stop() zeroes the motors on teardown even if the watcher never tripped."""
+    driver = FakeMotorDriver()
+    wd = MotorWatchdog(driver, timeout_ms=20)
+    wd.start()
+    # Heartbeat regularly so the watcher never trips on its own...
+    for _ in range(4):
+        wd.heartbeat()
+        time.sleep(0.003)
+    assert wd.trip_count == 0, "precondition: no trip during this short window"
+
+    wd.stop()
+    # ...yet teardown still leaves the wheels zeroed.
+    assert driver.stop_count >= 1, "stop() must issue a final motor_driver.stop()"
+    assert driver.last == (0.0, 0.0)
+
+
+def test_default_timeout_comes_from_config() -> None:
+    """The default timeout is sourced from config.WATCHDOG_TIMEOUT_MS."""
+    wd = MotorWatchdog(FakeMotorDriver())
+    assert wd.timeout_s == config.WATCHDOG_TIMEOUT_MS / 1000.0

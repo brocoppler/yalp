@@ -92,17 +92,24 @@ class MotorWatchdog:
         return self
 
     def stop(self, timeout: float = 1.0) -> None:
-        """Signal the watcher thread to exit and join it (idempotent).
+        """Signal the watcher thread to exit, join it, and zero the motors.
 
-        Leaves the motors zeroed: the watchdog never *re-enables* motors, so on
-        teardown the driver remains stopped (the backend's own ``stop()`` also
-        zeroes them). Joining guarantees the thread is gone before we return.
+        Leaves the motors zeroed: the watchdog never *re-enables* motors, and on
+        teardown it issues a final ``motor_driver.stop()`` so the wheels are
+        guaranteed stopped even if the watcher thread never ran (the backend's
+        own ``stop()`` also zeroes them — both are idempotent). Joining
+        guarantees the thread is gone before we return. Idempotent.
         """
         self._stop_event.set()
         thread = self._thread
         if thread is not None:
             thread.join(timeout=timeout)
             self._thread = None
+        # Final safety stop on teardown: leave the wheels zeroed no matter what.
+        try:
+            self._motor_driver.stop()
+        except Exception:  # pragma: no cover - teardown must not raise
+            logger.exception("motor watchdog: motor_driver.stop() raised on teardown")
 
     # -- heartbeat -----------------------------------------------------------
     def heartbeat(self) -> None:
