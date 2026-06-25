@@ -42,6 +42,7 @@ from ..contract.ipc import IntentMailbox, ReactiveServer
 from .backend import ReactiveBackend
 from .calibration import MotorCalibration, load_if_present
 from .follow import FollowController, FollowDecision, frame_brightness
+from .watchdog import MotorWatchdog
 
 
 class RealReactiveBackend(ReactiveBackend):
@@ -249,16 +250,26 @@ class RealReactiveBackend(ReactiveBackend):
         rate = hz or self.tick_hz
         dt = 1.0 / rate
         self.start()
+        # Independent safety net (hardware.md / software-spec.md §2.6): a daemon
+        # watchdog that zeroes the motor GPIO if this loop ever stops heartbeating
+        # (wedged tick, blocking call, dead thread). It does NOT depend on the
+        # tick's own logic. We refresh its heartbeat at the END of every tick.
+        watchdog = MotorWatchdog(self._motor_driver)
+        watchdog.start()
         try:
             while stop_event is None or not stop_event.is_set():
                 t0 = time.monotonic()
                 state = self.tick()
                 if server is not None:
                     server.publish(state)
+                watchdog.heartbeat()
                 elapsed = time.monotonic() - t0
                 if dt > elapsed:
                     time.sleep(dt - elapsed)
         finally:
+            # Join the watchdog thread first, then zero/release the hardware. The
+            # watchdog never re-enables motors, so teardown leaves them stopped.
+            watchdog.stop()
             self.stop()
 
     # -- teardown ------------------------------------------------------------
