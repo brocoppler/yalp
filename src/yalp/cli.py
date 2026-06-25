@@ -30,6 +30,7 @@ FEATURE_MODULES: list[str] = [
     "yalp.deliberative.see",
     "yalp.deliberative.agent_cli",
     "yalp.reactive.follow_cli",
+    "yalp.reactive.hwtest_cli",
 ]
 
 
