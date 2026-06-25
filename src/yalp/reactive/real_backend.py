@@ -40,6 +40,7 @@ from ..camera import Camera
 from ..contract.messages import GoalStatus, Intent, Mode, RobotState
 from ..contract.ipc import IntentMailbox, ReactiveServer
 from .backend import ReactiveBackend
+from .calibration import MotorCalibration, load_if_present
 from .follow import FollowController, FollowDecision, frame_brightness
 
 
@@ -85,16 +86,33 @@ class RealReactiveBackend(ReactiveBackend):
         camera_source: str = "webcam",
         mailbox: Optional[IntentMailbox] = None,
         safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
-        max_speed_mps: float = 0.5,
-        turn_rate_dps: float = 120.0,
+        max_speed_mps: Optional[float] = None,
+        turn_rate_dps: Optional[float] = None,
         tick_hz: float = config.REACTIVE_TICK_HZ,
         tracker: Optional[object] = None,
         follow_controller: Optional[FollowController] = None,
+        calibration: Optional[MotorCalibration] = None,
+        calibration_path: Optional[object] = None,
     ) -> None:
         self.mailbox = mailbox or IntentMailbox()
         self.safe_stop_threshold_m = safe_stop_threshold_m
-        self.max_speed_mps = max(1e-3, max_speed_mps)
-        self.turn_rate_dps = max(1e-3, turn_rate_dps)
+
+        # --- Calibration (software-fixable physical reality) -------------------
+        # Load the persisted calibration if one exists (a missing/corrupt file ->
+        # None -> fall back to the historical hand-guessed defaults). An explicit
+        # ``calibration`` wins; an explicit ``max_speed_mps``/``turn_rate_dps``
+        # overrides even the calibration (handy for tests/one-offs).
+        if calibration is None:
+            calibration = load_if_present(calibration_path)
+        self.calibration = calibration
+        cal_speed = calibration.max_speed_mps if calibration is not None else 0.5
+        cal_turn = calibration.turn_rate_dps if calibration is not None else 120.0
+        self.max_speed_mps = max(
+            1e-3, max_speed_mps if max_speed_mps is not None else cal_speed
+        )
+        self.turn_rate_dps = max(
+            1e-3, turn_rate_dps if turn_rate_dps is not None else cal_turn
+        )
         self.tick_hz = max(1.0, tick_hz)
 
         # --- Hardware drivers (LAZY imports — keep the module laptop-importable).
@@ -104,7 +122,16 @@ class RealReactiveBackend(ReactiveBackend):
             from .hardware import GpiozeroMotorDriver, GpiozeroUltrasonicSensor
 
             if motor_driver is None:
-                motor_driver = GpiozeroMotorDriver()
+                # Honor the calibration's miswire fixes on the real driver too.
+                if calibration is not None:
+                    motor_driver = GpiozeroMotorDriver(
+                        left_invert=calibration.left_invert,
+                        right_invert=calibration.right_invert,
+                        left_trim=calibration.left_trim,
+                        right_trim=calibration.right_trim,
+                    )
+                else:
+                    motor_driver = GpiozeroMotorDriver()
             if range_sensor is None:
                 range_sensor = GpiozeroUltrasonicSensor()
         self._motor_driver = motor_driver

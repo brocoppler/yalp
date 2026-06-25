@@ -186,6 +186,8 @@ class GpiozeroMotorDriver:
         pwm_frequency: int = config.MOTOR_PWM_FREQUENCY_HZ,
         left_invert: bool = config.MOTOR_LEFT_INVERT,
         right_invert: bool = config.MOTOR_RIGHT_INVERT,
+        left_trim: float = 1.0,
+        right_trim: float = 1.0,
     ) -> None:
         # --- Lazy hardware imports (keep the module laptop-importable) --------
         try:
@@ -202,6 +204,10 @@ class GpiozeroMotorDriver:
 
         self._left_invert = bool(left_invert)
         self._right_invert = bool(right_invert)
+        # Per-wheel magnitude scaling (drift fix). 1.0 = no-op so the default
+        # driver is byte-for-byte identical to the pre-calibration behaviour.
+        self._left_trim = float(left_trim)
+        self._right_trim = float(right_trim)
         self._driver_kind = str(driver_kind).strip().lower()
         self._closed = False
 
@@ -269,8 +275,17 @@ class GpiozeroMotorDriver:
             return 1.0
         return float(value)
 
-    def _drive_channel(self, pwm: Any, dir_dev: Any, throttle: float, invert: bool) -> None:
-        throttle = self._clamp(throttle)
+    def _drive_channel(
+        self,
+        pwm: Any,
+        dir_dev: Any,
+        throttle: float,
+        invert: bool,
+        trim: float = 1.0,
+    ) -> None:
+        # Apply per-wheel trim scaling BEFORE clamping, so the trimmed magnitude
+        # still lands in [-1, 1] (trim defaults to 1.0 = no-op).
+        throttle = self._clamp(throttle * trim)
         if invert:
             throttle = -throttle
         # Direction pin: HIGH for forward (>= 0), LOW for reverse.
@@ -282,9 +297,19 @@ class GpiozeroMotorDriver:
         pwm.value = abs(throttle)
 
     def set_motors(self, left: float, right: float) -> None:
-        """Command signed throttles in ``[-1.0, 1.0]`` (sign = direction)."""
-        self._drive_channel(self._left_pwm, self._left_dir, left, self._left_invert)
-        self._drive_channel(self._right_pwm, self._right_dir, right, self._right_invert)
+        """Command signed throttles in ``[-1.0, 1.0]`` (sign = direction).
+
+        Each wheel's calibration is applied here: the commanded value is scaled
+        by the per-wheel ``*_trim`` (default ``1.0`` = no-op) and its sign flipped
+        if that wheel's ``*_invert`` is set (default ``False`` = no-op), so an
+        un-calibrated driver behaves exactly as before.
+        """
+        self._drive_channel(
+            self._left_pwm, self._left_dir, left, self._left_invert, self._left_trim
+        )
+        self._drive_channel(
+            self._right_pwm, self._right_dir, right, self._right_invert, self._right_trim
+        )
 
     def stop(self) -> None:
         """Coast both channels by zeroing the PWM duty (direction unchanged)."""
