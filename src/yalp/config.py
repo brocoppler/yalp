@@ -239,6 +239,50 @@ STT_BACKEND: str = os.environ.get("YALP_STT_BACKEND", "faster-whisper")  # 'fast
 STT_MODEL: str = os.environ.get("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whisper
 
 
+# --- Reactive hardware GPIO pin map (BCM numbering; hardware.md) ---
+# All pin constants use BCM (Broadcom) numbering as used by gpiozero / lgpio.
+# gpiozero and lgpio are NEVER imported here; they live in the 'pi' optional extra
+# and must be imported lazily inside hardware-specific modules only.
+#
+# Motor driver: TB6612FNG or DRV8833 dual H-bridge (see MOTOR_DRIVER_KIND below).
+#   AIN1/BIN1 = PWM speed inputs (hardware PWM channels PWM0/PWM1 on Pi 5)
+#   AIN2/BIN2 = direction inputs (plain GPIO, HIGH = forward per wiring)
+#   STBY      = TB6612FNG standby active-LOW; DRV8833 ties nSLEEP HIGH so unused.
+# Ultrasonic: HC-SR04 (5 V tolerant level-shifter in series with ECHO line).
+
+MOTOR_LEFT_PWM_PIN: int = int(os.environ.get("YALP_MOTOR_LEFT_PWM_PIN", "12"))   # hardware PWM0, left speed / AIN1
+MOTOR_LEFT_DIR_PIN: int = int(os.environ.get("YALP_MOTOR_LEFT_DIR_PIN", "17"))   # plain GPIO, left dir / AIN2
+MOTOR_RIGHT_PWM_PIN: int = int(os.environ.get("YALP_MOTOR_RIGHT_PWM_PIN", "13")) # hardware PWM1, right speed / BIN1
+MOTOR_RIGHT_DIR_PIN: int = int(os.environ.get("YALP_MOTOR_RIGHT_DIR_PIN", "22")) # plain GPIO, right dir / BIN2
+# TB6612FNG STBY pin (active-LOW). DRV8833 ties nSLEEP high permanently, so for
+# that driver this pin is unused (None). The hardware layer checks MOTOR_DRIVER_KIND
+# before driving this pin.
+_stby_raw: str = os.environ.get("YALP_MOTOR_STBY_PIN", "24")
+MOTOR_STBY_PIN: int | None = None if _stby_raw.strip().lower() in ("none", "") else int(_stby_raw)
+
+ULTRASONIC_TRIG_PIN: int = int(os.environ.get("YALP_ULTRASONIC_TRIG_PIN", "5"))
+ULTRASONIC_ECHO_PIN: int = int(os.environ.get("YALP_ULTRASONIC_ECHO_PIN", "6"))
+
+# Motor driver kind: 'drv8833' (default, nSLEEP tied HIGH) or 'tb6612fng' (STBY used).
+MOTOR_DRIVER_KIND: str = os.environ.get("YALP_MOTOR_DRIVER", "drv8833")
+
+# PWM carrier frequency for the motor speed inputs (Hz). 1 kHz is a good default
+# for most DC gear-motors; go higher (e.g. 20 kHz) to eliminate audible whine.
+MOTOR_PWM_FREQUENCY_HZ: int = int(os.environ.get("YALP_MOTOR_PWM_HZ", "1000"))
+
+# HC-SR04 ultrasonic sensor timing constants.
+ULTRASONIC_MAX_POLL_HZ: float = 15.0      # max safe polling rate; HC-SR04 needs ≥60 ms between pings
+ULTRASONIC_ECHO_TIMEOUT_S: float = 0.06   # treat echo as missed if not received within 60 ms
+ULTRASONIC_MAX_DISTANCE_M: float = 4.0    # discard readings beyond the sensor's reliable range
+SPEED_OF_SOUND_MPS: float = 343.0         # m/s at ~20 °C; distance = (echo_time * v) / 2
+
+# Per-channel direction invert flags. Set True if a motor is wired in reverse
+# (turns the "wrong" way for a given PWM/dir signal). Env values are truthy strings
+# ("1", "true", "yes") — anything else is False.
+MOTOR_LEFT_INVERT: bool = os.environ.get("YALP_MOTOR_LEFT_INVERT", "").strip().lower() in ("1", "true", "yes")
+MOTOR_RIGHT_INVERT: bool = os.environ.get("YALP_MOTOR_RIGHT_INVERT", "").strip().lower() in ("1", "true", "yes")
+
+
 @dataclass(frozen=True)
 class Config:
     """A typed snapshot of yalp's configuration.
@@ -290,6 +334,22 @@ class Config:
     voice_audio_file: str = VOICE_AUDIO_FILE
     stt_backend: str = STT_BACKEND
     stt_model: str = STT_MODEL
+    # --- Reactive hardware GPIO pin map ---
+    motor_left_pwm_pin: int = MOTOR_LEFT_PWM_PIN
+    motor_left_dir_pin: int = MOTOR_LEFT_DIR_PIN
+    motor_right_pwm_pin: int = MOTOR_RIGHT_PWM_PIN
+    motor_right_dir_pin: int = MOTOR_RIGHT_DIR_PIN
+    motor_stby_pin: int | None = MOTOR_STBY_PIN
+    ultrasonic_trig_pin: int = ULTRASONIC_TRIG_PIN
+    ultrasonic_echo_pin: int = ULTRASONIC_ECHO_PIN
+    motor_driver_kind: str = MOTOR_DRIVER_KIND
+    motor_pwm_frequency_hz: int = MOTOR_PWM_FREQUENCY_HZ
+    ultrasonic_max_poll_hz: float = ULTRASONIC_MAX_POLL_HZ
+    ultrasonic_echo_timeout_s: float = ULTRASONIC_ECHO_TIMEOUT_S
+    ultrasonic_max_distance_m: float = ULTRASONIC_MAX_DISTANCE_M
+    speed_of_sound_mps: float = SPEED_OF_SOUND_MPS
+    motor_left_invert: bool = MOTOR_LEFT_INVERT
+    motor_right_invert: bool = MOTOR_RIGHT_INVERT
 
 
 def get_api_key() -> str | None:
@@ -362,6 +422,21 @@ __all__ = [
     "VOICE_AUDIO_FILE",
     "STT_BACKEND",
     "STT_MODEL",
+    "MOTOR_LEFT_PWM_PIN",
+    "MOTOR_LEFT_DIR_PIN",
+    "MOTOR_RIGHT_PWM_PIN",
+    "MOTOR_RIGHT_DIR_PIN",
+    "MOTOR_STBY_PIN",
+    "ULTRASONIC_TRIG_PIN",
+    "ULTRASONIC_ECHO_PIN",
+    "MOTOR_DRIVER_KIND",
+    "MOTOR_PWM_FREQUENCY_HZ",
+    "ULTRASONIC_MAX_POLL_HZ",
+    "ULTRASONIC_ECHO_TIMEOUT_S",
+    "ULTRASONIC_MAX_DISTANCE_M",
+    "SPEED_OF_SOUND_MPS",
+    "MOTOR_LEFT_INVERT",
+    "MOTOR_RIGHT_INVERT",
     "Config",
     "get_api_key",
     "require_api_key",

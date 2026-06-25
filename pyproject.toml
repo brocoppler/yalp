@@ -28,6 +28,9 @@ dev = ["pytest"]
 #   sounddevice    -> live mic capture (PortAudio)
 #   faster-whisper -> local on-CPU speech-to-text (CTranslate2)
 voice = ["sounddevice", "faster-whisper"]
+# Optional Raspberry Pi hardware drivers. NOT installed on Mac/dev machines.
+# Install with: pip install yalp[pi]
+pi = ["gpiozero", "lgpio"]
 
 [project.scripts]
 yalp = "yalp.cli:main"
