@@ -32,6 +32,7 @@ FEATURE_MODULES: list[str] = [
     "yalp.reactive.follow_cli",
     "yalp.reactive.hwtest_cli",
     "yalp.reactive.reactive_cli",
+    "yalp.reactive.bench_cli",
 ]
 
 
