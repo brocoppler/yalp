@@ -6,24 +6,35 @@
 #
 # Usage:
 #   bash scripts/pi_setup.sh
+#
+# Note on GPIO libraries: on Raspberry Pi OS the lgpio C-extension is best
+# installed from apt (python3-lgpio) rather than built from PyPI (a source
+# build needs swig + headers). We therefore create the venv with
+# --system-site-packages so the venv can see the apt-installed lgpio, and pip
+# treats the "lgpio" dependency as already satisfied instead of compiling it.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MIN_PYTHON_MINOR=11
 
-echo "==> [1/6] Updating package lists and upgrading installed packages..."
+echo "==> [1/7] Updating package lists and upgrading installed packages..."
 sudo apt update
 sudo apt full-upgrade -y
 
-echo "==> [2/6] Installing system packages..."
+echo "==> [2/7] Installing system packages..."
+# python3-lgpio: the GPIO backend (used via --system-site-packages, NOT pip).
+# swig + python3-dev: fallback so a source build of lgpio could still succeed
+# if the apt package is ever unavailable.
 sudo apt install -y \
     python3 \
     python3-venv \
     python3-pip \
+    python3-dev \
     git \
+    swig \
     python3-lgpio
 
-echo "==> [3/6] Checking Python version (>= 3.${MIN_PYTHON_MINOR} required)..."
+echo "==> [3/7] Checking Python version (>= 3.${MIN_PYTHON_MINOR} required)..."
 PYTHON_BIN="$(command -v python3)"
 PYTHON_MINOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.minor)')"
 PYTHON_MAJOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.major)')"
@@ -33,24 +44,51 @@ if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR"
 fi
 echo "    Python $("$PYTHON_BIN" --version) — OK"
 
-echo "==> [4/6] Creating virtual environment (if absent)..."
+echo "==> [4/7] Creating virtual environment with system site-packages (if absent)..."
 VENV_DIR="${REPO_ROOT}/.venv"
+PYVENV_CFG="${VENV_DIR}/pyvenv.cfg"
 if [ ! -d "${VENV_DIR}" ]; then
-    "$PYTHON_BIN" -m venv "${VENV_DIR}"
-    echo "    Created ${VENV_DIR}"
+    "$PYTHON_BIN" -m venv --system-site-packages "${VENV_DIR}"
+    echo "    Created ${VENV_DIR} (with --system-site-packages)"
 else
     echo "    ${VENV_DIR} already exists — skipping creation"
 fi
 
-echo "==> [5/6] Activating virtual environment..."
+echo "==> [5/7] Ensuring the venv can see system site-packages (for apt lgpio)..."
+# Repair an older/sealed venv in place rather than forcing a recreate.
+if [ -f "${PYVENV_CFG}" ]; then
+    if grep -q '^include-system-site-packages = false' "${PYVENV_CFG}"; then
+        sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' "${PYVENV_CFG}"
+        echo "    Flipped include-system-site-packages → true"
+    elif grep -q '^include-system-site-packages = true' "${PYVENV_CFG}"; then
+        echo "    include-system-site-packages already true — OK"
+    else
+        echo "include-system-site-packages = true" >> "${PYVENV_CFG}"
+        echo "    Added include-system-site-packages = true"
+    fi
+fi
+
+echo "==> [6/7] Activating venv and installing yalp with [pi] and [dev] extras..."
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 echo "    Active Python: $(python --version)"
-
-echo "==> [6/6] Installing yalp with [pi] and [dev] extras..."
 pip install --upgrade pip --quiet
 pip install -e "${REPO_ROOT}[pi]"
 pip install -e "${REPO_ROOT}[dev]"
+
+echo "==> [7/7] Verifying the GPIO stack imports..."
+python - <<'PYEOF'
+import sys
+try:
+    import lgpio  # from apt python3-lgpio, visible via --system-site-packages
+    import gpiozero
+except Exception as exc:  # pragma: no cover - environment guard
+    print(f"ERROR: GPIO stack not importable: {exc}", file=sys.stderr)
+    print("Confirm 'python3-lgpio' is installed (apt) and the venv has "
+          "include-system-site-packages = true.", file=sys.stderr)
+    sys.exit(1)
+print(f"    lgpio + gpiozero import OK (lgpio at {lgpio.__file__})")
+PYEOF
 
 echo ""
 echo "Pi setup complete"
