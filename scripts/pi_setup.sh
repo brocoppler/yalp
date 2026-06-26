@@ -25,6 +25,9 @@ echo "==> [2/7] Installing system packages..."
 # python3-lgpio: the GPIO backend (used via --system-site-packages, NOT pip).
 # swig + python3-dev: fallback so a source build of lgpio could still succeed
 # if the apt package is ever unavailable.
+# libgl1 + libglib2.0-0: OpenCV (opencv-python) runtime libs. Raspberry Pi OS
+# Lite is headless and omits libGL, so `import cv2` fails with
+# "libGL.so.1: cannot open shared object file" without these.
 sudo apt install -y \
     python3 \
     python3-venv \
@@ -32,7 +35,9 @@ sudo apt install -y \
     python3-dev \
     git \
     swig \
-    python3-lgpio
+    python3-lgpio \
+    libgl1 \
+    libglib2.0-0
 
 echo "==> [3/7] Checking Python version (>= 3.${MIN_PYTHON_MINOR} required)..."
 PYTHON_BIN="$(command -v python3)"
