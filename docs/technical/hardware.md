@@ -92,6 +92,31 @@ Two independent supplies, one shared ground. This is the single most failure-pro
 
 > **DECISION —** Gate E (power/brownout) is **quantitative**, not a vibe check. It **PASSES** only when, under a hard stall-heavy motor drive script, *all three* hold: (1) **no Pi resets**, (2) `vcgencmd get_throttled` **stays `0x0`**, and (3) the measured **motor-rail voltage** (multimeter, or a ~$1 ADC on the bench) **stays above the driver's logic VIH**. Choose the bulk-cap value from that measured sag — don't guess. **NO-GO recovery:** add **470–1000µF bulk + 0.1µF ceramic across VM**, twist and shorten the motor leads, switch to **NiMH** cells (§1), then re-test. This gate sits in sequence in `roadmap.md` — it stands between "Hello motors" and everything after it; no autonomous driving until it passes clean.
 
+### 2.1 Mobile / untethered power — two onboard sources
+
+On the bench the Pi runs off the 27W USB-C **wall** PD supply. To cut the cord and
+let Izzy roam, that wall charger is the only thing that changes: it is swapped for a
+**battery on each rail**, keeping the exact same two-supply / one-ground topology
+above. An untethered Izzy therefore carries **two separate onboard power sources**:
+
+1. **Brain (Pi 5) — a USB-C power bank.** Plug a power bank into the Pi's USB-C
+   port *exactly like the wall charger*. It must supply **5 V at 3 A minimum**; a
+   **5 V / 5 A "27W" PD bank is ideal** — look for one advertised as **"Raspberry
+   Pi 5 compatible."** The Pi 5 is **5 V-only and power-sensitive**: under-powering
+   it causes throttling and brownouts (the same failure Gate E guards against, just
+   sourced from the bank instead of the motors).
+2. **Motors — the 4×AA NiMH pack.** Unchanged from §1/§2: the 4×AA NiMH pack feeds
+   the DRV8833 motor supply (**VM**), entirely separate from the Pi.
+
+The two supplies **share a common ground** (required — §2) but are **otherwise
+separate**. **NEVER power the Pi 5 from the AA pack** — it cannot supply clean 5 V at
+the current the Pi 5 needs, and motor noise on that rail would brown the Pi out.
+
+> **OPEN —** Which specific PD power bank (and whether the ~1–1.5 h roaming-runtime
+> estimate survives motors + Pi + camera under real load) is still open — see
+> `roadmap.md` §5. The requirement is fixed (5 V/3 A min, 5 V/5 A ideal, Pi-5
+> compatible); the exact part is not yet chosen.
+
 ---
 
 ## 3. Drivetrain reality — open-loop, and honest about it
@@ -128,6 +153,8 @@ For a bot that *turns and follows* — and a future version near a 5–8-year-ol
 - **Jittery software timing.** The echo pulse is measured in software, and on a busy, non-realtime Python loop that timing is noisy. Spec an **echo TIMEOUT**: if no echo returns inside the window, treat the reading as **"unknown" and bias to STOP** — never decay a missed echo into "clear." Also respect the sensor's **~60 ms minimum cycle**: don't poll faster than **~15 Hz**, or pings overlap and readings corrupt each other.
 
 > **DECISION —** HC-SR04 handling: (1) meter the divider tap at ~3.3V before wiring it to a pin; (2) a missed/timed-out echo means **STOP, not clear**; (3) cap the poll rate at ~15 Hz (≥60 ms between pings). The voltage-divider check and the first ranged reading are each their own milestones in `roadmap.md`.
+
+> **NOTE (as-built on Izzy) —** The HC-SR04 is **wired and working on the real Pi 5** (`yalp hwtest --check ultrasonic` returns real distances). The as-built divider uses **1 kΩ + 1.5 kΩ, not the 1 kΩ + 2 kΩ specced below** — the build kit had no 2 kΩ resistor. 1 kΩ + 1.5 kΩ yields **exactly 3.0 V at the tap** (5 V × 1.5 / (1 + 1.5) = 3.0 V), which is slightly *better*: lower total impedance → cleaner edges, and more margin under the 3.3 V GPIO limit while still a solid logic-HIGH for ECHO. This is a **purely physical substitution — software and pin assignments (TRIG = GPIO5, ECHO = GPIO6) are unchanged.** The full per-jumper, wire-color, physical-pin record (plus the loose-connection and gpiozero software-timing troubleshooting notes) lives in `as-built-wiring.md`.
 
 > **RISK —** A single front HC-SR04 leaves the robot blind to the sides, the rear, glass, and drop-offs. It validates the reflex but is not adequate collision coverage for autonomous turning/following, and definitely not for the kid version.
 
@@ -230,6 +257,8 @@ flowchart LR
 > **RISK —** On the Pi 5 the GPIO moved behind the **RP1 southbridge**, so the classic **`RPi.GPIO` library does not work** — and a large fraction of HC-SR04 and DRV8833 tutorials are written against it, where they will **silently fail** (no error, just no pin activity). **Mitigation:** use **`gpiozero` on the `lgpio` / native pin factory** (the default Pi 5 backend), and do **not** copy-paste `RPi.GPIO` snippets. Prove the stack works with a "GPIO first light" step — blink one LED / toggle one motor pin — which belongs **first** in `roadmap.md`, before any motor or sensor code.
 
 > **RISK —** Wiring HC-SR04 ECHO straight to a Pi GPIO feeds 5V into a 3.3V pin and can fry it. The 1kΩ/2kΩ divider (or any ~2:1 ratio dropping 5V to ~3.3V) is mandatory, not optional.
+
+> **NOTE (as-built) —** The ASCII/Mermaid figures above show the specced **1 kΩ / 2 kΩ** divider; the robot is actually built with **1 kΩ / 1.5 kΩ → 3.0 V** (kit had no 2 kΩ; see §4). Same ~2:1 ratio, same pins (TRIG = GPIO5, ECHO = GPIO6), same software. The exact as-built jumpers, wire colors, and **physical** header pins are in `as-built-wiring.md`.
 
 ---
 

@@ -60,6 +60,7 @@ the docs resolve. Only `build.py` touches the embedded copies between the `<!--D
 | Technical | `technical/hardware.md` | Bill of materials, power architecture, drivetrain, sensing, pin planning. |
 | Technical | `technical/software-spec.md` | The two-layer runtime, the loop-to-loop wire contract, person-tracking, config. |
 | Technical | `technical/roadmap.md` | Build sequencing, the go/no-go gates, the risk register, the consolidated open questions. |
+| Technical | `technical/as-built-wiring.md` | The as-built record of the *real* robot's wiring (wire colors, breadboard nodes, Pi physical pins) — what is actually connected on Izzy today. |
 | Archive | `archive/initial-plan.md` | The original brain-dump the six specs were factored out of — kept for provenance. |
 
 ## How it's built

@@ -185,6 +185,7 @@
     <a class="doc" data-doc="software-spec.md">software-spec.md</a>
     <a class="doc" data-doc="roadmap.md">roadmap.md</a>
     <a class="doc" data-doc="hardware-runbook.md">hardware-runbook.md</a>
+    <a class="doc" data-doc="as-built-wiring.md">as-built-wiring.md</a>
 
     <div class="grp">Archive</div>
     <a class="doc" data-doc="initial-plan.md">initial-plan.md</a>
@@ -1064,6 +1065,31 @@ Two independent supplies, one shared ground. This is the single most failure-pro
 
 > **DECISION —** Gate E (power/brownout) is **quantitative**, not a vibe check. It **PASSES** only when, under a hard stall-heavy motor drive script, *all three* hold: (1) **no Pi resets**, (2) `vcgencmd get_throttled` **stays `0x0`**, and (3) the measured **motor-rail voltage** (multimeter, or a ~$1 ADC on the bench) **stays above the driver's logic VIH**. Choose the bulk-cap value from that measured sag — don't guess. **NO-GO recovery:** add **470–1000µF bulk + 0.1µF ceramic across VM**, twist and shorten the motor leads, switch to **NiMH** cells (§1), then re-test. This gate sits in sequence in `roadmap.md` — it stands between "Hello motors" and everything after it; no autonomous driving until it passes clean.
 
+### 2.1 Mobile / untethered power — two onboard sources
+
+On the bench the Pi runs off the 27W USB-C **wall** PD supply. To cut the cord and
+let Izzy roam, that wall charger is the only thing that changes: it is swapped for a
+**battery on each rail**, keeping the exact same two-supply / one-ground topology
+above. An untethered Izzy therefore carries **two separate onboard power sources**:
+
+1. **Brain (Pi 5) — a USB-C power bank.** Plug a power bank into the Pi's USB-C
+   port *exactly like the wall charger*. It must supply **5 V at 3 A minimum**; a
+   **5 V / 5 A "27W" PD bank is ideal** — look for one advertised as **"Raspberry
+   Pi 5 compatible."** The Pi 5 is **5 V-only and power-sensitive**: under-powering
+   it causes throttling and brownouts (the same failure Gate E guards against, just
+   sourced from the bank instead of the motors).
+2. **Motors — the 4×AA NiMH pack.** Unchanged from §1/§2: the 4×AA NiMH pack feeds
+   the DRV8833 motor supply (**VM**), entirely separate from the Pi.
+
+The two supplies **share a common ground** (required — §2) but are **otherwise
+separate**. **NEVER power the Pi 5 from the AA pack** — it cannot supply clean 5 V at
+the current the Pi 5 needs, and motor noise on that rail would brown the Pi out.
+
+> **OPEN —** Which specific PD power bank (and whether the ~1–1.5 h roaming-runtime
+> estimate survives motors + Pi + camera under real load) is still open — see
+> `roadmap.md` §5. The requirement is fixed (5 V/3 A min, 5 V/5 A ideal, Pi-5
+> compatible); the exact part is not yet chosen.
+
 ---
 
 ## 3. Drivetrain reality — open-loop, and honest about it
@@ -1100,6 +1126,8 @@ For a bot that *turns and follows* — and a future version near a 5–8-year-ol
 - **Jittery software timing.** The echo pulse is measured in software, and on a busy, non-realtime Python loop that timing is noisy. Spec an **echo TIMEOUT**: if no echo returns inside the window, treat the reading as **"unknown" and bias to STOP** — never decay a missed echo into "clear." Also respect the sensor's **~60 ms minimum cycle**: don't poll faster than **~15 Hz**, or pings overlap and readings corrupt each other.
 
 > **DECISION —** HC-SR04 handling: (1) meter the divider tap at ~3.3V before wiring it to a pin; (2) a missed/timed-out echo means **STOP, not clear**; (3) cap the poll rate at ~15 Hz (≥60 ms between pings). The voltage-divider check and the first ranged reading are each their own milestones in `roadmap.md`.
+
+> **NOTE (as-built on Izzy) —** The HC-SR04 is **wired and working on the real Pi 5** (`yalp hwtest --check ultrasonic` returns real distances). The as-built divider uses **1 kΩ + 1.5 kΩ, not the 1 kΩ + 2 kΩ specced below** — the build kit had no 2 kΩ resistor. 1 kΩ + 1.5 kΩ yields **exactly 3.0 V at the tap** (5 V × 1.5 / (1 + 1.5) = 3.0 V), which is slightly *better*: lower total impedance → cleaner edges, and more margin under the 3.3 V GPIO limit while still a solid logic-HIGH for ECHO. This is a **purely physical substitution — software and pin assignments (TRIG = GPIO5, ECHO = GPIO6) are unchanged.** The full per-jumper, wire-color, physical-pin record (plus the loose-connection and gpiozero software-timing troubleshooting notes) lives in `as-built-wiring.md`.
 
 > **RISK —** A single front HC-SR04 leaves the robot blind to the sides, the rear, glass, and drop-offs. It validates the reflex but is not adequate collision coverage for autonomous turning/following, and definitely not for the kid version.
 
@@ -1202,6 +1230,8 @@ flowchart LR
 > **RISK —** On the Pi 5 the GPIO moved behind the **RP1 southbridge**, so the classic **`RPi.GPIO` library does not work** — and a large fraction of HC-SR04 and DRV8833 tutorials are written against it, where they will **silently fail** (no error, just no pin activity). **Mitigation:** use **`gpiozero` on the `lgpio` / native pin factory** (the default Pi 5 backend), and do **not** copy-paste `RPi.GPIO` snippets. Prove the stack works with a "GPIO first light" step — blink one LED / toggle one motor pin — which belongs **first** in `roadmap.md`, before any motor or sensor code.
 
 > **RISK —** Wiring HC-SR04 ECHO straight to a Pi GPIO feeds 5V into a 3.3V pin and can fry it. The 1kΩ/2kΩ divider (or any ~2:1 ratio dropping 5V to ~3.3V) is mandatory, not optional.
+
+> **NOTE (as-built) —** The ASCII/Mermaid figures above show the specced **1 kΩ / 2 kΩ** divider; the robot is actually built with **1 kΩ / 1.5 kΩ → 3.0 V** (kit had no 2 kΩ; see §4). Same ~2:1 ratio, same pins (TRIG = GPIO5, ECHO = GPIO6), same software. The exact as-built jumpers, wire colors, and **physical** header pins are in `as-built-wiring.md`.
 
 ---
 
@@ -1697,12 +1727,30 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 > **Phase 1 (the brain) is COMPLETE and laptop-tested — 243 tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
-> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **6 of 16
-> rungs are green (0, A, B, C, D, E)** plus voice OUTPUT *and* INPUT (milestone O is now
-> functionally done on the laptop); the remaining hardware rungs (F–N) are **gated on the
-> Pi 5 + Phase 2**, which was **ORDERED 2026-06-20 and is inbound**. **The next target is
-> Raspberry Pi 5 bring-up.** The full §3 status and the §1 ladder have the detail; this is
-> the skim.
+> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **8 of 16
+> rungs are green (0, A, B, C, D, E + the first two Pi-hardware rungs G and I)** plus voice
+> OUTPUT *and* INPUT (milestone O is now functionally done on the laptop); the remaining
+> hardware rungs (F, H, J–N) are **gated on the Pi 5 + Phase 2**. **Phase 2 / Wave 3
+> hardware bring-up is UNDERWAY on the real robot — see the next note.** The full §3 status
+> and the §1 ladder have the detail; this is the skim.
+
+> **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, and the
+> ultrasonic sensor are DONE on real hardware; motors are next.** The physical robot —
+> named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with Raspberry Pi OS
+> Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp installed
+> from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
+> `--system-site-packages` so the apt `python3-lgpio` is visible; swig + python3-dev
+> fallback; libgl1 + libglib2.0-0 so `import cv2` works on Lite — all committed). Green on
+> the real Pi: **GPIO stack verified** (gpiozero lgpio/native factory, no RPi.GPIO —
+> milestone **G**, `scripts/verify_gpio_stack.py` passes); **camera** (Logitech C270 USB —
+> `yalp hwtest --check camera` grabs a 640×480 frame, **B** Pi-confirmed); **vision** (`yalp
+> see` runs on Izzy — captures a frame and describes the scene via the Claude vision API,
+> key in `~/yalp/.env`, **C** Pi-confirmed); and the **HC-SR04 ultrasonic** (milestone **I**
+> — `yalp hwtest --check ultrasonic` returns real distances, a live 25-read stream tracked a
+> hand at ~22/25 good reads). The as-built divider is **1 kΩ + 1.5 kΩ → 3.0 V** (kit had no
+> 2 kΩ; pins/software unchanged) and the full as-built record is in `as-built-wiring.md`.
+> **NEXT: motors** — DRV8833 + 2× TT gear motors + 4×AA pack (Gate E **F** → Hello motors
+> **H**), not yet wired.
 
 **DONE — the laptop phase (run any of these today):**
 
@@ -1749,29 +1797,30 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 6 of 16 green — the entire laptop phase is DONE.** Steps **0, A, B, C,
-> D, E** are green (plus voice OUTPUT **and** INPUT and the full follow brain — the whole
-> voice → follow → voice-stop loop works end to end), all laptop-tested (**243 tests
-> passing**). The remaining hardware rungs (**F–N**) need the Pi 5 + Phase 2 (ORDERED
-> 2026-06-20, inbound). So "6 of 16" means *the brain is finished* — not that little is
-> done. **Next target: Raspberry Pi 5 bring-up** — start the Pi-side steps that need no
-> battery pack (GPIO first light **G**, HC-SR04 divider **I**, wiring §5) immediately;
-> the motor-spinning rungs (Gate E **F**, Hello motors **H**, reflex **J**, fps gates
-> **K/L**) wait on the inbound 4×AA NiMH holder. Update this line as each done-signal
-> goes green.
+> **Progress: 8 of 16 green — the entire laptop phase plus the first two Pi-hardware
+> rungs are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and** INPUT
+> and the full follow brain — the whole voice → follow → voice-stop loop works end to end),
+> all laptop-tested (**243 tests passing**); and on the **real Pi 5 ("Izzy")** the
+> power-off bring-up rungs are now green too — **GPIO first light (G)** and the **HC-SR04
+> divider + first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on
+> the actual hardware (`yalp hwtest --check camera`, `yalp see` both run on Izzy). The
+> remaining hardware rungs (**F, H, J–N**) need the 4×AA pack + motors wired. **Next
+> target: motors** — the motor-spinning rungs (Gate E **F**, Hello motors **H**, reflex
+> **J**, fps gates **K/L**) are next now that the no-battery Pi-side steps are done. Update
+> this line as each done-signal goes green.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
 |---|---|---|---|---|
 | **0** | **Order Phase 2 parts now** ✅ ORDERED 2026-06-20 | Phase 2 order placed (motors, driver, ball caster, HC-SR04, divider resistors, battery + holder, breadboard/wiring, 470–1000 µF + 0.1 µF caps, glue/zip-ties) the day Step A starts; order/tracking numbers recorded. Parts ship in parallel with laptop work. | Laptop / none | |
 | **A** ✅ DONE | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | An agent stub and a fake reactive stub exchange **one hand-authored Intent and one RobotState over the REAL socket**, both printed to console. Documentation alone is **NOT** done. **Verify:** `python scripts/contract_demo.py` (prints the handshake and 'STEP A OK'); `pytest tests/test_contract.py`. | Laptop | |
-| **B** ✅ DONE | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
-| **C** ✅ DONE | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
+| **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
+| **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
 | **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (243 passing). | Laptop | |
 | **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
-| **G** | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. | Pi 5 (+ one LED) | |
-| **H** | **Hello motors** | Drive the wheels from Python through the driver: forward, turn, stop. | Pi 5 + Phase 2 + F + G | |
-| **I** | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. | Pi 5 + HC-SR04 + resistors | |
+| **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
+| **H** | **Hello motors** *(NEXT)* | Drive the wheels from Python through the driver: forward, turn, stop. **Not yet wired** — DRV8833 + 2× TT motors + 4×AA pack is the next bench step (gated on Gate E **F**). | Pi 5 + Phase 2 + F + G | |
+| **I** ✅ DONE *(Pi)* | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. **Green on Izzy:** wired with an as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider (kit had no 2 kΩ; pins/software unchanged); `yalp hwtest --check ultrasonic` returns real distances (~22/25 good reads tracking a hand). Full as-built wiring: `as-built-wiring.md`. | Pi 5 + HC-SR04 + resistors | |
 | **J** | **Safety reflex** (collision-stop) | A fast local loop overrides any drive command when something's too close: commanded forward drive halts within the threshold distance on the bench. In *before* any autonomous driving. | Pi 5 + Phase 2 | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
 | **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. | Pi 5 + Phase 2 | |
@@ -1910,12 +1959,19 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 ## 3. Current status
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
-> (243 tests passing)**; Phase 2 hardware parts were ORDERED 2026-06-20 and are inbound.
-> **6 of 16 rungs green (0, A, B, C, D, E)** — the entire laptop phase — plus voice
-> OUTPUT *and* INPUT and the full follow brain, so the whole **voice → follow →
-> voice-stop loop works end to end** (milestone O is functionally done on the laptop).
-> The remaining hardware rungs (F–N) are **gated on the Pi**, and **the next target is
-> Raspberry Pi 5 bring-up**. **Laptop brain covers all three headline behaviors:**
+> (243 tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
+> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **8 of 16 rungs green** — the entire
+> laptop phase (**0, A, B, C, D, E**) plus the first two Pi-hardware rungs, **GPIO first
+> light (G)** and the **HC-SR04 divider (I)**, with **B (camera)** and **C (vision)**
+> re-confirmed on Izzy itself — plus voice OUTPUT *and* INPUT and the full follow brain, so
+> the whole **voice → follow → voice-stop loop works end to end** (milestone O is
+> functionally done on the laptop). **On the real Pi today:** Pi OS Lite headless over SSH,
+> yalp installed, GPIO stack verified (gpiozero lgpio/native, no RPi.GPIO), the C270 camera
+> grabs frames (`yalp hwtest --check camera`), `yalp see` describes the scene via Claude,
+> and the HC-SR04 returns real distances (`yalp hwtest --check ultrasonic`, as-built
+> 1 kΩ + 1.5 kΩ → 3.0 V divider — see `as-built-wiring.md`). **The next target is motors**
+> (DRV8833 + 2× TT + 4×AA): Gate E **F** → Hello motors **H** → reflex **J** → fps gates
+> **K/L**. **Laptop brain covers all three headline behaviors:**
 > **see** (`yalp see` — webcam still → Claude → spoken-style description,
 > `--speak`/`--image`/free-text), **agent** (`yalp agent` — full deliberative loop D1–D3
 > driving the fake reactive backend, with `--listen` push-to-talk voice input), and
@@ -1947,21 +2003,28 @@ number means you swap the detector — not redesign the follow loop. See `softwa
    follow brain (`yalp follow` — pluggable `Detector`, cv2.dnn MobileNet-SSD person
    detector, track-by-detection tracker, lost-grace hysteresis, steering, graceful stop).
    The whole **voice → follow → voice-stop loop works end to end** on the laptop.
+4. **Pi-side bring-up started on Izzy (no battery pack needed):** Pi 5 flashed with
+   Raspberry Pi OS Lite 64-bit (headless, SSH, hostname `izzy`, WiFi, apt-updated); yalp
+   installed from GitHub (`scripts/pi_setup.sh` hardened during bring-up — venv
+   `--system-site-packages` for the apt `python3-lgpio`, swig + python3-dev fallback,
+   libgl1 + libglib2.0-0 for `import cv2` on Lite — all committed); **GPIO first light
+   (G)** verified (`scripts/verify_gpio_stack.py`, lgpio/native factory, no RPi.GPIO);
+   **camera (B)** and **vision (C)** re-confirmed on Izzy; and the **HC-SR04 (I)** wired
+   and reading real distances (as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider — see
+   `as-built-wiring.md`).
 
-**NEXT TARGET — Raspberry Pi 5 bring-up** (follow `hardware-runbook.md`): move the proven
-brain onto the Pi 5 hardware.
+**NEXT TARGET — motors on Izzy** (follow `hardware-runbook.md`): wire the drivetrain and
+prove it under power. The no-battery Pi-side steps (above) are done; what's left needs the
+4×AA pack + motors:
 
-1. **Can do NOW — no battery pack needed:** flash the kit's card headless (Raspberry Pi
-   OS Lite 64-bit, WiFi + SSH baked in) and bring the Pi up over SSH; install Python
-   3.11+ + gpiozero/lgpio; **GPIO first light (G)**; build & meter the **HC-SR04 1k/2k
-   divider to ~3.3 V (I)**; wire the drivetrain + sensor with power off (§5) — no
-   soldering, parts are pre-headered.
-2. **Waits on the inbound 4×AA NiMH holder:** **Gate E power/brownout (F)** → **Hello
-   motors (H)** → **safety reflex (J)** *before* any autonomous driving → the load/fps
-   gates (**K**, **L** — Gate H is now just a Pi fps confirmation of the already-built
-   follow brain) → follow on hardware (**M**) → the WiFi-degradation test (**N**) —
-   anything where motors actually spin.
-3. **Then:** implement `RealReactiveBackend` so the same brain drives real wheels.
+1. **The motor chain:** wire the **DRV8833 + 2× TT gear motors + 4×AA NiMH pack** (separate
+   VM rail, common ground), then **Gate E power/brownout (F)** → **Hello motors (H)** →
+   **safety reflex (J)** *before* any autonomous driving → the load/fps gates (**K**, **L**
+   — Gate H is now just a Pi fps confirmation of the already-built follow brain) → follow on
+   hardware (**M**) → the WiFi-degradation test (**N**) — anything where motors actually
+   spin. Record the as-built motor wiring in `as-built-wiring.md` (the *Motors: TBD*
+   placeholder) as it goes in.
+2. **Then:** implement `RealReactiveBackend` so the same brain drives real wheels.
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
@@ -2684,6 +2747,164 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 > blind to glass and drop-offs — `hardware.md` §4). v1 brings up one front sensor to
 > prove the reflex; whether to add corner/rear sensors is owned by `hardware.md`,
 > not decided here. Keep speeds coarse and don't trust it near stairs or a child.
+
+</script>
+<script type="text/markdown" data-name="as-built-wiring.md">
+# As-Built Wiring — what is actually on the robot right now
+
+> The ground-truth record of the *physical* wiring as it exists on **Izzy** (the real Raspberry Pi 5, hostname `izzy`) — wire colors, breadboard nodes, and Pi **physical pin numbers** — so a photo of the bench and this page agree. `hardware.md` is the *planned* spec (BCM pin map, power architecture, the divider theory); this doc is the *as-built* reality and records every place the build deviated from that spec and why.
+
+---
+
+This page is updated as each subsystem is wired. It is the companion to
+`hardware.md` (the design) and `hardware-runbook.md` (the bench procedure): when
+those two and the real hardware disagree, **this page describes what is actually
+connected today.** Pin numbers here are **physical header pins** (the 1–40 board
+positions) with the BCM/GPIO name alongside, because that is what you count when
+you plug a jumper in.
+
+**Wired and verified so far:**
+
+| Subsystem | Status | Verify command (on the Pi) |
+|---|---|---|
+| Power / brain (Pi 5, wall PD) | ✅ booting, headless over SSH | — |
+| Camera (Logitech C270, USB) | ✅ working | `yalp hwtest --check camera` (grabs a 640×480 frame) |
+| Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
+| **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
+| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step** | see the *Motors: TBD* placeholder below |
+
+---
+
+## 1. Ultrasonic HC-SR04 — as built
+
+The HC-SR04 is wired through a small **separate breadboard** that carries the
+ECHO voltage divider and acts as the 5 V / GND distribution rail for the sensor.
+Pin assignments are unchanged from `hardware.md` §5 — **TRIG = GPIO5, ECHO =
+GPIO6** — only the physical divider values changed (see the as-built note below).
+
+### 1.1 As-built divider — 1 kΩ + 1.5 kΩ (3.0 V tap), not 1 kΩ + 2 kΩ
+
+> **NOTE (as-built) —** `hardware.md` specs a **1 kΩ + 2 kΩ** divider (≈ 3.33 V at
+> the tap). The build kit had **no 2 kΩ resistor**, so the as-built divider is
+> **1 kΩ + 1.5 kΩ, which yields exactly 3.0 V at the tap**
+> (5 V × 1.5 / (1 + 1.5) = **3.0 V**). This is a **purely physical substitution** —
+> the software and pin assignments are untouched. It is, if anything, slightly
+> *better*: the lower total impedance gives cleaner edges, and 3.0 V sits with more
+> margin under the Pi's 3.3 V GPIO limit while still being a solid logic-HIGH for
+> the ECHO read. No code change is needed or was made.
+
+### 1.2 Breadboard node legend
+
+The divider lives on its own mini breadboard:
+
+| Node | Role |
+|---|---|
+| `+` rail | **5 V bus** (fed from Pi physical Pin 2) |
+| `−` rail | **GND bus** (tied to Pi physical Pin 6) |
+| Column 5 | **ECHO-in node** — divider input (raw 5 V echo from the sensor) |
+| Column 9 | **TAP node** — divided echo (3.0 V) → GPIO6 |
+| Column 20 | **TRIG passthrough** tie point (no divider — 3.3 V drive is fine for TRIG) |
+
+Resistors:
+- **R1 = 1 kΩ** spans **column 5 ↔ column 9** (top leg of the divider).
+- **R2 = 1.5 kΩ** spans **column 9 ↔ `−` rail / GND** (bottom leg).
+
+So the tap at column 9 = 5 V × R2 / (R1 + R2) = 5 V × 1.5 / 2.5 = **3.0 V**.
+
+### 1.3 Connection list (every jumper is male-to-female)
+
+Each row is one physical jumper. Multi-hop nets (VCC, GND) are split into their
+two segments so each segment's wire color is unambiguous.
+
+| # | From | Wire color | To | Pi pin (physical / BCM) |
+|---|---|---|---|---|
+| 1 | HC-SR04 **VCC** | red | breadboard `+` rail (5 V bus) | — |
+| 2 | breadboard `+` rail | red | **Pi Pin 2** (5 V) | Pin 2 / 5 V |
+| 3 | HC-SR04 **GND** | black | breadboard `−` rail (GND bus) | — |
+| 4 | breadboard `−` rail | black | **Pi Pin 6** (GND) | Pin 6 / GND |
+| 5 | HC-SR04 **TRIG** | brown | breadboard column 20 | — |
+| 6 | breadboard column 20 | gray | **Pi Pin 29** (TRIG) | Pin 29 / GPIO5 |
+| 7 | HC-SR04 **ECHO** | orange | breadboard column 5 (divider input) | — |
+| 8 | divider **TAP** (column 9) | yellow | **Pi Pin 31** (ECHO, divided to 3.0 V) | Pin 31 / GPIO6 |
+
+Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
+**Pin 29 = GPIO5 (TRIG)**, **Pin 31 = GPIO6 (ECHO)**.
+
+### 1.4 As-built ASCII sketch
+
+```
+   HC-SR04                         mini breadboard                     Raspberry Pi 5
+   ┌──────────┐                                                        (physical pins)
+   │ VCC ─── red ──────────────►  + rail (5V bus) ── red ───────────►  Pin 2  (5V)
+   │ GND ─── black ────────────►  − rail (GND bus) ─ black ─────────►  Pin 6  (GND)
+   │ TRIG ── brown ────────────►  col 20 ────────── gray ──────────►  Pin 29 (GPIO5 TRIG)
+   │ ECHO ── orange ───────────►  col 5
+   │          │                    │
+   │          │            R1 1kΩ  │ col 5 ─┬─ col 9   (TAP = 3.0V)
+   │          │                    │        │
+   │          │            R2 1.5kΩ│ col 9 ─┴─ − rail (GND)
+   │          │                    │
+   │          └───── divided tap: col 9 ── yellow ──────────────────►  Pin 31 (GPIO6 ECHO)
+   └──────────┘
+                tap = 5V × 1.5/(1+1.5) = 3.0V  (≤ 3.3V GPIO limit ✓)
+```
+
+---
+
+## 2. Troubleshooting notes (from the real bring-up)
+
+> **NOTE (loose breadboard connection) —** Initial ultrasonic reads were very
+> flaky — mostly echo **timeouts**, with the success rate visibly *degrading* over
+> a few minutes. Root cause was **not** software: it was a **loose breadboard
+> connection**. **Re-seating the jumpers and the resistor legs — especially at the
+> TAP column (column 9) — fixed it**, jumping the success rate to **~22 of 25 good
+> reads** on a live 25-read stream, with the distance clearly tracking a hand moving
+> toward and away. If reads go flaky again, re-seat the divider before suspecting
+> code.
+
+> **NOTE (gpiozero software echo timing on Pi 5) —** gpiozero on the Pi 5 measures
+> the echo pulse with **software timing** (it logs a `PWMSoftwareFallback` warning)
+> because **`pigpio` is unavailable on the Pi 5**. This causes **occasional echo
+> timeouts** even when the wiring is good. That is expected and *safe by design*:
+> the reactive safety logic treats a missing/timed-out echo as **STOP**, never as
+> "clear" (see `hardware.md` §4 and `pi-bringup.md`). So a stray timeout in the read
+> stream is normal, not a wiring fault — only a *sustained* timeout pattern (as in
+> the loose-connection case above) is a problem.
+
+---
+
+## 3. Motors: TBD
+
+> **PLACEHOLDER —** The drivetrain (**DRV8833** motor driver + **2× TT gear motors**
+> + **4×AA NiMH** pack on a separate VM rail) is **not yet wired** — it is the next
+> bench step. When it is built, record here, in the same per-jumper / wire-color /
+> physical-pin format as §1:
+> - DRV8833 logic inputs → Pi pins for **AIN1/AIN2 (left)** and **BIN1/BIN2 (right)**
+>   — planned BCM map: GPIO12 (PWM, left speed), GPIO17 (left dir), GPIO13 (PWM,
+>   right speed), GPIO22 (right dir); DRV8833 `nSLEEP` tied HIGH (see `hardware.md`
+>   §5 and `pi-bringup.md` §2).
+> - **VM rail**: 4×AA NiMH pack (+) → DRV8833 VM, pack (−) → DRV8833 GND, with the
+>   bulk (470–1000 µF) + 0.1 µF ceramic across VM↔GND.
+> - **Common ground**: DRV8833 GND ↔ a Pi GND pin (required — the driver's logic
+>   inputs are referenced to the Pi ground).
+> - Motor outputs: AOUT1/2 → left motor, BOUT1/2 → right motor.
+>
+> Do not wire motor power until **Gate E** (power/brownout, `roadmap.md` milestone
+> **F**) and **GPIO first light** (**G**, already green) are both satisfied per the
+> runbook. Fill in the wire colors and physical pins from the actual build, exactly
+> as they go in.
+
+---
+
+## Cross-references
+
+- `hardware.md` — the *planned* design: BCM pin map (§5), power architecture (§2),
+  and the divider theory (§4–§5). The 1 kΩ + 1.5 kΩ substitution and the
+  mobile/untethered power plan are also recorded there.
+- `hardware-runbook.md` — the step-by-step bench procedure that produced this wiring.
+- `pi-bringup.md` — the software bring-up (install, GPIO-stack proof, `yalp hwtest`).
+- `roadmap.md` — build sequencing and the go/no-go gates; the live status of each
+  milestone (camera/vision/ultrasonic done on hardware, motors next).
 
 </script>
 <script type="text/markdown" data-name="initial-plan.md">
