@@ -222,7 +222,7 @@
       <code>hardware-runbook.md</code>.</p>
       <div class="status">
         <p class="now"><span class="badge b-done">DONE</span> &nbsp;Laptop brain <strong>complete &amp; laptop-tested
-        (243 tests)</strong> — the full <strong>voice&nbsp;→&nbsp;follow&nbsp;→&nbsp;voice-stop loop</strong> works end to end
+        (437 tests)</strong> — the full <strong>voice&nbsp;→&nbsp;follow&nbsp;→&nbsp;voice-stop loop</strong> works end to end
         with <strong>real eyes / fake wheels</strong>.</p>
         <h3>Working on the laptop now</h3>
         <ul class="badged">
@@ -230,7 +230,7 @@
           <li><span class="badge b-done">DONE</span> <code>yalp agent</code> — tool-use deliberative loop (narrates; <code>--speak</code>; <code>--listen</code> push-to-talk).</li>
           <li><span class="badge b-done">DONE</span> <code>yalp follow</code> — track-by-detection follow (face / hog / person&nbsp;[<code>cv2.dnn</code>, any-angle] / auto; <code>--preview</code>, <code>--benchmark</code>).</li>
           <li><span class="badge b-done">DONE</span> Voice <strong>OUTPUT</strong> (cross-platform TTS, <code>--speak</code>) <strong>and INPUT</strong> (push-to-talk STT, <code>--listen</code> → faster-whisper) shipped; say "follow me" to follow live, "stop" to end (hands-free).</li>
-          <li><span class="badge b-open">NOTE</span> Phase&nbsp;2 hardware <strong>ordered 2026-06-20</strong>, inbound. <code>real_backend.py</code> (<code>RealReactiveBackend</code>) is still a stub.</li>
+          <li><span class="badge b-done">DONE</span> Phase&nbsp;2 hardware arrived (host: <strong>izzy</strong>). <code>real_backend.py</code> (<code>RealReactiveBackend</code>) is <strong>fully implemented</strong> — tick loop, collision-stop, motor paths, and <code>MotorWatchdog</code> wired into <code>run()</code>.</li>
         </ul>
         <h3>Next target — Raspberry Pi 5 bring-up</h3>
         <ul class="badged">
@@ -985,7 +985,7 @@ The value is in **reading the patterns**, not adopting the stacks wholesale.
 
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
-> **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is today a **Step-A stub** (`RealReactiveBackend` raises `NotImplementedError`) carrying the on-Pi hardware TODO — motor control via `gpiozero` phase/enable on the §5 pins, the HC-SR04 read, and collision-stop — behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
+> **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is **fully implemented** (`RealReactiveBackend` — the tick loop, collision-stop, the motor drive paths, and the `MotorWatchdog` wired into `run()`) behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. It is code-complete against the §5 pins (motor control via `gpiozero`, the HC-SR04 read, and collision-stop); what remains is **wiring the body and confirming it on real hardware**, not writing the backend. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
 
 | Component | Selected part | ~Cost | Rationale (one line) |
 |---|---|---|---|
@@ -994,7 +994,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Eyes** | Logitech C270 USB webcam | ~$22 | UVC plug-and-play, no driver fuss; doubles as a laptop dev cam while building the brain. |
 | **Motors** | 2× TT DC gear motors + wheels (4-pack) | ~$15 | Differential drive; the textbook cheap hobby drivetrain. Spares in the pack. |
 | Balance | 1–2× ball caster | ~$3 ea | Passive roller, no power; the third contact point that makes two-wheel drive stable. |
-| **Motor driver** | DRV8833 **or** TB6612FNG breakout | ~$5 | Cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). Get the pre-soldered version. |
+| **Motor driver** | **DRV8833** (TB6612FNG = fallback) | ~$5 | **The board in use is the DRV8833** (`MOTOR_DRIVER_KIND="drv8833"` default in `config.py`); TB6612FNG is a drop-in fallback only if the DRV8833 runs hot near its current limit. Either is cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). Get the pre-soldered version. |
 | Motor power | 4×AA holder + **NiMH** rechargeable AAs (or 18650 pack) | ~$4–18 | **Separate** supply from the Pi; NiMH AA + common ground for v1 — low internal resistance, flatter discharge, no lithium charging yet. **Not alkaline.** |
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
@@ -1007,7 +1007,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 
 > **DECISION —** Locomotion = differential drive: 2× TT gear motors + 1 ball caster. Approach locked; parts ORDERED 2026-06-20 (inbound).
 
-> **DECISION —** Motor driver = DRV8833 / TB6612FNG, **not** L298N. Cooler and more efficient; only fall back to an L298N if one is already in the parts bin.
+> **DECISION —** Motor driver = **DRV8833**, **not** L298N. The DRV8833 is the board in use (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default); the **TB6612FNG is a fallback only** if the DRV8833 runs hot near its current limit (see the OPEN note below). Cooler and more efficient than an L298N; only fall back to an L298N if one is already in the parts bin.
 
 > **DECISION —** Motor cells = **NiMH AA, not alkaline.** Alkaline AAs have high internal resistance: they sag below 5V under TT stall spikes and droop steadily as they drain, hurting both the brownout margin (see §2) *and* run-to-run repeatability (which open-loop drive already struggles with — see §3). NiMH in the same form factor has far lower internal resistance and a flatter discharge curve, so the motor rail holds up under stall and behaves the same at 80% charge as at 20%. Same 4×AA holder; just buy NiMH cells + a charger.
 
@@ -1151,7 +1151,7 @@ Pin map (BCM numbering — the two motor PWM pins **must** be hardware-PWM pins;
 | Motor A DIR (phase) | GPIO 17 | plain GPIO — left channel direction (AIN2) |
 | Motor B PWM (enable/speed) | **GPIO 13** | **hardware PWM1** — right channel speed (PWM BIN1) |
 | Motor B DIR (phase) | GPIO 22 | plain GPIO — right channel direction (BIN2) |
-| Driver STBY/EN | GPIO 24 | (TB6612FNG only; tie DRV8833 nSLEEP high) |
+| Driver STBY/EN | GPIO 24 | **TB6612FNG only.** The DRV8833 in use has **no STBY pin** — GPIO24 (`MOTOR_STBY_PIN`) is **inert / left unwired**, driven only when `MOTOR_DRIVER_KIND=="tb6612fng"`. On the DRV8833, tie **nSLEEP HIGH to Pi 3V3** (not GPIO-controlled). |
 | Ultrasonic TRIG | GPIO 5 | 3.3V out → HC-SR04 trigger (fine as-is) |
 | Ultrasonic ECHO | GPIO 6 | **via divider** — 5V echo → 3.3V GPIO |
 | Common ground | any GND pin | shared with motor supply (see §2) |
@@ -1725,7 +1725,7 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 ## ⭐ Current status & next steps — read this first
 
-> **Phase 1 (the brain) is COMPLETE and laptop-tested — 243 tests passing.** The full
+> **Phase 1 (the brain) is COMPLETE and laptop-tested — 437 tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
 > wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **8 of 16
 > rungs are green (0, A, B, C, D, E + the first two Pi-hardware rungs G and I)** plus voice
@@ -1783,7 +1783,9 @@ voltage divider to ~3.3 V **(milestone I)**; wire the drivetrain + sensor power-
 no soldering (parts pre-headered). What **WAITS on the inbound 4×AA NiMH battery holder**:
 **Gate E power/brownout (F) → Hello motors (H) → collision-stop reflex (J) → the
 load/detector-fps gates (K, L) → follow on hardware (M)** — anything where motors actually
-spin. **Then:** implement `RealReactiveBackend` so the same brain drives real wheels.
+spin. `RealReactiveBackend` is **already fully implemented** (tick loop, collision-stop,
+motor paths, `MotorWatchdog` wired into `run()`); the hardware bring-up **confirms** it on
+the real body — no backend code remains to write.
 
 **THEN (post-v1):** kid-friendly enclosure and the rest of §6.
 
@@ -1800,7 +1802,7 @@ the Phase 1 hardware already in hand.
 > **Progress: 8 of 16 green — the entire laptop phase plus the first two Pi-hardware
 > rungs are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and** INPUT
 > and the full follow brain — the whole voice → follow → voice-stop loop works end to end),
-> all laptop-tested (**243 tests passing**); and on the **real Pi 5 ("Izzy")** the
+> all laptop-tested (**437 tests passing**); and on the **real Pi 5 ("Izzy")** the
 > power-off bring-up rungs are now green too — **GPIO first light (G)** and the **HC-SR04
 > divider + first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on
 > the actual hardware (`yalp hwtest --check camera`, `yalp see` both run on Izzy). The
@@ -1816,7 +1818,7 @@ the Phase 1 hardware already in hand.
 | **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
 | **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
-| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (243 passing). | Laptop | |
+| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (437 passing). | Laptop | |
 | **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
 | **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
 | **H** | **Hello motors** *(NEXT)* | Drive the wheels from Python through the driver: forward, turn, stop. **Not yet wired** — DRV8833 + 2× TT motors + 4×AA pack is the next bench step (gated on Gate E **F**). | Pi 5 + Phase 2 + F + G | |
@@ -1959,7 +1961,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 ## 3. Current status
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
-> (243 tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
+> (437 tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
 > robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **8 of 16 rungs green** — the entire
 > laptop phase (**0, A, B, C, D, E**) plus the first two Pi-hardware rungs, **GPIO first
 > light (G)** and the **HC-SR04 divider (I)**, with **B (camera)** and **C (vision)**
@@ -1991,7 +1993,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 - **Phase 3 deferred:** USB mic + small speaker.
 - **Laptop brain covers all three headline behaviors:** `yalp see` (**see**), `yalp agent` (**agent**), and `yalp follow` (**follow**) are all implemented and laptop-tested; the follow pipeline (`Detector` interface, track-by-detection tracker, steering, lost/too-dark → stop) was built ahead of the hardware.
 
-**DONE — already shipped and laptop-tested (243 tests passing):**
+**DONE — already shipped and laptop-tested (437 tests passing):**
 
 1. **Milestone 0 fired** — Phase 2 order placed 2026-06-20; parts inbound.
 2. **Laptop phase (A–E) green:** the loop contract proven with a live socket round-trip
@@ -2022,9 +2024,11 @@ prove it under power. The no-battery Pi-side steps (above) are done; what's left
    **safety reflex (J)** *before* any autonomous driving → the load/fps gates (**K**, **L**
    — Gate H is now just a Pi fps confirmation of the already-built follow brain) → follow on
    hardware (**M**) → the WiFi-degradation test (**N**) — anything where motors actually
-   spin. Record the as-built motor wiring in `as-built-wiring.md` (the *Motors: TBD*
-   placeholder) as it goes in.
-2. **Then:** implement `RealReactiveBackend` so the same brain drives real wheels.
+   spin. Record the as-built motor wiring in `as-built-wiring.md` (the §3 motor
+   as-built table) as it goes in.
+2. **Then:** bring `RealReactiveBackend` (already fully implemented — tick loop,
+   collision-stop, motor paths, `MotorWatchdog`) up on the real body and confirm the
+   same brain drives real wheels. No backend code remains to write.
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
@@ -2157,10 +2161,12 @@ the moment the Raspberry Pi 5 and the Phase 2 body parts are on your bench.
 >
 > So this runbook's job is *only* to bring the **body** up and marry it to that
 > already-working brain. Two notes carried in from `software-spec.md`: **voice
-> INPUT (a mic + STT) is future work** — only voice OUTPUT (TTS, the `--speak`
-> flag) ships today, and it's a software no-op without a speaker; and the model
-> tiers use **capability-gated thinking** — the fast per-step tier (Haiku) has
-> **no** extended thinking (sending it 400s), only the Sonnet/Opus escalations do.
+> INPUT (mic + STT) has SHIPPED** — `yalp agent --listen` records a push-to-talk
+> window and transcribes it locally with faster-whisper (optional `[voice]` extra);
+> voice OUTPUT (TTS, the `--speak` flag) also ships. Both are laptop-proven and
+> carry over to the Pi once a mic/speaker is present. And the model tiers use
+> **capability-gated thinking** — the fast per-step tier (Haiku) has **no** extended
+> thinking (sending it 400s), only the Sonnet/Opus escalations do.
 
 **Who does what.** You — the owner — do the physical build: wire the breadboard,
 meter voltages, plug things in, run the commands below, and report the result.
@@ -2201,7 +2207,7 @@ Phase 2 order in `hardware.md` and `roadmap.md`:
 **Body (Phase 2):**
 
 - [ ] 2× TT DC gear motors + wheels
-- [ ] DRV8833 **or** TB6612FNG motor-driver breakout (pre-soldered headers)
+- [ ] **DRV8833** motor-driver breakout (the board in use; TB6612FNG is a fallback only if the DRV8833 runs hot) — get the pre-soldered-header version
 - [ ] HC-SR04 ultrasonic sensor
 - [ ] NiMH AA cells + 4×AA holder + a NiMH charger (**not alkaline** — see
       `hardware.md` §1)
@@ -2252,7 +2258,7 @@ enabled at flash time).
    (other)* → **Raspberry Pi OS Lite (64-bit)**. **Choose Storage** → the microSD.
 4. Click the **gear / "Edit Settings"** (advanced options) and set, before
    writing:
-   - **Hostname:** `yalp` (so you reach it at `yalp.local`)
+   - **Hostname:** `izzy` (so you reach it at `izzy.local`)
    - **Enable SSH** → *Use password authentication* (or paste a public key)
    - **Username & password:** pick a username (this runbook uses `pi`) and a real
      password — write it down
@@ -2265,13 +2271,13 @@ enabled at flash time).
 7. From your laptop terminal:
 
    ```bash
-   ssh pi@yalp.local
+   ssh pi@izzy.local
    ```
 
-   (Use the username you set. If `yalp.local` doesn't resolve, see the "can't SSH"
+   (Use the username you set. If `izzy.local` doesn't resolve, see the "can't SSH"
    entry in §11.)
 
-**DONE WHEN:** you get a shell prompt on the Pi over SSH — `pi@yalp:~ $` — with no
+**DONE WHEN:** you get a shell prompt on the Pi over SSH — `pi@izzy:~ $` — with no
 monitor attached.
 
 ---
@@ -2435,7 +2441,7 @@ disagree, **`hardware.md` wins**.
 | Motor A DIR (phase) | GPIO 17 | driver AIN2 | plain GPIO — left direction |
 | Motor B PWM (speed/enable) | **GPIO 13** | driver BIN1 | **hardware PWM1** — right speed |
 | Motor B DIR (phase) | GPIO 22 | driver BIN2 | plain GPIO — right direction |
-| Driver STBY/EN | GPIO 24 | driver STBY | **TB6612FNG only**; on DRV8833 tie nSLEEP high |
+| Driver STBY/EN | GPIO 24 | driver STBY | **TB6612FNG only.** The DRV8833 in use has no STBY pin — GPIO24 (`MOTOR_STBY_PIN`) is inert / **left unwired**, driven only when `MOTOR_DRIVER_KIND=="tb6612fng"`. On the DRV8833, tie **nSLEEP HIGH to Pi 3V3**. |
 | Ultrasonic TRIG | GPIO 5 | HC-SR04 TRIG | 3.3V out — fine as-is |
 | Ultrasonic ECHO | GPIO 6 | divider **tap** (§4) | 5V echo → ~3.3V via the divider |
 | Common ground | any GND pin | driver GND **and** NiMH GND | the non-negotiable shared ground |
@@ -2454,7 +2460,7 @@ open-loop drift — don't. This is settled in `hardware.md` §5.
 **DO — wiring overview (the freed-up shape; mirror `hardware.md` §5):**
 
 ```
-   Raspberry Pi 5 (3.3V GPIO)         DRV8833 / TB6612FNG        Motors
+   Raspberry Pi 5 (3.3V GPIO)         DRV8833 (board in use)     Motors
    ┌──────────────────────┐        ┌────────────────────┐
    │ GPIO12 (HW PWM) ──────────────► AIN1 (speed)        │      ┌────────┐
    │ GPIO17 (plain)  ──────────────► AIN2 (dir)   AOUT1/2├─────►│ Motor A│ left
@@ -2569,14 +2575,14 @@ watch -n 1 vcgencmd get_throttled
 With Gate E (§6) and GPIO first light (§3) both green, drive the wheels from
 Python through the driver: forward, turn, stop.
 
-**⚙️ RETINUE — this is where the on-Pi reactive backend gets implemented.** Today
-`src/yalp/reactive/real_backend.py` is a documented **stub** (`RealReactiveBackend`
-raises `NotImplementedError`). Woland implements it to satisfy the **same
-`ReactiveBackend` contract** the fake laptop backend already implements
-(`apply_intent`, `tick`, `get_state`) — motor control via `gpiozero` phase/enable
-(PWM on GPIO12/13, direction on GPIO17/22, clamped to `RobotState.speed_limit`),
-exactly per the TODO in that file and `hardware.md` §5. **You wire and run; Woland
-codes.**
+**⚙️ RETINUE — the on-Pi reactive backend is already implemented; this step
+*confirms it on hardware*.** `src/yalp/reactive/real_backend.py` is **fully built**:
+`RealReactiveBackend` satisfies the **same `ReactiveBackend` contract** the fake
+laptop backend does (`apply_intent`, `tick`, `get_state`), with motor control via
+`gpiozero` phase/enable (PWM on GPIO12/13, direction on GPIO17/22, clamped to
+`RobotState.speed_limit`), the HC-SR04 read, collision-stop, and the `MotorWatchdog`
+wired into `run()`, exactly per `hardware.md` §5. No backend code remains to write —
+**you wire and run; the job here is verifying the real body behaves.**
 
 **DO:** with the body powered (Pi on PD, motors on NiMH, common ground), run the
 drive primitives Woland hands you — a forward nudge, a left turn (wheels opposite),
@@ -2713,7 +2719,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 
 ### Session checklist (the gates and milestones, in bench order)
 
-- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `pi@yalp.local`
+- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `pi@izzy.local`
 - [ ] **§2** Python + `gpiozero`/`lgpio` installed; lgpio factory confirmed, no
       `RPi.GPIO`; `pip install -e ".[dev]"` + `pytest` pass on the Pi
 - [ ] **§3** 🟢 **G — GPIO first light:** LED blinks via gpiozero+lgpio
@@ -2736,7 +2742,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 | Symptom | Likely cause → what to do |
 |---|---|
 | **Pi won't boot** (no green/activity LED, never appears) | Re-seat the microSD; re-flash Lite (§1); confirm the **27W PD** supply (a weak phone charger browns the Pi at boot); try a different USB-C cable. |
-| **Can't SSH / `yalp.local` won't resolve** | Wait the full ~90 s on first boot. Confirm SSH was enabled and the **Wi-Fi SSID + country** were set in the Imager (§1). Try the Pi's IP from your router instead of `.local`. Confirm laptop and Pi are on the **same network**. |
+| **Can't SSH / `izzy.local` won't resolve** | Wait the full ~90 s on first boot. Confirm SSH was enabled and the **Wi-Fi SSID + country** were set in the Imager (§1). Try the Pi's IP from your router instead of `.local`. Confirm laptop and Pi are on the **same network**. |
 | **`gpiozero` does nothing / pins dead, no error** | `RPi.GPIO` in the path — it **silently fails on Pi 5**. Re-run the §2 probes; ensure the **lgpio/native** factory is active and `RPi.GPIO` isn't imported. (`hardware.md` §5.) |
 | **Motors don't move** | Check **common ground** (NiMH GND ↔ Pi GND) first — the #1 omission. Confirm NiMH pack is charged and on VM; on TB6612FNG, **STBY must be high** (GPIO24); verify GPIO12/13/17/22 wiring against the §5 table. Motor spins backwards → swap that channel's two output leads. |
 | **Pi reboots / resets when motors move** | **Brownout** — motor stall spikes sagging the rail. This is **not** a software bug. Go to the **Gate E NO-GO recovery** (§6): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten leads, confirm NiMH (not alkaline), re-test. |
@@ -2763,6 +2769,18 @@ connected today.** Pin numbers here are **physical header pins** (the 1–40 boa
 positions) with the BCM/GPIO name alongside, because that is what you count when
 you plug a jumper in.
 
+> ## 🟢 BUILD STATUS — You are here
+>
+> - **DONE & recorded:** HC-SR04 ultrasonic (1 kΩ / 1.5 kΩ divider on ECHO — §1),
+>   jumpers to the Pi, USB webcam (Logitech C270).
+> - **NEXT PHYSICAL STEP:** **solder the male header strips onto the DRV8833
+>   breakout**, then wire it per **§3**.
+> - **NOT yet wired:** DRV8833 motor driver, 2× TT gear motors, 4×AA NiMH pack.
+>
+> The board is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py`
+> default). It has **no STBY pin**; TB6612FNG is a fallback only if the DRV8833
+> runs hot near its current limit.
+
 **Wired and verified so far:**
 
 | Subsystem | Status | Verify command (on the Pi) |
@@ -2771,7 +2789,7 @@ you plug a jumper in.
 | Camera (Logitech C270, USB) | ✅ working | `yalp hwtest --check camera` (grabs a 640×480 frame) |
 | Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
 | **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
-| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step** | see the *Motors: TBD* placeholder below |
+| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step (solder DRV8833 headers first)** | see the §3 as-built table below |
 
 ---
 
@@ -2873,26 +2891,52 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 
 ---
 
-## 3. Motors: TBD
+## 3. Motors (DRV8833) — as-built fill-in table
 
-> **PLACEHOLDER —** The drivetrain (**DRV8833** motor driver + **2× TT gear motors**
-> + **4×AA NiMH** pack on a separate VM rail) is **not yet wired** — it is the next
-> bench step. When it is built, record here, in the same per-jumper / wire-color /
-> physical-pin format as §1:
-> - DRV8833 logic inputs → Pi pins for **AIN1/AIN2 (left)** and **BIN1/BIN2 (right)**
->   — planned BCM map: GPIO12 (PWM, left speed), GPIO17 (left dir), GPIO13 (PWM,
->   right speed), GPIO22 (right dir); DRV8833 `nSLEEP` tied HIGH (see `hardware.md`
->   §5 and `pi-bringup.md` §2).
-> - **VM rail**: 4×AA NiMH pack (+) → DRV8833 VM, pack (−) → DRV8833 GND, with the
->   bulk (470–1000 µF) + 0.1 µF ceramic across VM↔GND.
-> - **Common ground**: DRV8833 GND ↔ a Pi GND pin (required — the driver's logic
->   inputs are referenced to the Pi ground).
-> - Motor outputs: AOUT1/2 → left motor, BOUT1/2 → right motor.
->
-> Do not wire motor power until **Gate E** (power/brownout, `roadmap.md` milestone
-> **F**) and **GPIO first light** (**G**, already green) are both satisfied per the
-> runbook. Fill in the wire colors and physical pins from the actual build, exactly
-> as they go in.
+> **NOT YET WIRED — this is the next bench step.** First **solder the male header
+> strips onto the DRV8833 breakout**, then wire it per this table. The board is the
+> **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default) — it has **no
+> STBY pin**; TB6612FNG is a fallback only if the DRV8833 runs hot. **Do not wire
+> motor power until Gate E** (power/brownout, `roadmap.md` milestone **F**) **and GPIO
+> first light** (**G**, already green) are both satisfied per the runbook.
+
+The **Driver pin / Signal / To / Expected Pi pin** columns below are pre-filled from
+the canonical map in `config.py` (cited by constant — the numbers live there, not
+here). **Fill the _Wire color_ and _breadboard hole_ columns at the bench** as each
+jumper actually goes in, exactly as in §1. Expected Pi pins are shown *physical / BCM*;
+**verify each against the real header** before trusting it.
+
+### 3.1 Logic / signal wiring (DRV8833 ↔ Pi)
+
+| # | DRV8833 pin | Signal | To (Pi / rail) | Expected Pi pin (physical / BCM) — config constant | Wire color | Breadboard hole |
+|---|---|---|---|---|---|---|
+| 1 | **AIN1** | left speed / PWM (hardware PWM0) | Pi GPIO12 | Pin 32 / GPIO12 — `MOTOR_LEFT_PWM_PIN` | | |
+| 2 | **AIN2** | left direction | Pi GPIO17 | Pin 11 / GPIO17 — `MOTOR_LEFT_DIR_PIN` | | |
+| 3 | **BIN1** | right speed / PWM (hardware PWM1) | Pi GPIO13 | Pin 33 / GPIO13 — `MOTOR_RIGHT_PWM_PIN` | | |
+| 4 | **BIN2** | right direction | Pi GPIO22 | Pin 15 / GPIO22 — `MOTOR_RIGHT_DIR_PIN` | | |
+| 5 | **nSLEEP** | enable — **tie HIGH to Pi 3V3** (not GPIO-controlled) | Pi 3V3 | Pin 1 (or 17) / 3V3 | | |
+| — | ~~STBY~~ | **DRV8833 has no STBY** — `MOTOR_STBY_PIN` (GPIO24) is inert / **left unwired** here; only driven when `MOTOR_DRIVER_KIND=="tb6612fng"` | — | (GPIO24 unused) | — | — |
+
+### 3.2 Motor outputs (DRV8833 ↔ TT motors)
+
+| # | DRV8833 pin | Signal | To | Wire color | Terminal |
+|---|---|---|---|---|---|
+| 6 | **AOUT1** | left motor drive | left TT motor terminal 1 | | |
+| 7 | **AOUT2** | left motor drive | left TT motor terminal 2 | | |
+| 8 | **BOUT1** | right motor drive | right TT motor terminal 1 | | |
+| 9 | **BOUT2** | right motor drive | right TT motor terminal 2 | | |
+
+### 3.3 Power rail & decoupling (VM / GND)
+
+| # | DRV8833 pin | Signal | To | Wire color | Hole |
+|---|---|---|---|---|---|
+| 10 | **VM** | motor supply + | 4×AA NiMH pack **(+)** | | |
+| 11 | **GND** | common ground | pack **(−)** *and* a Pi **GND** pin (both — required; logic inputs are referenced to Pi ground) | | |
+| 12 | across **VM ↔ GND** | bulk decoupling | **470–1000 µF electrolytic** (observe polarity) | | |
+| 13 | across **VM ↔ GND** | HF decoupling | **0.1 µF ceramic** | | |
+
+> **Note —** the VM rail (4×AA) is **separate** from the Pi's USB-C supply; only the
+> **GND is common** (pack − ↔ DRV8833 GND ↔ Pi GND). Never run pack + into the Pi.
 
 ---
 
@@ -3006,7 +3050,7 @@ Two open-source robots already implement big chunks of what I'm building. I don'
 | **Eyes** | Logitech C270 USB webcam | ~$22 ✓ | **Decided & ordered.** UVC plug-and-play; doubles as my laptop cam while building the brain. Pi Camera Module 3 stays a possible later swap (needs a Pi-5 camera cable) if I want autofocus. |
 | **Motors** | 2× TT DC gear motors + wheels | ~$15 (4-pack) | Differential drive |
 | Balance | 1–2× ball caster | ~$3 ea | Passive roller; holds up the chassis |
-| Motor driver | DRV8833 *or* TB6612FNG | ~$5 | Cheaper, cooler, and more efficient than the classic L298N (which drops ~2V and runs hot, wasting battery). Use an L298N only if it's already in the parts bin. |
+| Motor driver | **DRV8833** (TB6612FNG = fallback) | ~$5 | The board in use is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default); TB6612FNG is a fallback only if the DRV8833 runs hot near its limit. Either is cheaper, cooler, and more efficient than the classic L298N (which drops ~2V and runs hot, wasting battery). Use an L298N only if it's already in the parts bin. |
 | Motor power | 4×AA holder *or* 18650 pack | ~$2–12 | **Separate** from Pi power; share a common ground. |
 | **Obstacle sensor** | HC-SR04 ultrasonic | ~$3 | **Core, not optional.** This is the collision-stop reflex — in place from the moment the wheels first move. Cheapest insurance on the whole bot. |
 | Wiring | Jumper wires + mini breadboard | ~$10 | |
@@ -3049,7 +3093,7 @@ With just these, I can reach **build step 4 ("it sees and talks")** on the bench
 |---|---|---|
 | USB-C PD power bank (≥20W, ~10,000mAh) | roaming power — the kit's supply is wall-only | 30 |
 | TT DC gear motors + wheels, 4-pack | need 2; spares are good | 15 |
-| Motor driver: DRV8833 **or** TB6612FNG breakout | *get the pre-soldered-header version* — no soldering; cheaper and cooler than an L298N | 7 |
+| Motor driver: **DRV8833** breakout (TB6612FNG = fallback only) | *get the pre-soldered-header version* — cheaper and cooler than an L298N; DRV8833 is the board in use, TB6612FNG only if it runs hot | 7 |
 | Ball caster (passive roller) | holds up the chassis | 6 |
 | HC-SR04 ultrasonic sensor | the collision-stop reflex — **core, not optional**; pins pre-attached | 8 |
 | 4×AA holder + AA batteries | motor power, kept **separate** from the Pi (common ground); simple and safe — no lithium yet | 10 |
