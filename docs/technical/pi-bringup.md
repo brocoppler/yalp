@@ -57,14 +57,15 @@ to the hardware checks until this passes.
 | Right motor PWM (speed / BIN1) | GPIO13 | `MOTOR_RIGHT_PWM_PIN` | hardware PWM1 |
 | Left motor DIR (AIN2) | GPIO17 | `MOTOR_LEFT_DIR_PIN` | plain GPIO |
 | Right motor DIR (BIN2) | GPIO22 | `MOTOR_RIGHT_DIR_PIN` | plain GPIO |
-| Driver STBY (standby, active-LOW) | GPIO24 | `MOTOR_STBY_PIN` | **TB6612FNG only**; DRV8833 ties nSLEEP HIGH so this is `None` |
+| Driver STBY (standby, active-LOW) | GPIO24 | `MOTOR_STBY_PIN` | **TB6612FNG only.** The board in use is the **DRV8833**, which has **no STBY pin** and ties nSLEEP HIGH — so `MOTOR_STBY_PIN` (default `24`) is **inert / left unwired** here; the hardware layer only drives GPIO24 when `MOTOR_DRIVER_KIND=="tb6612fng"`. |
 | Ultrasonic TRIG | GPIO5 | `ULTRASONIC_TRIG_PIN` | HC-SR04 trigger |
 | Ultrasonic ECHO | GPIO6 | `ULTRASONIC_ECHO_PIN` | via 5 V→3.3 V level divider |
 
-Driver kind is selectable via `MOTOR_DRIVER_KIND` (`drv8833` default, or
-`tb6612fng`); every pin is also overridable by the matching `YALP_*` env var
-(see `config.py`). If you change wiring, change it in `config.py` (or the env),
-not here.
+Driver kind is selectable via `MOTOR_DRIVER_KIND`; **the board in use is the
+`drv8833` (the default)**, and `tb6612fng` is only a fallback if the DRV8833 runs
+hot near its current limit. Every pin is also overridable by the matching `YALP_*`
+env var (see `config.py`). If you change wiring, change it in `config.py` (or the
+env), not here.
 
 ---
 

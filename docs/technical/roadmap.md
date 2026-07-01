@@ -21,7 +21,7 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 ## ⭐ Current status & next steps — read this first
 
-> **Phase 1 (the brain) is COMPLETE and laptop-tested — 243 tests passing.** The full
+> **Phase 1 (the brain) is COMPLETE and laptop-tested — 437 tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
 > wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **8 of 16
 > rungs are green (0, A, B, C, D, E + the first two Pi-hardware rungs G and I)** plus voice
@@ -79,7 +79,9 @@ voltage divider to ~3.3 V **(milestone I)**; wire the drivetrain + sensor power-
 no soldering (parts pre-headered). What **WAITS on the inbound 4×AA NiMH battery holder**:
 **Gate E power/brownout (F) → Hello motors (H) → collision-stop reflex (J) → the
 load/detector-fps gates (K, L) → follow on hardware (M)** — anything where motors actually
-spin. **Then:** implement `RealReactiveBackend` so the same brain drives real wheels.
+spin. `RealReactiveBackend` is **already fully implemented** (tick loop, collision-stop,
+motor paths, `MotorWatchdog` wired into `run()`); the hardware bring-up **confirms** it on
+the real body — no backend code remains to write.
 
 **THEN (post-v1):** kid-friendly enclosure and the rest of §6.
 
@@ -96,7 +98,7 @@ the Phase 1 hardware already in hand.
 > **Progress: 8 of 16 green — the entire laptop phase plus the first two Pi-hardware
 > rungs are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and** INPUT
 > and the full follow brain — the whole voice → follow → voice-stop loop works end to end),
-> all laptop-tested (**243 tests passing**); and on the **real Pi 5 ("Izzy")** the
+> all laptop-tested (**437 tests passing**); and on the **real Pi 5 ("Izzy")** the
 > power-off bring-up rungs are now green too — **GPIO first light (G)** and the **HC-SR04
 > divider + first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on
 > the actual hardware (`yalp hwtest --check camera`, `yalp see` both run on Izzy). The
@@ -112,7 +114,7 @@ the Phase 1 hardware already in hand.
 | **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
 | **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
-| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (243 passing). | Laptop | |
+| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (437 passing). | Laptop | |
 | **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
 | **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
 | **H** | **Hello motors** *(NEXT)* | Drive the wheels from Python through the driver: forward, turn, stop. **Not yet wired** — DRV8833 + 2× TT motors + 4×AA pack is the next bench step (gated on Gate E **F**). | Pi 5 + Phase 2 + F + G | |
@@ -255,7 +257,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 ## 3. Current status
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
-> (243 tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
+> (437 tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
 > robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **8 of 16 rungs green** — the entire
 > laptop phase (**0, A, B, C, D, E**) plus the first two Pi-hardware rungs, **GPIO first
 > light (G)** and the **HC-SR04 divider (I)**, with **B (camera)** and **C (vision)**
@@ -287,7 +289,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 - **Phase 3 deferred:** USB mic + small speaker.
 - **Laptop brain covers all three headline behaviors:** `yalp see` (**see**), `yalp agent` (**agent**), and `yalp follow` (**follow**) are all implemented and laptop-tested; the follow pipeline (`Detector` interface, track-by-detection tracker, steering, lost/too-dark → stop) was built ahead of the hardware.
 
-**DONE — already shipped and laptop-tested (243 tests passing):**
+**DONE — already shipped and laptop-tested (437 tests passing):**
 
 1. **Milestone 0 fired** — Phase 2 order placed 2026-06-20; parts inbound.
 2. **Laptop phase (A–E) green:** the loop contract proven with a live socket round-trip
@@ -318,9 +320,11 @@ prove it under power. The no-battery Pi-side steps (above) are done; what's left
    **safety reflex (J)** *before* any autonomous driving → the load/fps gates (**K**, **L**
    — Gate H is now just a Pi fps confirmation of the already-built follow brain) → follow on
    hardware (**M**) → the WiFi-degradation test (**N**) — anything where motors actually
-   spin. Record the as-built motor wiring in `as-built-wiring.md` (the *Motors: TBD*
-   placeholder) as it goes in.
-2. **Then:** implement `RealReactiveBackend` so the same brain drives real wheels.
+   spin. Record the as-built motor wiring in `as-built-wiring.md` (the §3 motor
+   as-built table) as it goes in.
+2. **Then:** bring `RealReactiveBackend` (already fully implemented — tick loop,
+   collision-stop, motor paths, `MotorWatchdog`) up on the real body and confirm the
+   same brain drives real wheels. No backend code remains to write.
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a

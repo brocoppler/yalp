@@ -12,7 +12,7 @@
 
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
-> **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is today a **Step-A stub** (`RealReactiveBackend` raises `NotImplementedError`) carrying the on-Pi hardware TODO — motor control via `gpiozero` phase/enable on the §5 pins, the HC-SR04 read, and collision-stop — behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
+> **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is **fully implemented** (`RealReactiveBackend` — the tick loop, collision-stop, the motor drive paths, and the `MotorWatchdog` wired into `run()`) behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. It is code-complete against the §5 pins (motor control via `gpiozero`, the HC-SR04 read, and collision-stop); what remains is **wiring the body and confirming it on real hardware**, not writing the backend. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
 
 | Component | Selected part | ~Cost | Rationale (one line) |
 |---|---|---|---|
@@ -21,7 +21,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Eyes** | Logitech C270 USB webcam | ~$22 | UVC plug-and-play, no driver fuss; doubles as a laptop dev cam while building the brain. |
 | **Motors** | 2× TT DC gear motors + wheels (4-pack) | ~$15 | Differential drive; the textbook cheap hobby drivetrain. Spares in the pack. |
 | Balance | 1–2× ball caster | ~$3 ea | Passive roller, no power; the third contact point that makes two-wheel drive stable. |
-| **Motor driver** | DRV8833 **or** TB6612FNG breakout | ~$5 | Cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). Get the pre-soldered version. |
+| **Motor driver** | **DRV8833** (TB6612FNG = fallback) | ~$5 | **The board in use is the DRV8833** (`MOTOR_DRIVER_KIND="drv8833"` default in `config.py`); TB6612FNG is a drop-in fallback only if the DRV8833 runs hot near its current limit. Either is cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). Get the pre-soldered version. |
 | Motor power | 4×AA holder + **NiMH** rechargeable AAs (or 18650 pack) | ~$4–18 | **Separate** supply from the Pi; NiMH AA + common ground for v1 — low internal resistance, flatter discharge, no lithium charging yet. **Not alkaline.** |
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
@@ -34,7 +34,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 
 > **DECISION —** Locomotion = differential drive: 2× TT gear motors + 1 ball caster. Approach locked; parts ORDERED 2026-06-20 (inbound).
 
-> **DECISION —** Motor driver = DRV8833 / TB6612FNG, **not** L298N. Cooler and more efficient; only fall back to an L298N if one is already in the parts bin.
+> **DECISION —** Motor driver = **DRV8833**, **not** L298N. The DRV8833 is the board in use (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default); the **TB6612FNG is a fallback only** if the DRV8833 runs hot near its current limit (see the OPEN note below). Cooler and more efficient than an L298N; only fall back to an L298N if one is already in the parts bin.
 
 > **DECISION —** Motor cells = **NiMH AA, not alkaline.** Alkaline AAs have high internal resistance: they sag below 5V under TT stall spikes and droop steadily as they drain, hurting both the brownout margin (see §2) *and* run-to-run repeatability (which open-loop drive already struggles with — see §3). NiMH in the same form factor has far lower internal resistance and a flatter discharge curve, so the motor rail holds up under stall and behaves the same at 80% charge as at 20%. Same 4×AA holder; just buy NiMH cells + a charger.
 
@@ -178,7 +178,7 @@ Pin map (BCM numbering — the two motor PWM pins **must** be hardware-PWM pins;
 | Motor A DIR (phase) | GPIO 17 | plain GPIO — left channel direction (AIN2) |
 | Motor B PWM (enable/speed) | **GPIO 13** | **hardware PWM1** — right channel speed (PWM BIN1) |
 | Motor B DIR (phase) | GPIO 22 | plain GPIO — right channel direction (BIN2) |
-| Driver STBY/EN | GPIO 24 | (TB6612FNG only; tie DRV8833 nSLEEP high) |
+| Driver STBY/EN | GPIO 24 | **TB6612FNG only.** The DRV8833 in use has **no STBY pin** — GPIO24 (`MOTOR_STBY_PIN`) is **inert / left unwired**, driven only when `MOTOR_DRIVER_KIND=="tb6612fng"`. On the DRV8833, tie **nSLEEP HIGH to Pi 3V3** (not GPIO-controlled). |
 | Ultrasonic TRIG | GPIO 5 | 3.3V out → HC-SR04 trigger (fine as-is) |
 | Ultrasonic ECHO | GPIO 6 | **via divider** — 5V echo → 3.3V GPIO |
 | Common ground | any GND pin | shared with motor supply (see §2) |

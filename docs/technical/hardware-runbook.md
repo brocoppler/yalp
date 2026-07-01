@@ -26,10 +26,12 @@ the moment the Raspberry Pi 5 and the Phase 2 body parts are on your bench.
 >
 > So this runbook's job is *only* to bring the **body** up and marry it to that
 > already-working brain. Two notes carried in from `software-spec.md`: **voice
-> INPUT (a mic + STT) is future work** — only voice OUTPUT (TTS, the `--speak`
-> flag) ships today, and it's a software no-op without a speaker; and the model
-> tiers use **capability-gated thinking** — the fast per-step tier (Haiku) has
-> **no** extended thinking (sending it 400s), only the Sonnet/Opus escalations do.
+> INPUT (mic + STT) has SHIPPED** — `yalp agent --listen` records a push-to-talk
+> window and transcribes it locally with faster-whisper (optional `[voice]` extra);
+> voice OUTPUT (TTS, the `--speak` flag) also ships. Both are laptop-proven and
+> carry over to the Pi once a mic/speaker is present. And the model tiers use
+> **capability-gated thinking** — the fast per-step tier (Haiku) has **no** extended
+> thinking (sending it 400s), only the Sonnet/Opus escalations do.
 
 **Who does what.** You — the owner — do the physical build: wire the breadboard,
 meter voltages, plug things in, run the commands below, and report the result.
@@ -70,7 +72,7 @@ Phase 2 order in `hardware.md` and `roadmap.md`:
 **Body (Phase 2):**
 
 - [ ] 2× TT DC gear motors + wheels
-- [ ] DRV8833 **or** TB6612FNG motor-driver breakout (pre-soldered headers)
+- [ ] **DRV8833** motor-driver breakout (the board in use; TB6612FNG is a fallback only if the DRV8833 runs hot) — get the pre-soldered-header version
 - [ ] HC-SR04 ultrasonic sensor
 - [ ] NiMH AA cells + 4×AA holder + a NiMH charger (**not alkaline** — see
       `hardware.md` §1)
@@ -121,7 +123,7 @@ enabled at flash time).
    (other)* → **Raspberry Pi OS Lite (64-bit)**. **Choose Storage** → the microSD.
 4. Click the **gear / "Edit Settings"** (advanced options) and set, before
    writing:
-   - **Hostname:** `yalp` (so you reach it at `yalp.local`)
+   - **Hostname:** `izzy` (so you reach it at `izzy.local`)
    - **Enable SSH** → *Use password authentication* (or paste a public key)
    - **Username & password:** pick a username (this runbook uses `pi`) and a real
      password — write it down
@@ -134,13 +136,13 @@ enabled at flash time).
 7. From your laptop terminal:
 
    ```bash
-   ssh pi@yalp.local
+   ssh pi@izzy.local
    ```
 
-   (Use the username you set. If `yalp.local` doesn't resolve, see the "can't SSH"
+   (Use the username you set. If `izzy.local` doesn't resolve, see the "can't SSH"
    entry in §11.)
 
-**DONE WHEN:** you get a shell prompt on the Pi over SSH — `pi@yalp:~ $` — with no
+**DONE WHEN:** you get a shell prompt on the Pi over SSH — `pi@izzy:~ $` — with no
 monitor attached.
 
 ---
@@ -304,7 +306,7 @@ disagree, **`hardware.md` wins**.
 | Motor A DIR (phase) | GPIO 17 | driver AIN2 | plain GPIO — left direction |
 | Motor B PWM (speed/enable) | **GPIO 13** | driver BIN1 | **hardware PWM1** — right speed |
 | Motor B DIR (phase) | GPIO 22 | driver BIN2 | plain GPIO — right direction |
-| Driver STBY/EN | GPIO 24 | driver STBY | **TB6612FNG only**; on DRV8833 tie nSLEEP high |
+| Driver STBY/EN | GPIO 24 | driver STBY | **TB6612FNG only.** The DRV8833 in use has no STBY pin — GPIO24 (`MOTOR_STBY_PIN`) is inert / **left unwired**, driven only when `MOTOR_DRIVER_KIND=="tb6612fng"`. On the DRV8833, tie **nSLEEP HIGH to Pi 3V3**. |
 | Ultrasonic TRIG | GPIO 5 | HC-SR04 TRIG | 3.3V out — fine as-is |
 | Ultrasonic ECHO | GPIO 6 | divider **tap** (§4) | 5V echo → ~3.3V via the divider |
 | Common ground | any GND pin | driver GND **and** NiMH GND | the non-negotiable shared ground |
@@ -323,7 +325,7 @@ open-loop drift — don't. This is settled in `hardware.md` §5.
 **DO — wiring overview (the freed-up shape; mirror `hardware.md` §5):**
 
 ```
-   Raspberry Pi 5 (3.3V GPIO)         DRV8833 / TB6612FNG        Motors
+   Raspberry Pi 5 (3.3V GPIO)         DRV8833 (board in use)     Motors
    ┌──────────────────────┐        ┌────────────────────┐
    │ GPIO12 (HW PWM) ──────────────► AIN1 (speed)        │      ┌────────┐
    │ GPIO17 (plain)  ──────────────► AIN2 (dir)   AOUT1/2├─────►│ Motor A│ left
@@ -438,14 +440,14 @@ watch -n 1 vcgencmd get_throttled
 With Gate E (§6) and GPIO first light (§3) both green, drive the wheels from
 Python through the driver: forward, turn, stop.
 
-**⚙️ RETINUE — this is where the on-Pi reactive backend gets implemented.** Today
-`src/yalp/reactive/real_backend.py` is a documented **stub** (`RealReactiveBackend`
-raises `NotImplementedError`). Woland implements it to satisfy the **same
-`ReactiveBackend` contract** the fake laptop backend already implements
-(`apply_intent`, `tick`, `get_state`) — motor control via `gpiozero` phase/enable
-(PWM on GPIO12/13, direction on GPIO17/22, clamped to `RobotState.speed_limit`),
-exactly per the TODO in that file and `hardware.md` §5. **You wire and run; Woland
-codes.**
+**⚙️ RETINUE — the on-Pi reactive backend is already implemented; this step
+*confirms it on hardware*.** `src/yalp/reactive/real_backend.py` is **fully built**:
+`RealReactiveBackend` satisfies the **same `ReactiveBackend` contract** the fake
+laptop backend does (`apply_intent`, `tick`, `get_state`), with motor control via
+`gpiozero` phase/enable (PWM on GPIO12/13, direction on GPIO17/22, clamped to
+`RobotState.speed_limit`), the HC-SR04 read, collision-stop, and the `MotorWatchdog`
+wired into `run()`, exactly per `hardware.md` §5. No backend code remains to write —
+**you wire and run; the job here is verifying the real body behaves.**
 
 **DO:** with the body powered (Pi on PD, motors on NiMH, common ground), run the
 drive primitives Woland hands you — a forward nudge, a left turn (wheels opposite),
@@ -582,7 +584,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 
 ### Session checklist (the gates and milestones, in bench order)
 
-- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `pi@yalp.local`
+- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `pi@izzy.local`
 - [ ] **§2** Python + `gpiozero`/`lgpio` installed; lgpio factory confirmed, no
       `RPi.GPIO`; `pip install -e ".[dev]"` + `pytest` pass on the Pi
 - [ ] **§3** 🟢 **G — GPIO first light:** LED blinks via gpiozero+lgpio
@@ -605,7 +607,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 | Symptom | Likely cause → what to do |
 |---|---|
 | **Pi won't boot** (no green/activity LED, never appears) | Re-seat the microSD; re-flash Lite (§1); confirm the **27W PD** supply (a weak phone charger browns the Pi at boot); try a different USB-C cable. |
-| **Can't SSH / `yalp.local` won't resolve** | Wait the full ~90 s on first boot. Confirm SSH was enabled and the **Wi-Fi SSID + country** were set in the Imager (§1). Try the Pi's IP from your router instead of `.local`. Confirm laptop and Pi are on the **same network**. |
+| **Can't SSH / `izzy.local` won't resolve** | Wait the full ~90 s on first boot. Confirm SSH was enabled and the **Wi-Fi SSID + country** were set in the Imager (§1). Try the Pi's IP from your router instead of `.local`. Confirm laptop and Pi are on the **same network**. |
 | **`gpiozero` does nothing / pins dead, no error** | `RPi.GPIO` in the path — it **silently fails on Pi 5**. Re-run the §2 probes; ensure the **lgpio/native** factory is active and `RPi.GPIO` isn't imported. (`hardware.md` §5.) |
 | **Motors don't move** | Check **common ground** (NiMH GND ↔ Pi GND) first — the #1 omission. Confirm NiMH pack is charged and on VM; on TB6612FNG, **STBY must be high** (GPIO24); verify GPIO12/13/17/22 wiring against the §5 table. Motor spins backwards → swap that channel's two output leads. |
 | **Pi reboots / resets when motors move** | **Brownout** — motor stall spikes sagging the rail. This is **not** a software bug. Go to the **Gate E NO-GO recovery** (§6): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten leads, confirm NiMH (not alkaline), re-test. |

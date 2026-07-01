@@ -11,6 +11,18 @@ connected today.** Pin numbers here are **physical header pins** (the 1–40 boa
 positions) with the BCM/GPIO name alongside, because that is what you count when
 you plug a jumper in.
 
+> ## 🟢 BUILD STATUS — You are here
+>
+> - **DONE & recorded:** HC-SR04 ultrasonic (1 kΩ / 1.5 kΩ divider on ECHO — §1),
+>   jumpers to the Pi, USB webcam (Logitech C270).
+> - **NEXT PHYSICAL STEP:** **solder the male header strips onto the DRV8833
+>   breakout**, then wire it per **§3**.
+> - **NOT yet wired:** DRV8833 motor driver, 2× TT gear motors, 4×AA NiMH pack.
+>
+> The board is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py`
+> default). It has **no STBY pin**; TB6612FNG is a fallback only if the DRV8833
+> runs hot near its current limit.
+
 **Wired and verified so far:**
 
 | Subsystem | Status | Verify command (on the Pi) |
@@ -19,7 +31,7 @@ you plug a jumper in.
 | Camera (Logitech C270, USB) | ✅ working | `yalp hwtest --check camera` (grabs a 640×480 frame) |
 | Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
 | **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
-| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step** | see the *Motors: TBD* placeholder below |
+| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step (solder DRV8833 headers first)** | see the §3 as-built table below |
 
 ---
 
@@ -121,26 +133,52 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 
 ---
 
-## 3. Motors: TBD
+## 3. Motors (DRV8833) — as-built fill-in table
 
-> **PLACEHOLDER —** The drivetrain (**DRV8833** motor driver + **2× TT gear motors**
-> + **4×AA NiMH** pack on a separate VM rail) is **not yet wired** — it is the next
-> bench step. When it is built, record here, in the same per-jumper / wire-color /
-> physical-pin format as §1:
-> - DRV8833 logic inputs → Pi pins for **AIN1/AIN2 (left)** and **BIN1/BIN2 (right)**
->   — planned BCM map: GPIO12 (PWM, left speed), GPIO17 (left dir), GPIO13 (PWM,
->   right speed), GPIO22 (right dir); DRV8833 `nSLEEP` tied HIGH (see `hardware.md`
->   §5 and `pi-bringup.md` §2).
-> - **VM rail**: 4×AA NiMH pack (+) → DRV8833 VM, pack (−) → DRV8833 GND, with the
->   bulk (470–1000 µF) + 0.1 µF ceramic across VM↔GND.
-> - **Common ground**: DRV8833 GND ↔ a Pi GND pin (required — the driver's logic
->   inputs are referenced to the Pi ground).
-> - Motor outputs: AOUT1/2 → left motor, BOUT1/2 → right motor.
->
-> Do not wire motor power until **Gate E** (power/brownout, `roadmap.md` milestone
-> **F**) and **GPIO first light** (**G**, already green) are both satisfied per the
-> runbook. Fill in the wire colors and physical pins from the actual build, exactly
-> as they go in.
+> **NOT YET WIRED — this is the next bench step.** First **solder the male header
+> strips onto the DRV8833 breakout**, then wire it per this table. The board is the
+> **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default) — it has **no
+> STBY pin**; TB6612FNG is a fallback only if the DRV8833 runs hot. **Do not wire
+> motor power until Gate E** (power/brownout, `roadmap.md` milestone **F**) **and GPIO
+> first light** (**G**, already green) are both satisfied per the runbook.
+
+The **Driver pin / Signal / To / Expected Pi pin** columns below are pre-filled from
+the canonical map in `config.py` (cited by constant — the numbers live there, not
+here). **Fill the _Wire color_ and _breadboard hole_ columns at the bench** as each
+jumper actually goes in, exactly as in §1. Expected Pi pins are shown *physical / BCM*;
+**verify each against the real header** before trusting it.
+
+### 3.1 Logic / signal wiring (DRV8833 ↔ Pi)
+
+| # | DRV8833 pin | Signal | To (Pi / rail) | Expected Pi pin (physical / BCM) — config constant | Wire color | Breadboard hole |
+|---|---|---|---|---|---|---|
+| 1 | **AIN1** | left speed / PWM (hardware PWM0) | Pi GPIO12 | Pin 32 / GPIO12 — `MOTOR_LEFT_PWM_PIN` | | |
+| 2 | **AIN2** | left direction | Pi GPIO17 | Pin 11 / GPIO17 — `MOTOR_LEFT_DIR_PIN` | | |
+| 3 | **BIN1** | right speed / PWM (hardware PWM1) | Pi GPIO13 | Pin 33 / GPIO13 — `MOTOR_RIGHT_PWM_PIN` | | |
+| 4 | **BIN2** | right direction | Pi GPIO22 | Pin 15 / GPIO22 — `MOTOR_RIGHT_DIR_PIN` | | |
+| 5 | **nSLEEP** | enable — **tie HIGH to Pi 3V3** (not GPIO-controlled) | Pi 3V3 | Pin 1 (or 17) / 3V3 | | |
+| — | ~~STBY~~ | **DRV8833 has no STBY** — `MOTOR_STBY_PIN` (GPIO24) is inert / **left unwired** here; only driven when `MOTOR_DRIVER_KIND=="tb6612fng"` | — | (GPIO24 unused) | — | — |
+
+### 3.2 Motor outputs (DRV8833 ↔ TT motors)
+
+| # | DRV8833 pin | Signal | To | Wire color | Terminal |
+|---|---|---|---|---|---|
+| 6 | **AOUT1** | left motor drive | left TT motor terminal 1 | | |
+| 7 | **AOUT2** | left motor drive | left TT motor terminal 2 | | |
+| 8 | **BOUT1** | right motor drive | right TT motor terminal 1 | | |
+| 9 | **BOUT2** | right motor drive | right TT motor terminal 2 | | |
+
+### 3.3 Power rail & decoupling (VM / GND)
+
+| # | DRV8833 pin | Signal | To | Wire color | Hole |
+|---|---|---|---|---|---|
+| 10 | **VM** | motor supply + | 4×AA NiMH pack **(+)** | | |
+| 11 | **GND** | common ground | pack **(−)** *and* a Pi **GND** pin (both — required; logic inputs are referenced to Pi ground) | | |
+| 12 | across **VM ↔ GND** | bulk decoupling | **470–1000 µF electrolytic** (observe polarity) | | |
+| 13 | across **VM ↔ GND** | HF decoupling | **0.1 µF ceramic** | | |
+
+> **Note —** the VM rail (4×AA) is **separate** from the Pi's USB-C supply; only the
+> **GND is common** (pack − ↔ DRV8833 GND ↔ Pi GND). Never run pack + into the Pi.
 
 ---
 

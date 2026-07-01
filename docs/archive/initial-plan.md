@@ -96,7 +96,7 @@ Two open-source robots already implement big chunks of what I'm building. I don'
 | **Eyes** | Logitech C270 USB webcam | ~$22 ✓ | **Decided & ordered.** UVC plug-and-play; doubles as my laptop cam while building the brain. Pi Camera Module 3 stays a possible later swap (needs a Pi-5 camera cable) if I want autofocus. |
 | **Motors** | 2× TT DC gear motors + wheels | ~$15 (4-pack) | Differential drive |
 | Balance | 1–2× ball caster | ~$3 ea | Passive roller; holds up the chassis |
-| Motor driver | DRV8833 *or* TB6612FNG | ~$5 | Cheaper, cooler, and more efficient than the classic L298N (which drops ~2V and runs hot, wasting battery). Use an L298N only if it's already in the parts bin. |
+| Motor driver | **DRV8833** (TB6612FNG = fallback) | ~$5 | The board in use is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default); TB6612FNG is a fallback only if the DRV8833 runs hot near its limit. Either is cheaper, cooler, and more efficient than the classic L298N (which drops ~2V and runs hot, wasting battery). Use an L298N only if it's already in the parts bin. |
 | Motor power | 4×AA holder *or* 18650 pack | ~$2–12 | **Separate** from Pi power; share a common ground. |
 | **Obstacle sensor** | HC-SR04 ultrasonic | ~$3 | **Core, not optional.** This is the collision-stop reflex — in place from the moment the wheels first move. Cheapest insurance on the whole bot. |
 | Wiring | Jumper wires + mini breadboard | ~$10 | |
@@ -139,7 +139,7 @@ With just these, I can reach **build step 4 ("it sees and talks")** on the bench
 |---|---|---|
 | USB-C PD power bank (≥20W, ~10,000mAh) | roaming power — the kit's supply is wall-only | 30 |
 | TT DC gear motors + wheels, 4-pack | need 2; spares are good | 15 |
-| Motor driver: DRV8833 **or** TB6612FNG breakout | *get the pre-soldered-header version* — no soldering; cheaper and cooler than an L298N | 7 |
+| Motor driver: **DRV8833** breakout (TB6612FNG = fallback only) | *get the pre-soldered-header version* — cheaper and cooler than an L298N; DRV8833 is the board in use, TB6612FNG only if it runs hot | 7 |
 | Ball caster (passive roller) | holds up the chassis | 6 |
 | HC-SR04 ultrasonic sensor | the collision-stop reflex — **core, not optional**; pins pre-attached | 8 |
 | 4×AA holder + AA batteries | motor power, kept **separate** from the Pi (common ground); simple and safe — no lithium yet | 10 |
