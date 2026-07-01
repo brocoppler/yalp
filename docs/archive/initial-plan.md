@@ -139,14 +139,14 @@ With just these, I can reach **build step 4 ("it sees and talks")** on the bench
 |---|---|---|
 | USB-C PD power bank (≥20W, ~10,000mAh) | roaming power — the kit's supply is wall-only | 30 |
 | TT DC gear motors + wheels, 4-pack | need 2; spares are good | 15 |
-| Motor driver: **DRV8833** breakout (TB6612FNG = fallback only) | *get the pre-soldered-header version* — cheaper and cooler than an L298N; DRV8833 is the board in use, TB6612FNG only if it runs hot | 7 |
+| Motor driver: **DRV8833** breakout (TB6612FNG = fallback only) | the common bare board needs its **header pins hand-soldered on** (first-timer guide in `hardware-runbook.md`) — a *pre-soldered-header version is an easier alternative if available*; cheaper and cooler than an L298N; DRV8833 is the board in use, TB6612FNG only if it runs hot | 7 |
 | Ball caster (passive roller) | holds up the chassis | 6 |
 | HC-SR04 ultrasonic sensor | the collision-stop reflex — **core, not optional**; pins pre-attached | 8 |
 | 4×AA holder + AA batteries | motor power, kept **separate** from the Pi (common ground); simple and safe — no lithium yet | 10 |
 | Breadboard + jumper wire kit | get M-M, M-F, **and** F-F wires | 12 |
 | Hot glue gun + zip ties + foam mounting tape | to build and mount the cardboard chassis | 19 |
 
-> **Zero soldering required for v1** — every module above can be bought with pre-attached header pins or screw terminals. A soldering iron is a nice-to-have, not a must (~$20 if I'd rather solder).
+> **Almost no soldering for v1** — every module above comes with screw terminals or pre-attached headers, with **one** exception: the common **DRV8833** breakout ships as a bare board + loose header strips, so the build **does include hand-soldering those DRV8833 header pins** (a beginner-friendly first solder job — see the first-timer walkthrough in `hardware-runbook.md`). Budget a basic **soldering iron (~$20)** for that one step, *or* buy the **pre-soldered-header DRV8833** as an easier alternative and stay fully solder-free.
 
 ### Phase 3 — voice (~$20)
 | Item | Notes | ~$ |

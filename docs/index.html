@@ -983,7 +983,7 @@ The value is in **reading the patterns**, not adopting the stacks wholesale.
 
 *Exploded assembly view — every v1 component laid out before it meets the cardboard deck.*
 
-This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, zero soldering (every module is bought with pre-attached headers or screw terminals). The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
+This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, almost no soldering: every module is bought with screw terminals or pre-attached headers, with **one** exception — the common **DRV8833** breakout ships as a bare board plus loose header strips, so the build **does include hand-soldering those eight DRV8833 header pins** (a beginner-friendly first solder job — see the **"Soldering the DRV8833 header pins"** first-timer walkthrough in `hardware-runbook.md`). A **pre-soldered-header DRV8833 is an easier alternative if you can buy one**, and then this build really is solder-free. The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
 > **NOTE — what this hardware unblocks (laptop-proven vs Pi-confirmed).** The deliberative brain is **already built and laptop-tested** against a *fake* reactive backend: `yalp see` (vision Q&A), `yalp agent` (the tool-use loop), and `yalp follow` (the pluggable-detector track-by-detection loop), plus voice OUTPUT — all running on the laptop webcam. What this hardware adds is the **real body**: the on-Pi reactive backend lives in `src/yalp/reactive/real_backend.py`, which is **fully implemented** (`RealReactiveBackend` — the tick loop, collision-stop, the motor drive paths, and the `MotorWatchdog` wired into `run()`) behind the **same `ReactiveBackend` contract** the fake laptop backend already satisfies. It is code-complete against the §5 pins (motor control via `gpiozero`, the HC-SR04 read, and collision-stop); what remains is **wiring the body and confirming it on real hardware**, not writing the backend. The roadmap's hardware gates depend on the parts below: **Gate E** (power/brownout) needs the motors + driver + caps + battery; **Gate H** (person-detector fps) needs the Pi 5 to *confirm* the follow loop the laptop already proves. In short: the **logic is laptop-proven; the Pi confirms it holds on the real body** (timing, fps, power). Sequencing and gate ledger: `roadmap.md`; the bench session: `hardware-runbook.md`.
 
@@ -994,7 +994,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Eyes** | Logitech C270 USB webcam | ~$22 | UVC plug-and-play, no driver fuss; doubles as a laptop dev cam while building the brain. |
 | **Motors** | 2× TT DC gear motors + wheels (4-pack) | ~$15 | Differential drive; the textbook cheap hobby drivetrain. Spares in the pack. |
 | Balance | 1–2× ball caster | ~$3 ea | Passive roller, no power; the third contact point that makes two-wheel drive stable. |
-| **Motor driver** | **DRV8833** (TB6612FNG = fallback) | ~$5 | **The board in use is the DRV8833** (`MOTOR_DRIVER_KIND="drv8833"` default in `config.py`); TB6612FNG is a drop-in fallback only if the DRV8833 runs hot near its current limit. Either is cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). Get the pre-soldered version. |
+| **Motor driver** | **DRV8833** (TB6612FNG = fallback) | ~$5 | **The board in use is the DRV8833** (`MOTOR_DRIVER_KIND="drv8833"` default in `config.py`); TB6612FNG is a drop-in fallback only if the DRV8833 runs hot near its current limit. Either is cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). The common bare board needs its **header pins hand-soldered on** (first-timer guide in `hardware-runbook.md`); a **pre-soldered version is an easier alternative if available.** |
 | Motor power | 4×AA holder + **NiMH** rechargeable AAs (or 18650 pack) | ~$4–18 | **Separate** supply from the Pi; NiMH AA + common ground for v1 — low internal resistance, flatter discharge, no lithium charging yet. **Not alkaline.** |
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
@@ -1023,7 +1023,7 @@ These are tempting but wrong for v1, and naming them keeps the budget honest:
 - **Separate Active Cooler / heatsink** — the CanaKit case fan already covers cooling.
 - **AI HAT / NPU accelerator** — the heavy AI runs in the cloud; on-device models on a Pi accelerator are a known hobbyist trap for build #1.
 - **Depth camera / LiDAR** — that's the post-v1 navigation upgrade, not a v1 part.
-- **Soldering iron** — every module is bought pre-headered; ~$20 nice-to-have, not a must.
+- **Soldering iron** — *(the one exception to this list)* you **do** need a basic one (~$20) for the **DRV8833 header pins**, unless you buy that board pre-soldered. Every *other* module is bought pre-headered or with screw terminals, so it's a small must-have for one step, not a big rig — see the first-timer solder walkthrough in `hardware-runbook.md`.
 - **Mic/speaker for voice OUTPUT** — not needed: spoken **OUTPUT** (TTS) already ships as software (macOS `say`, opt-in `--speak`) with **zero hardware** — proof that the brain is cloud/software and the Pi is just I/O. Only voice **INPUT** (a USB mic + STT) is a real future buy, and it stays deferred until the text loop is solid (`software-spec.md` §7, `roadmap.md` milestone **O**).
 
 ---
@@ -2207,7 +2207,7 @@ Phase 2 order in `hardware.md` and `roadmap.md`:
 **Body (Phase 2):**
 
 - [ ] 2× TT DC gear motors + wheels
-- [ ] **DRV8833** motor-driver breakout (the board in use; TB6612FNG is a fallback only if the DRV8833 runs hot) — get the pre-soldered-header version
+- [ ] **DRV8833** motor-driver breakout (the board in use; TB6612FNG is a fallback only if the DRV8833 runs hot) — the common version ships as a bare board + loose header strips you **hand-solder on** (see **"Soldering the DRV8833 header pins"** below, a first-timer walkthrough); a **pre-soldered-header version** is an easier alternative if you can buy it
 - [ ] HC-SR04 ultrasonic sensor
 - [ ] NiMH AA cells + 4×AA holder + a NiMH charger (**not alkaline** — see
       `hardware.md` §1)
@@ -2217,6 +2217,10 @@ Phase 2 order in `hardware.md` and `roadmap.md`:
 - [ ] **470–1000 µF electrolytic** cap + **0.1 µF ceramic** cap for the motor rail
 - [ ] cardboard / hot glue / zip ties for the chassis
 - [ ] (handy) a **multimeter** — you cannot pass Gate E without metering voltage
+- [ ] a **soldering iron + stand** and **thin (0.6–0.8 mm) rosin-core solder** — needed
+      to attach the DRV8833 header pins unless you bought the pre-soldered version (the
+      flux is already inside rosin-core solder; no separate flux needed — see the
+      "Soldering the DRV8833 header pins" section)
 
 **⚠️ Safety preamble — read this once, follow it every session:**
 
@@ -2425,6 +2429,136 @@ broken leg — fix it before connecting anything.
 > divider you haven't metered, can **fry the Pi input**. The 1k/2k divider (any
 > ~2:1 ratio dropping 5V→~3.3V) is mandatory, and the meter check is a two-minute
 > insurance policy against a dead pin. Settled in `hardware.md` §4–§5.
+
+---
+
+## Soldering the DRV8833 header pins (first-timer guide)
+
+The DRV8833 breakout ships as a bare board plus two loose **male header strips** —
+those strips are what plug into the breadboard, and you have to solder them on
+first. If you've **never soldered before, this is the section for you**: it walks
+the whole thing start to finish. (If you bought the pre-soldered-header version of
+the board instead, skip straight to §5 — but the common, cheapest DRV8833 needs
+this step, and it's a great first solder job: eight fat, forgiving through-hole
+joints in a straight row.) Do this **before** the §5 wiring, on the bench, power to
+everything off.
+
+### Tools you need
+
+- **A soldering iron + its stand.** A basic temperature-controlled iron is ideal; a
+  fixed-temperature one works fine too.
+- **Rosin-core solder, thin — 0.6–0.8 mm.** IMPORTANT: **the flux is already inside
+  rosin-core solder** — a thread of flux runs down the middle of the wire and comes
+  out as you melt it. You do **not** need to buy a separate flux for this job. Thin
+  solder gives you fine control over how much goes onto each small joint.
+- **A damp sponge or brass wool** to wipe the tip clean between joints (a dirty tip
+  stops transferring heat).
+- **The breadboard itself, used as a soldering jig** (the trick below) — no
+  helping-hands clamp required.
+- **Ventilation.** The flux makes a thin smoke that is an **irritant** — work near
+  an open window or a small fan, and **blow the smoke away from your face**. Don't
+  breathe it.
+
+### Orientation — the breadboard-as-jig method (this is the core trick)
+
+You don't need a clamp. The breadboard holds everything square for you:
+
+1. **Push the two header strips into the breadboard with the LONG pins pointing
+   DOWN** into the board. Set them **straddling the center trench**, one strip each
+   side, at the **spacing that matches the DRV8833's two rows of holes** (dry-fit
+   the board on top to find the right rows before you commit).
+2. The **SHORT pins now point UP.** Those short pins sticking up are the ones you
+   will solder.
+3. **Rest the DRV8833 board ON TOP** of the black plastic spacer of the strips, so
+   the short pins poke **up through the board's holes**. The breadboard holds the
+   pins perfectly vertical and evenly spaced while you work.
+4. **Mount it LABEL side UP** — so the pin names (**AIN1 / AIN2 / BIN1 / BIN2 /
+   STBY / VM / GND / …**) are readable from above, which is what you want when you
+   wire it later. The chip and the little **brown capacitor** then face **down**
+   into the small (~2.5 mm) gap under the board; those low-profile parts clear it
+   fine.
+   - **Caveat:** if some component on the bottom is **too tall** to let the board
+     sit flat on the spacer, flip it and **mount it chip-side-up instead**, and just
+     note that the pin order is now mirrored so you don't mis-wire later.
+     Electrically it works **either way**. The only two non-negotiables are
+     **long-pins-down** and **short-pins-up-and-soldered**.
+
+### Iron setup
+
+- **Temperature:** about **350 °C / 660 °F for leaded solder**, **380 °C / 720 °F
+  for lead-free**. On a fixed-temperature iron, just let it come **fully up to
+  heat** before starting.
+- **Tin the tip:** once hot, **melt a little solder onto the tip** until it's
+  **shiny**, then wipe it on the damp sponge / brass wool. A **shiny tip transfers
+  heat**; a **dull, oxidized tip won't** and will fight you the whole time. Re-tin
+  whenever the tip looks dull.
+- **Hands:** **iron in your dominant hand** (right hand if you're right-handed),
+  **solder wire in the other hand.** **Brace both wrists on the table** for
+  steadiness — you want the iron to arrive exactly where you aim it.
+
+### Per-joint technique (the iron stays down the whole time)
+
+Do this once per pin. The key idea: **heat the metal, then feed the wire into the
+metal — never melt solder onto the iron and dab it on.**
+
+1. **Touch the tip to BOTH the pin AND the metal pad at the same time.** Nestle the
+   tip into the **corner / "V"** where the vertical pin meets the flat ring of the
+   pad. Hold about **1 second.** Heating **both** the pin and the pad is exactly what
+   prevents a weak **"cold joint."**
+2. **With the iron STILL touching, feed the solder wire into the joint from the far
+   side of the pin** (the side away from the iron). Only the **tip of the wire
+   melts**; you'll use about **1–2 mm of wire** per joint. **Do NOT** melt a blob
+   onto the iron tip and wipe it on — that makes bad joints.
+3. The molten solder **wets and flows all the way around the pin and down into the
+   plated hole**, forming a **small shiny cone.** That little **"whoosh" of solder
+   flowing around the pin is exactly right** — solder flows **toward the heat**, so
+   the very spot the tip is touching **self-fills the instant you lift the iron**
+   while the solder is still liquid; there's no gap left behind.
+4. **Pull the WIRE away first, THEN lift the iron.**
+5. **Don't move the board for 2–3 seconds** while the joint self-levels and hardens.
+   Moving it while it's still liquid is what makes a rough, grainy joint.
+
+### Order — corner, check square, diagonal, then the rest
+
+1. Solder **ONE corner pin** only.
+2. **Check the board is sitting flat and square** on the strips. If it's tilted,
+   **reheat that one joint** and gently press the board level, then let it re-set.
+3. Solder the **DIAGONALLY OPPOSITE corner** next — that **locks the board square**.
+4. Now **fill in all the remaining pins, one at a time.**
+
+### Good joint vs. bad joint
+
+- **GOOD:** **shiny, smooth, a small cone/volcano** shape, the **pad fully covered**,
+  and the **pin poking out the top.** That's a solid joint.
+- **BAD — dull / grainy / gray:** a **cold joint** (the metal wasn't hot enough, or
+  it moved while cooling). **Reheat it until the solder flows shiny again, and keep
+  it still while it re-sets.**
+- **BAD — a ball or blob:** **too much solder**, or you melted it onto the tip and
+  dabbed it. Reheat and let it flow; remove excess if needed.
+- **BAD — a BRIDGE:** solder **joining two adjacent pins** together. This **must be
+  fixed** — it shorts those two signals.
+
+**Fixing a bridge:** wipe the tip clean and **freshly tin it**, then **drag the
+clean tip across and off the bridged pins** so the **excess solder follows the tip
+away**; wipe the tip and repeat until the gap is clean. If you have **solder wick /
+desoldering braid**, laying it on the bridge and heating through it also lifts the
+excess right off.
+
+### Safety
+
+- The tip is **~350 °C and burns instantly.** **Return the iron to its stand
+  whenever you're not actively soldering** — never lay it on the bench.
+- **Never touch a joint you just made.** It looks solid but stays **molten for a
+  second or two.**
+- **Ventilate** (window/fan, smoke away from your face), as above.
+- **Wash your hands afterward** — solder often contains **lead.**
+
+### Finish
+
+After everything has cooled, **gently wiggle the board** — **nothing should move**;
+every pin should be rock-solid. Then **scan the whole row for bridges** one more time
+before you power anything. The finished module's **long pins are now ready to plug
+straight into the breadboard** for the §5 wiring, per the `hardware.md` pin map.
 
 ---
 
@@ -2894,7 +3028,10 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 ## 3. Motors (DRV8833) — as-built fill-in table
 
 > **NOT YET WIRED — this is the next bench step.** First **solder the male header
-> strips onto the DRV8833 breakout**, then wire it per this table. The board is the
+> strips onto the DRV8833 breakout**, then wire it per this table. **New to
+> soldering?** Follow the step-by-step **"Soldering the DRV8833 header pins
+> (first-timer guide)"** section in `hardware-runbook.md` — it's the prerequisite for
+> everything in this §3. The board is the
 > **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default) — it has **no
 > STBY pin**; TB6612FNG is a fallback only if the DRV8833 runs hot. **Do not wire
 > motor power until Gate E** (power/brownout, `roadmap.md` milestone **F**) **and GPIO
@@ -3093,14 +3230,14 @@ With just these, I can reach **build step 4 ("it sees and talks")** on the bench
 |---|---|---|
 | USB-C PD power bank (≥20W, ~10,000mAh) | roaming power — the kit's supply is wall-only | 30 |
 | TT DC gear motors + wheels, 4-pack | need 2; spares are good | 15 |
-| Motor driver: **DRV8833** breakout (TB6612FNG = fallback only) | *get the pre-soldered-header version* — cheaper and cooler than an L298N; DRV8833 is the board in use, TB6612FNG only if it runs hot | 7 |
+| Motor driver: **DRV8833** breakout (TB6612FNG = fallback only) | the common bare board needs its **header pins hand-soldered on** (first-timer guide in `hardware-runbook.md`) — a *pre-soldered-header version is an easier alternative if available*; cheaper and cooler than an L298N; DRV8833 is the board in use, TB6612FNG only if it runs hot | 7 |
 | Ball caster (passive roller) | holds up the chassis | 6 |
 | HC-SR04 ultrasonic sensor | the collision-stop reflex — **core, not optional**; pins pre-attached | 8 |
 | 4×AA holder + AA batteries | motor power, kept **separate** from the Pi (common ground); simple and safe — no lithium yet | 10 |
 | Breadboard + jumper wire kit | get M-M, M-F, **and** F-F wires | 12 |
 | Hot glue gun + zip ties + foam mounting tape | to build and mount the cardboard chassis | 19 |
 
-> **Zero soldering required for v1** — every module above can be bought with pre-attached header pins or screw terminals. A soldering iron is a nice-to-have, not a must (~$20 if I'd rather solder).
+> **Almost no soldering for v1** — every module above comes with screw terminals or pre-attached headers, with **one** exception: the common **DRV8833** breakout ships as a bare board + loose header strips, so the build **does include hand-soldering those DRV8833 header pins** (a beginner-friendly first solder job — see the first-timer walkthrough in `hardware-runbook.md`). Budget a basic **soldering iron (~$20)** for that one step, *or* buy the **pre-soldered-header DRV8833** as an easier alternative and stay fully solder-free.
 
 ### Phase 3 — voice (~$20)
 | Item | Notes | ~$ |

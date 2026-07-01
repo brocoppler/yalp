@@ -136,7 +136,10 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 ## 3. Motors (DRV8833) — as-built fill-in table
 
 > **NOT YET WIRED — this is the next bench step.** First **solder the male header
-> strips onto the DRV8833 breakout**, then wire it per this table. The board is the
+> strips onto the DRV8833 breakout**, then wire it per this table. **New to
+> soldering?** Follow the step-by-step **"Soldering the DRV8833 header pins
+> (first-timer guide)"** section in `hardware-runbook.md` — it's the prerequisite for
+> everything in this §3. The board is the
 > **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default) — it has **no
 > STBY pin**; TB6612FNG is a fallback only if the DRV8833 runs hot. **Do not wire
 > motor power until Gate E** (power/brownout, `roadmap.md` milestone **F**) **and GPIO

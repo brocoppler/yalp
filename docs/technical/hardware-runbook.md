@@ -72,7 +72,7 @@ Phase 2 order in `hardware.md` and `roadmap.md`:
 **Body (Phase 2):**
 
 - [ ] 2× TT DC gear motors + wheels
-- [ ] **DRV8833** motor-driver breakout (the board in use; TB6612FNG is a fallback only if the DRV8833 runs hot) — get the pre-soldered-header version
+- [ ] **DRV8833** motor-driver breakout (the board in use; TB6612FNG is a fallback only if the DRV8833 runs hot) — the common version ships as a bare board + loose header strips you **hand-solder on** (see **"Soldering the DRV8833 header pins"** below, a first-timer walkthrough); a **pre-soldered-header version** is an easier alternative if you can buy it
 - [ ] HC-SR04 ultrasonic sensor
 - [ ] NiMH AA cells + 4×AA holder + a NiMH charger (**not alkaline** — see
       `hardware.md` §1)
@@ -82,6 +82,10 @@ Phase 2 order in `hardware.md` and `roadmap.md`:
 - [ ] **470–1000 µF electrolytic** cap + **0.1 µF ceramic** cap for the motor rail
 - [ ] cardboard / hot glue / zip ties for the chassis
 - [ ] (handy) a **multimeter** — you cannot pass Gate E without metering voltage
+- [ ] a **soldering iron + stand** and **thin (0.6–0.8 mm) rosin-core solder** — needed
+      to attach the DRV8833 header pins unless you bought the pre-soldered version (the
+      flux is already inside rosin-core solder; no separate flux needed — see the
+      "Soldering the DRV8833 header pins" section)
 
 **⚠️ Safety preamble — read this once, follow it every session:**
 
@@ -290,6 +294,136 @@ broken leg — fix it before connecting anything.
 > divider you haven't metered, can **fry the Pi input**. The 1k/2k divider (any
 > ~2:1 ratio dropping 5V→~3.3V) is mandatory, and the meter check is a two-minute
 > insurance policy against a dead pin. Settled in `hardware.md` §4–§5.
+
+---
+
+## Soldering the DRV8833 header pins (first-timer guide)
+
+The DRV8833 breakout ships as a bare board plus two loose **male header strips** —
+those strips are what plug into the breadboard, and you have to solder them on
+first. If you've **never soldered before, this is the section for you**: it walks
+the whole thing start to finish. (If you bought the pre-soldered-header version of
+the board instead, skip straight to §5 — but the common, cheapest DRV8833 needs
+this step, and it's a great first solder job: eight fat, forgiving through-hole
+joints in a straight row.) Do this **before** the §5 wiring, on the bench, power to
+everything off.
+
+### Tools you need
+
+- **A soldering iron + its stand.** A basic temperature-controlled iron is ideal; a
+  fixed-temperature one works fine too.
+- **Rosin-core solder, thin — 0.6–0.8 mm.** IMPORTANT: **the flux is already inside
+  rosin-core solder** — a thread of flux runs down the middle of the wire and comes
+  out as you melt it. You do **not** need to buy a separate flux for this job. Thin
+  solder gives you fine control over how much goes onto each small joint.
+- **A damp sponge or brass wool** to wipe the tip clean between joints (a dirty tip
+  stops transferring heat).
+- **The breadboard itself, used as a soldering jig** (the trick below) — no
+  helping-hands clamp required.
+- **Ventilation.** The flux makes a thin smoke that is an **irritant** — work near
+  an open window or a small fan, and **blow the smoke away from your face**. Don't
+  breathe it.
+
+### Orientation — the breadboard-as-jig method (this is the core trick)
+
+You don't need a clamp. The breadboard holds everything square for you:
+
+1. **Push the two header strips into the breadboard with the LONG pins pointing
+   DOWN** into the board. Set them **straddling the center trench**, one strip each
+   side, at the **spacing that matches the DRV8833's two rows of holes** (dry-fit
+   the board on top to find the right rows before you commit).
+2. The **SHORT pins now point UP.** Those short pins sticking up are the ones you
+   will solder.
+3. **Rest the DRV8833 board ON TOP** of the black plastic spacer of the strips, so
+   the short pins poke **up through the board's holes**. The breadboard holds the
+   pins perfectly vertical and evenly spaced while you work.
+4. **Mount it LABEL side UP** — so the pin names (**AIN1 / AIN2 / BIN1 / BIN2 /
+   STBY / VM / GND / …**) are readable from above, which is what you want when you
+   wire it later. The chip and the little **brown capacitor** then face **down**
+   into the small (~2.5 mm) gap under the board; those low-profile parts clear it
+   fine.
+   - **Caveat:** if some component on the bottom is **too tall** to let the board
+     sit flat on the spacer, flip it and **mount it chip-side-up instead**, and just
+     note that the pin order is now mirrored so you don't mis-wire later.
+     Electrically it works **either way**. The only two non-negotiables are
+     **long-pins-down** and **short-pins-up-and-soldered**.
+
+### Iron setup
+
+- **Temperature:** about **350 °C / 660 °F for leaded solder**, **380 °C / 720 °F
+  for lead-free**. On a fixed-temperature iron, just let it come **fully up to
+  heat** before starting.
+- **Tin the tip:** once hot, **melt a little solder onto the tip** until it's
+  **shiny**, then wipe it on the damp sponge / brass wool. A **shiny tip transfers
+  heat**; a **dull, oxidized tip won't** and will fight you the whole time. Re-tin
+  whenever the tip looks dull.
+- **Hands:** **iron in your dominant hand** (right hand if you're right-handed),
+  **solder wire in the other hand.** **Brace both wrists on the table** for
+  steadiness — you want the iron to arrive exactly where you aim it.
+
+### Per-joint technique (the iron stays down the whole time)
+
+Do this once per pin. The key idea: **heat the metal, then feed the wire into the
+metal — never melt solder onto the iron and dab it on.**
+
+1. **Touch the tip to BOTH the pin AND the metal pad at the same time.** Nestle the
+   tip into the **corner / "V"** where the vertical pin meets the flat ring of the
+   pad. Hold about **1 second.** Heating **both** the pin and the pad is exactly what
+   prevents a weak **"cold joint."**
+2. **With the iron STILL touching, feed the solder wire into the joint from the far
+   side of the pin** (the side away from the iron). Only the **tip of the wire
+   melts**; you'll use about **1–2 mm of wire** per joint. **Do NOT** melt a blob
+   onto the iron tip and wipe it on — that makes bad joints.
+3. The molten solder **wets and flows all the way around the pin and down into the
+   plated hole**, forming a **small shiny cone.** That little **"whoosh" of solder
+   flowing around the pin is exactly right** — solder flows **toward the heat**, so
+   the very spot the tip is touching **self-fills the instant you lift the iron**
+   while the solder is still liquid; there's no gap left behind.
+4. **Pull the WIRE away first, THEN lift the iron.**
+5. **Don't move the board for 2–3 seconds** while the joint self-levels and hardens.
+   Moving it while it's still liquid is what makes a rough, grainy joint.
+
+### Order — corner, check square, diagonal, then the rest
+
+1. Solder **ONE corner pin** only.
+2. **Check the board is sitting flat and square** on the strips. If it's tilted,
+   **reheat that one joint** and gently press the board level, then let it re-set.
+3. Solder the **DIAGONALLY OPPOSITE corner** next — that **locks the board square**.
+4. Now **fill in all the remaining pins, one at a time.**
+
+### Good joint vs. bad joint
+
+- **GOOD:** **shiny, smooth, a small cone/volcano** shape, the **pad fully covered**,
+  and the **pin poking out the top.** That's a solid joint.
+- **BAD — dull / grainy / gray:** a **cold joint** (the metal wasn't hot enough, or
+  it moved while cooling). **Reheat it until the solder flows shiny again, and keep
+  it still while it re-sets.**
+- **BAD — a ball or blob:** **too much solder**, or you melted it onto the tip and
+  dabbed it. Reheat and let it flow; remove excess if needed.
+- **BAD — a BRIDGE:** solder **joining two adjacent pins** together. This **must be
+  fixed** — it shorts those two signals.
+
+**Fixing a bridge:** wipe the tip clean and **freshly tin it**, then **drag the
+clean tip across and off the bridged pins** so the **excess solder follows the tip
+away**; wipe the tip and repeat until the gap is clean. If you have **solder wick /
+desoldering braid**, laying it on the bridge and heating through it also lifts the
+excess right off.
+
+### Safety
+
+- The tip is **~350 °C and burns instantly.** **Return the iron to its stand
+  whenever you're not actively soldering** — never lay it on the bench.
+- **Never touch a joint you just made.** It looks solid but stays **molten for a
+  second or two.**
+- **Ventilate** (window/fan, smoke away from your face), as above.
+- **Wash your hands afterward** — solder often contains **lead.**
+
+### Finish
+
+After everything has cooled, **gently wiggle the board** — **nothing should move**;
+every pin should be rock-solid. Then **scan the whole row for bridges** one more time
+before you power anything. The finished module's **long pins are now ready to plug
+straight into the breadboard** for the §5 wiring, per the `hardware.md` pin map.
 
 ---
 
