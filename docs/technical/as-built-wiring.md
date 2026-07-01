@@ -83,7 +83,7 @@ two segments so each segment's wire color is unambiguous.
 | 3 | HC-SR04 **GND** | black | breadboard `−` rail (GND bus) | — |
 | 4 | breadboard `−` rail | black | **Pi Pin 6** (GND) | Pin 6 / GND |
 | 5 | HC-SR04 **TRIG** | brown | breadboard column 20 | — |
-| 6 | breadboard column 20 | gray | **Pi Pin 29** (TRIG) | Pin 29 / GPIO5 |
+| 6 | breadboard column 20 | green | **Pi Pin 29** (TRIG) | Pin 29 / GPIO5 |
 | 7 | HC-SR04 **ECHO** | orange | breadboard column 5 (divider input) | — |
 | 8 | divider **TAP** (column 9) | yellow | **Pi Pin 31** (ECHO, divided to 3.0 V) | Pin 31 / GPIO6 |
 
@@ -97,7 +97,7 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
    ┌──────────┐                                                        (physical pins)
    │ VCC ─── red ──────────────►  + rail (5V bus) ── red ───────────►  Pin 2  (5V)
    │ GND ─── black ────────────►  − rail (GND bus) ─ black ─────────►  Pin 6  (GND)
-   │ TRIG ── brown ────────────►  col 20 ────────── gray ──────────►  Pin 29 (GPIO5 TRIG)
+   │ TRIG ── brown ────────────►  col 20 ────────── green ─────────►  Pin 29 (GPIO5 TRIG)
    │ ECHO ── orange ───────────►  col 5
    │          │                    │
    │          │            R1 1kΩ  │ col 5 ─┬─ col 9   (TAP = 3.0V)
