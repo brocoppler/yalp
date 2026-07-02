@@ -24,7 +24,11 @@ The contract ordering (software-spec.md §2.3), implemented once in :meth:`tick`
      mailbox** while blocked (a pending intent cannot override a live safety stop).
   3. **Drain the single-slot mailbox** and adopt the newest intent (preempts the
      current mode; reaching here means the obstacle is clear, so adopting is also
-     what lifts a sticky ``SAFE_STOP``).
+     what lifts a sticky ``SAFE_STOP``). A mode-changing intent that replaces an
+     ACTIVE (``RUNNING``) goal first publishes a one-tick ``PREEMPTED`` transition
+     for the outgoing goal, then adopts on the next tick. A **control-only**
+     intent (no mode, e.g. ``set_speed_limit``) writes ``RobotState.speed_limit``
+     without preempting or changing the mode.
   4. **Step the current mode** (IDLE/SAFE_STOP hold stopped; DRIVE_GOAL advances
      the timed open-loop guess; FOLLOW steers track-by-detection).
 
@@ -180,6 +184,36 @@ class ReactiveTickCore(ReactiveBackend):
             # 3. DRAIN SINGLE-SLOT MAILBOX, then adopt (preempt in-progress mode).
             #    Reaching here means the obstacle is clear, so adopting a fresh
             #    intent is also what lifts a sticky SAFE_STOP.
+            #
+            #    PREEMPTION (§2.2): a newly arrived MODE-changing intent that would
+            #    replace an ACTIVE, in-progress motion goal (a RUNNING DRIVE_GOAL or
+            #    FOLLOW) first surfaces a one-tick PREEMPTED transition for the
+            #    outgoing goal — cancel it, halt, and publish PREEMPTED — then adopt
+            #    the pending intent on the NEXT tick. This is the only way the
+            #    deliberative layer's poller can actually OBSERVE the preemption
+            #    (each tick publishes a single snapshot). It never fires while
+            #    blocked (step 2 already returned), never for a terminal goal
+            #    (COMPLETED/BLOCKED/NONE are not RUNNING — so a sticky SAFE_STOP is
+            #    lifted by immediate adoption below, untouched), never for an IDLE
+            #    hold (a stop is not a goal to preempt), and never for a control-only
+            #    intent (which carries no mode change).
+            pending = self.mailbox.peek()
+            if (
+                pending is not None
+                and pending.mode is not None
+                and s.mode in (Mode.DRIVE_GOAL, Mode.FOLLOW)
+                and s.goal_status == GoalStatus.RUNNING
+            ):
+                self._halt_motors()
+                s.goal_status = GoalStatus.PREEMPTED
+                s.goal = {
+                    **(s.goal or {}),
+                    "reason": "superseded",
+                    "preempted_by_seq": int(pending.seq),
+                }
+                # Leave the pending intent in the mailbox: it is adopted next tick.
+                return self._finish()
+
             new = self.mailbox.take()
             if new is not None:
                 self._adopt(new)
