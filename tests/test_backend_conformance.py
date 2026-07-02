@@ -33,6 +33,7 @@ import pytest
 from yalp.camera import Camera
 from yalp.contract.messages import GoalStatus, Intent, Mode
 from yalp.reactive.fake_backend import FakeReactiveBackend
+from yalp.reactive.follow import REASON_LOST, REASON_STALE, FollowController
 from yalp.reactive.hardware import FakeMotorDriver, FakeRangeSensor
 from yalp.reactive.person_tracker import TrackResult
 from yalp.reactive.real_backend import RealReactiveBackend
@@ -347,11 +348,24 @@ def test_no_preempted_while_blocked_or_on_sticky_release(factory):
 #     goal_status / honesty-signal transitions in BOTH backends.
 # --------------------------------------------------------------------------- #
 # FOLLOW is the second place the fake and real tick logic must not diverge: both
-# read the SAME shared camera, run the SAME tracker/controller, and publish the
-# SAME honesty signals every tick (software-spec.md §2.2). The safety tests above
-# prove the collision seam; these prove the FOLLOW seam. An injected scripted
-# tracker + a fixed bright frame make the input byte-for-byte identical, so any
-# divergence in the published state across the two backends fails the build.
+# read the SAME shared camera, run the SAME tracker/controller through the SAME
+# shared perception path, and publish the SAME honesty signals every tick
+# (software-spec.md §2.2). The safety tests above prove the collision seam; these
+# prove the FOLLOW seam. An injected scripted tracker + a fixed bright frame make
+# the input byte-for-byte identical, so any divergence in the published state
+# across the two backends fails the build.
+#
+# NOTE (async-perception task): the detector now runs on the PerceptionWorker.
+# These backends drive tick() directly WITHOUT calling run(), so the worker pumps
+# SYNCHRONOUSLY (exactly one tracker.update() per FOLLOW tick) — the same code path
+# the async thread runs, but deterministic — which is what makes a byte-for-byte
+# cross-backend trace comparison meaningful. The published
+# ``ticks_since_last_detector_confirmation`` is now the REACTIVE-TICK age since the
+# last detector confirmation (not the tracker's own counter), so "stale" is driven
+# by how long a live box goes un-reconfirmed — see the script below.
+
+# A short lost-grace window so the script can trip 'stale' in a handful of ticks.
+_FOLLOW_COAST_TICKS = 3
 class _ScriptedTracker:
     """Replays a fixed sequence of ``TrackResult``s, ignoring the frame.
 
@@ -397,20 +411,30 @@ class _BrightCamera:
 
 
 def _follow_script():
-    """A FOLLOW tracker script exercising acquire → coast → lost → stale → reacquire.
+    """A FOLLOW tracker script exercising acquire → coast → stale → lost → reacquire.
 
-    A fresh copy is returned each call (the tracker consumes it). The ``ticks=30``
-    entry is deliberately > the 20 Hz lost-grace window (18) so the controller
-    reads it as STALE (target_visible False, bbox None) on BOTH backends — a
-    genuine honesty transition, not just a moving box.
+    A fresh copy is returned each call (the tracker consumes it). With the detector
+    now async, "stale" is driven by *observation age in reactive ticks* (not the
+    tracker's own counter): a live box that goes un-reconfirmed for LONGER than the
+    lost-grace window reads as stale. In synchronous-pump mode (these backends drive
+    tick() directly) each entry maps to exactly one FOLLOW tick, so with
+    ``coast_ticks = _FOLLOW_COAST_TICKS = 3`` the fourth un-reconfirmed coast tick
+    (reactive-tick age 4 > 3) is the STALE transition on BOTH backends — a genuine
+    honesty transition, not just a moving box.
+
+    Only the ``ticks_since == 0 with a bbox`` entries count as fresh detector
+    confirmations (they reset the reactive-tick age clock); the coast entries carry
+    a non-zero counter so they never re-confirm.
     """
+    bbox = (140, 80, 40, 90)
     return [
-        TrackResult(True, (140, 80, 40, 90), 0.90, 0, True),    # acquired
-        TrackResult(True, (40, 80, 40, 90), 0.85, 1, False),    # coasting, moved left
-        TrackResult(True, (240, 80, 40, 90), 0.80, 2, False),   # coasting, moved right
-        TrackResult(False, None, 0.0, 3, False),                # lost (no box)
-        TrackResult(True, (150, 80, 40, 90), 0.90, 30, False),  # STALE (>grace) -> stop
-        TrackResult(True, (150, 40, 60, 180), 0.95, 0, True),   # reacquired, close
+        TrackResult(True, bbox, 0.90, 0, True),               # 0: acquired (confirm)
+        TrackResult(True, bbox, 0.85, 9, False),              # 1: coast, age 1
+        TrackResult(True, bbox, 0.80, 9, False),              # 2: coast, age 2
+        TrackResult(True, bbox, 0.75, 9, False),              # 3: coast, age 3 (==grace)
+        TrackResult(True, bbox, 0.70, 9, False),              # 4: coast, age 4 -> STALE
+        TrackResult(False, None, 0.0, 9, False),              # 5: no box -> LOST
+        TrackResult(True, (150, 40, 60, 180), 0.95, 0, True),  # 6: reacquired (confirm)
     ]
 
 
@@ -418,14 +442,17 @@ def _follow_signal_trace(backend, n_ticks):
     """Drive ``backend`` through FOLLOW and record the per-tick published signals.
 
     Returns a list of ``(mode, goal_status, target_visible, target_bbox,
-    tracker_score, ticks_since_last_detector_confirmation)`` — the mode, goal
-    status, and the four §2.2 honesty signals — one tuple per tick.
+    tracker_score, ticks_since_last_detector_confirmation, reason)`` — the mode,
+    goal status, the four §2.2 honesty signals, and the controller's degradation
+    reason — one tuple per tick. Including the reason makes the cross-backend parity
+    check cover WHY each stop happened (lost vs stale), not just that it happened.
     """
     backend.start()
     backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))
     trace = []
     for _ in range(n_ticks):
         st = backend.tick()
+        decision = backend.last_follow_decision
         trace.append(
             (
                 st.mode,
@@ -434,14 +461,22 @@ def _follow_signal_trace(backend, n_ticks):
                 st.target_bbox,
                 round(float(st.tracker_score), 6),
                 st.ticks_since_last_detector_confirmation,
+                decision.reason if decision is not None else None,
             )
         )
     return trace
 
 
+def _short_coast_controller():
+    """A controller with a short lost-grace window (identical for both backends)."""
+    return FollowController(coast_ticks=_FOLLOW_COAST_TICKS)
+
+
 def _fake_follow(script):
     return FakeReactiveBackend(
-        camera=_BrightCamera(), tracker=_ScriptedTracker(script)
+        camera=_BrightCamera(),
+        tracker=_ScriptedTracker(script),
+        follow_controller=_short_coast_controller(),
     )
 
 
@@ -453,6 +488,7 @@ def _real_follow(script):
         range_sensor=sensor,
         camera=_BrightCamera(),
         tracker=_ScriptedTracker(script),
+        follow_controller=_short_coast_controller(),
     )
     return backend, motor, sensor
 
@@ -481,8 +517,11 @@ def test_follow_honesty_signals_are_identical_across_backends():
     # Every FOLLOW tick stays in FOLLOW/RUNNING (no obstacle here).
     assert all(row[0] == Mode.FOLLOW for row in fake_trace)
     assert all(row[1] == GoalStatus.RUNNING for row in fake_trace)
-    # The stale entry (ticks=30) reads not-visible with a cleared bbox on BOTH.
-    stale_rows = [row for row in fake_trace if row[5] == 30]
+    # The STALE transition — the first coast tick whose REACTIVE-TICK confirmation
+    # age exceeds the coast window (age _FOLLOW_COAST_TICKS + 1 > _FOLLOW_COAST_TICKS)
+    # — reads not-visible with a cleared bbox on BOTH backends. (This is the age in
+    # reactive ticks now, NOT the tracker's own worker-cadence counter.)
+    stale_rows = [row for row in fake_trace if row[5] == _FOLLOW_COAST_TICKS + 1]
     assert stale_rows and all(
         row[2] is False and row[3] is None for row in stale_rows
     )

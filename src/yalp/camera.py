@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -153,6 +153,22 @@ class Camera:
         """
         with self._lock:
             return None if self._latest is None else self._latest.copy()
+
+    def latest_with_id(self) -> Tuple[Optional[np.ndarray], int]:
+        """Return the newest frame AND its monotonic capture id, read ATOMICALLY.
+
+        Same single-slot / last-write-wins semantics as :meth:`latest` (never
+        blocks on a device read), but also returns the capture counter for that
+        frame so a consumer can tell WHICH frame a result was computed from — and
+        spot a frozen/stalled source (the id stops advancing). The frame and its id
+        are read under the SAME lock, so they always correspond to the same capture
+        (no torn read of "this frame with that id"). ``frame`` is ``None`` (and the
+        id is 0) until the first frame is published. Used by the FOLLOW perception
+        worker to stamp each :class:`~yalp.reactive.perception.Observation`.
+        """
+        with self._lock:
+            frame = None if self._latest is None else self._latest.copy()
+            return frame, self._frame_count
 
     def wait_for_frame(
         self, timeout: float = DEFAULT_FRAME_TIMEOUT

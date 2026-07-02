@@ -352,18 +352,44 @@ def test_collision_stop_overrides_follow():
 
 
 def test_follow_stale_box_stops_via_backend():
+    """A live box the detector never RE-CONFIRMS goes stale in REACTIVE-TICK units.
+
+    Semantics shift (async-perception task): the detector now runs on the
+    PerceptionWorker at its own cadence, so the published
+    ``ticks_since_last_detector_confirmation`` is the age in REACTIVE TICKS since the
+    detector last CONFIRMED the box — not the tracker's own worker-cadence counter.
+    An observation that is never a fresh confirmation (its tracker counter is
+    non-zero) never resets the reactive-tick clock, so the age climbs every tick;
+    once it exceeds the controller's coast window the backend degrades to a clean
+    STALE stop and clears the published bbox — never driving blind on a stale box
+    (§4). (A single stale-tagged frame no longer trips 'stale' the way the tracker's
+    passthrough counter used to; time — reactive ticks — is what makes it stale.)
+    """
     cam = FakeCamera(_bright_frame())
-    # Tracker keeps "seeing" the box but the detector hasn't confirmed in 20 ticks.
+    coast = 3
+    # A visible box that is NEVER a fresh detector confirmation (tracker counter
+    # non-zero => confirmations count never advances), so the reactive-tick
+    # confirmation age only ever climbs.
     stale = TrackResult(True, (140, 100, 40, 40), 0.9, 20, False)
-    tracker = FakeTracker([stale] * 3)
-    backend = _follow_backend(cam, tracker)
+    backend = FakeReactiveBackend(
+        camera=cam,
+        tracker=FakeTracker([stale] * 50),
+        follow_controller=FollowController(coast_ticks=coast),
+    )
+    backend.start()
+    backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))
     try:
-        state = backend.tick()
-        dec = backend.last_follow_decision
+        # Drive well past the coast window; the un-reconfirmed box must go stale.
+        states = [backend.tick() for _ in range(coast + 5)]
     finally:
         backend.stop()
-    assert state.target_visible is False
-    assert state.ticks_since_last_detector_confirmation == 20
+    dec = backend.last_follow_decision
+    final = states[-1]
+    assert final.target_visible is False
+    assert final.target_bbox is None
+    # The published age is now the REACTIVE-TICK age past the coast window (it is
+    # driven by elapsed ticks, not by the tracker's own counter of 20).
+    assert final.ticks_since_last_detector_confirmation > coast
     assert dec.reason == REASON_STALE
 
 

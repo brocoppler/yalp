@@ -42,13 +42,27 @@ Observer seam (:meth:`on_intent_adopted` / :meth:`on_motor_command` /
 :meth:`on_tick_complete`): no-op by default, invoked through :meth:`_safe_notify`
 so a misbehaving observer can NEVER break a tick (a later telemetry task consumes
 these — nothing else here depends on them).
+
+FOLLOW perception runs OFF the tick (the async-perception task)
+---------------------------------------------------------------
+The person detector is far too heavy for the tick path (HOG / MobileNet-SSD is
+~100–500 ms per frame on a Pi 5, versus the 33 ms ``TICK_BUDGET_MS`` / 100 ms
+``WATCHDOG_TIMEOUT_MS``). So ``tracker.update()`` runs on a
+:class:`~yalp.reactive.perception.PerceptionWorker` thread; :meth:`_step_follow`
+only reads the worker's freshest :class:`~yalp.reactive.perception.Observation`
+**non-blockingly** and feeds it to the controller. The worker starts/stops with
+the backend's ``run()`` / ``close()``; before that (unit tests / laptop demos that
+drive ``tick()`` directly) the worker pumps synchronously, 1:1 with ticks, so
+behavior stays deterministic. See :meth:`_step_follow` for the precise honesty-
+signal semantics shift (``ticks_since_last_detector_confirmation`` now measures
+observation age in *reactive ticks*).
 """
 
 from __future__ import annotations
 
 import time
 from abc import abstractmethod
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from .. import config
 from ..camera import Camera
@@ -61,6 +75,10 @@ from ..contract.messages import (
 )
 from .backend import ReactiveBackend
 from .follow import FollowDecision, frame_brightness
+from .perception import PerceptionWorker
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .person_tracker import TrackResult
 
 
 class ReactiveTickCore(ReactiveBackend):
@@ -75,7 +93,10 @@ class ReactiveTickCore(ReactiveBackend):
     ``safe_stop_threshold_m``, ``max_speed_mps``, ``turn_rate_dps``, ``tick_hz``,
     ``_tracker``, ``_follow``, ``last_follow_decision``, ``_camera``,
     ``_camera_started``, ``_state``, ``_goal_duration_s``, ``_frame_id``,
-    ``_lock`` (a ``threading.Lock``), and ``_lost_grace_ticks``.
+    ``_lock`` (a ``threading.Lock``), and ``_lost_grace_ticks``. The FOLLOW
+    perception worker (``_perception``) and its reactive-tick confirmation clock
+    (``_ticks_since_confirmation`` / ``_seen_confirmations``) are created lazily by
+    :meth:`_ensure_perception` on the first FOLLOW tick.
     """
 
     # -- backend-specific hooks ---------------------------------------------
@@ -124,8 +145,91 @@ class ReactiveTickCore(ReactiveBackend):
         return self._camera
 
     def _latest_frame(self):
-        """The newest decoded frame from the OWNED camera, or ``None``."""
+        """The newest decoded frame from the OWNED camera, or ``None``.
+
+        Single-slot / last-write-wins (a stale frame is fine); never blocks on a
+        device read. Read cheaply on the tick for frame geometry + brightness.
+        """
         return self._camera.latest() if self._camera_started else None
+
+    def _frame_with_id(self) -> Tuple[object, Optional[int]]:
+        """The newest frame AND its camera capture id, non-blocking.
+
+        The perception worker's frame source: it stamps each published
+        :class:`~yalp.reactive.perception.Observation` with the id of the frame the
+        detector actually saw (diagnostics / frozen-source detection). Reads the
+        frame and its id ATOMICALLY when the owned camera exposes ``latest_with_id``
+        (the real :class:`~yalp.camera.Camera` does); a test-double camera that only
+        implements ``latest()`` yields a ``None`` id. Never blocks on a device read.
+        """
+        if not self._camera_started:
+            return None, None
+        getter = getattr(self._camera, "latest_with_id", None)
+        if getter is not None:
+            return getter()
+        return self._camera.latest(), None
+
+    # -- FOLLOW perception worker (heavy detector OFF the tick) --------------
+    def _ensure_perception(self) -> PerceptionWorker:
+        """Return the FOLLOW perception worker, building it (once) on first use.
+
+        The worker itself is cheap to construct; it defers building the tracker
+        (and its OpenCV detector) until it actually runs a FOLLOW cycle, so a
+        backend that never follows never pays the CV import cost. Also initializes
+        the reactive-tick confirmation clock (see :meth:`_step_follow`).
+        """
+        worker = getattr(self, "_perception", None)
+        if worker is None:
+            # Reactive-tick "ticks since the detector last confirmed the box"
+            # clock, plus the highest confirmation count we have consumed so far.
+            self._ticks_since_confirmation = 0
+            self._seen_confirmations = 0
+            worker = PerceptionWorker(
+                frame_source=self._frame_with_id,
+                get_tracker=self._get_tracker,
+                is_active=self._perception_active,
+            )
+            self._perception = worker
+        return worker
+
+    def _get_tracker(self):
+        """Return the FOLLOW tracker, lazily building the default one.
+
+        Called only from the perception worker (its own thread in async mode, or
+        the tick thread in synchronous-pump mode) — never concurrently — so the
+        lazy assignment needs no extra lock. Building the real
+        :class:`~yalp.reactive.person_tracker.PersonTracker` also lazily builds its
+        OpenCV detector, so that cost is paid on the worker, never on the tick.
+        """
+        if self._tracker is None:
+            from .person_tracker import PersonTracker
+
+            self._tracker = PersonTracker(grace_ticks=self._lost_grace_ticks)
+        return self._tracker
+
+    def _perception_active(self) -> bool:
+        """Whether the worker should run the detector (i.e. we are in FOLLOW).
+
+        Read from the worker thread; a plain attribute read of the mode enum is a
+        benign race (at worst one extra/skipped cycle at a mode boundary).
+        """
+        return self._state.mode == Mode.FOLLOW
+
+    def start_perception(self) -> PerceptionWorker:
+        """Build (if needed) and start the async perception worker thread.
+
+        Called by the backend's ``run()`` so the detector runs off-thread for the
+        whole session. Idempotent.
+        """
+        worker = self._ensure_perception()
+        worker.start()
+        return worker
+
+    def stop_perception(self) -> None:
+        """Stop the perception worker thread if one was ever started (idempotent)."""
+        worker = getattr(self, "_perception", None)
+        if worker is not None:
+            worker.stop()
 
     # -- contract ------------------------------------------------------------
     def apply_intent(self, intent: Intent) -> None:
@@ -302,34 +406,70 @@ class ReactiveTickCore(ReactiveBackend):
 
     # -- FOLLOW --------------------------------------------------------------
     def _step_follow(self) -> None:
-        """Track-by-detection FOLLOW: read the shared camera, steer, stay honest.
+        """Steer FOLLOW from the LATEST perception observation — stay honest.
 
-        Each tick grabs the latest frame from the reactive layer's OWNED camera,
-        runs the track-by-detection tracker, and turns the result into a steering
-        decision (turn toward the person, drive forward until close). It publishes
-        the spec's honesty signals every tick (``target_visible`` / ``target_bbox``
-        / ``tracker_score`` / ``ticks_since_last_detector_confirmation``, §2.2) and
-        degrades gracefully: if the person is lost/stale or the frame is too dark it
-        STOPS and reports "I lost you" instead of driving blind on a stale box. The
-        resulting decision is finally commanded to the wheels (a lost target maps to
-        a clean ``(0, 0)`` stop); collision-stop / ``SAFE_STOP`` already overrode
-        this upstream (§2.3).
+        The heavy detector does NOT run here. It runs on the
+        :class:`~yalp.reactive.perception.PerceptionWorker`; this tick only reads
+        the worker's freshest observation **non-blockingly** (:meth:`poll`), turns
+        it into a steering decision (turn toward the person, drive forward until
+        close), publishes the spec's honesty signals every tick, and commands the
+        wheels (a lost/stale target maps to a clean ``(0, 0)`` stop). Collision-stop
+        / ``SAFE_STOP`` already overrode this upstream (§2.3).
+
+        Honesty-signal semantics shift (async-perception task)
+        ------------------------------------------------------
+        Previously ``tracker.update()`` ran once per tick, so the published
+        ``ticks_since_last_detector_confirmation`` was the tracker's own per-tick
+        counter. Now the detector runs on the worker at its OWN (slower, variable)
+        cadence, so the tracker's counter is in worker-cycle units — the wrong
+        clock for the controller's stale gate. Instead we recompute the signal here
+        in **reactive-tick units**: a monotonic per-tick counter
+        (``_ticks_since_confirmation``) that resets to 0 whenever a NEW detector
+        confirmation appears in the observation stream (tracked via the
+        observation's cumulative ``confirmations`` count, so a tick can never *miss*
+        a confirmation even if it samples slower than the worker publishes).
+
+        This keeps the stale / lost / dark degradation identical to before from the
+        controller's and agent's perspective: ``FollowController``'s stale gate
+        (``ticks_since_last_detector_confirmation > coast_ticks``) is compared
+        against ``config.lost_grace_ticks(tick_hz)`` — also reactive ticks — so the
+        ~0.9 s real-world grace window is preserved regardless of detector latency.
+        Concretely: a fresh confirmation -> counter 0 -> steer a visible box; a live
+        box that goes un-reconfirmed for longer than the grace -> counter exceeds it
+        -> ``'stale'`` clean stop; no box / weak score -> ``'lost'``; a dark frame
+        (brightness read live below) -> ``'dark'``. A **crashed/stalled worker**
+        publishes nothing new, so the counter simply climbs every tick and the
+        controller degrades to ``'stale'`` (last box present) or ``'lost'`` — the
+        tick itself never blocks or throws.
         """
         s = self._state
         s.goal_status = GoalStatus.RUNNING
 
-        if self._tracker is None:
-            # Lazy: build the real track-by-detection tracker (its detector lazily
-            # builds the OpenCV backend) only when FOLLOW actually runs, so the
-            # OpenCV import cost is never paid by callers that never follow. The
-            # tracker's coast/grace budget is the backend's per-tick_hz window.
-            from .person_tracker import PersonTracker
+        worker = self._ensure_perception()
 
-            self._tracker = PersonTracker(grace_ticks=self._lost_grace_ticks)
+        # Read the freshest observation NON-BLOCKINGLY. In async mode this is a
+        # cheap mailbox read (the detector is on the worker thread); before the
+        # worker is started it pumps one cycle inline (deterministic tests / demos).
+        observation = worker.poll()
 
+        # Advance the reactive-tick confirmation clock, resetting it when a new
+        # detector confirmation has landed (see the docstring for why this — not the
+        # tracker's own counter — is what the controller must see).
+        self._ticks_since_confirmation += 1
+        fresh_confirmation = False
+        if (
+            observation is not None
+            and observation.confirmations > self._seen_confirmations
+        ):
+            self._seen_confirmations = observation.confirmations
+            self._ticks_since_confirmation = 0
+            fresh_confirmation = True
+
+        # Frame geometry + brightness are read live on the TICK from the OWNED
+        # camera — both are O(pixels) numpy reads (sub-millisecond), NOT the
+        # detector. Reading brightness here keeps the dark-degradation truthful to
+        # the CURRENT frame even if the worker has stalled/crashed.
         frame = self._latest_frame()
-        result = self._tracker.update(frame)
-
         if frame is not None:
             fh, fw = frame.shape[:2]
             brightness = frame_brightness(frame)
@@ -338,20 +478,24 @@ class ReactiveTickCore(ReactiveBackend):
             fh = int(getattr(self._camera, "height", 480) or 480)
             brightness = 0.0  # no frame -> degrade to "lost" via the dark/lost path
 
+        # Rebuild the TrackResult the controller consumes from the latest
+        # observation, substituting the REACTIVE-TICK confirmation age for the
+        # tracker's worker-cadence counter.
+        bbox = observation.bbox if observation is not None else None
+        result = self._observation_to_result(
+            observation, self._ticks_since_confirmation, fresh_confirmation
+        )
+
         decision = self._follow.decide(result, fw, fh, brightness)
         self.last_follow_decision = decision
 
         # Publish honesty signals every tick (software-spec.md §2.2 / §2.4).
         s.target_visible = decision.target_visible
         s.target_bbox = (
-            tuple(result.bbox)
-            if (decision.target_visible and result.bbox is not None)
-            else None
+            tuple(bbox) if (decision.target_visible and bbox is not None) else None
         )
         s.tracker_score = float(result.score)
-        s.ticks_since_last_detector_confirmation = int(
-            result.ticks_since_last_detector_confirmation
-        )
+        s.ticks_since_last_detector_confirmation = int(self._ticks_since_confirmation)
 
         # Record the motion + last-seen box on the goal payload (the FOLLOW goal is
         # {target, last_seen_bbox, last_seen_ts}, §2.2). When the target is lost the
@@ -359,7 +503,7 @@ class ReactiveTickCore(ReactiveBackend):
         goal = dict(s.goal) if s.goal else {"target": "nearest_person"}
         goal.update(
             {
-                "last_seen_bbox": list(result.bbox) if result.bbox is not None else None,
+                "last_seen_bbox": list(bbox) if bbox is not None else None,
                 "last_seen_ts": s.ts,
                 "turn": decision.turn,
                 "forward": decision.forward,
@@ -372,6 +516,28 @@ class ReactiveTickCore(ReactiveBackend):
         # target's decision is turn=forward=0, so this issues a clean stop.
         left, right = self._follow_throttles(decision)
         self._drive_motors(left, right)
+
+    @staticmethod
+    def _observation_to_result(
+        observation, ticks_since_confirmation: int, fresh_confirmation: bool
+    ) -> "TrackResult":
+        """Adapt a perception :class:`Observation` into a controller ``TrackResult``.
+
+        ``ticks_since_last_detector_confirmation`` is the caller's REACTIVE-TICK age
+        (not the observation's own worker-cadence counter). A missing observation
+        (worker still warming up, or none ever produced) reads as a clean "lost".
+        """
+        from .person_tracker import TrackResult
+
+        if observation is None:
+            return TrackResult(False, None, 0.0, ticks_since_confirmation, False)
+        return TrackResult(
+            bool(observation.target_visible),
+            observation.bbox,
+            float(observation.score),
+            ticks_since_confirmation,
+            fresh_confirmation,
+        )
 
     # -- steering -> signed wheel throttles ----------------------------------
     def _drive_throttles(self, goal: Optional[dict]) -> Tuple[float, float]:

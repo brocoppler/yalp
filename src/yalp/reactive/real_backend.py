@@ -206,6 +206,12 @@ class RealReactiveBackend(ReactiveTickCore):
         rate = hz or self.tick_hz
         dt = 1.0 / rate
         self.start()
+        # Perception (the heavy person detector) runs on its OWN worker thread for
+        # the whole run — the async-perception task. FOLLOW ticks only READ the
+        # latest observation non-blockingly, so ``tracker.update()`` (100–500 ms on
+        # a Pi) never runs under the tick lock and can never blow TICK_BUDGET_MS /
+        # trip the watchdog. Idle (no inference) until a FOLLOW intent is adopted.
+        self.start_perception()
         # Independent safety net (hardware.md / software-spec.md §2.6): a daemon
         # watchdog that zeroes the motor GPIO if this loop ever stops heartbeating
         # (wedged tick, blocking call, dead thread). It does NOT depend on the
@@ -223,9 +229,25 @@ class RealReactiveBackend(ReactiveTickCore):
                 if dt > elapsed:
                     time.sleep(dt - elapsed)
         finally:
-            # Join the watchdog thread first, then zero/release the hardware. The
-            # watchdog never re-enables motors, so teardown leaves them stopped.
+            # Shutdown ordering (async-perception task). The loop has exited, so the
+            # tick will no longer heartbeat the watchdog. Retire the watchdog FIRST:
+            #   * its stop() issues a final independent motor stop, so the wheels are
+            #     guaranteed zeroed BEFORE any driver release and never run free
+            #     during teardown (the worker never commands motors, so nothing
+            #     re-spins them after this — they stay zeroed through the rest of
+            #     teardown); and
+            #   * retiring it before the perception-worker join below is what keeps
+            #     the join HONEST: stop_perception() can block for up to one in-flight
+            #     tracker.update() (a whole detector frame, ~100–500 ms on a Pi), and
+            #     with the watchdog still armed that heartbeat-less window would look
+            #     exactly like a wedged tick — tripping the watchdog and logging a
+            #     scary "TRIPPED" alarm on EVERY normal FOLLOW shutdown. That cry-wolf
+            #     would train operators to ignore real trips, so we avoid it.
+            # Then the perception worker (stops reading the camera / feeding motion),
+            # then close() — which itself keeps the worker -> camera -> motors-safe
+            # ordering (worker stop is idempotent; motors are re-zeroed + released).
             watchdog.stop()
+            self.stop_perception()
             self.stop()
 
     # -- teardown ------------------------------------------------------------
@@ -238,12 +260,32 @@ class RealReactiveBackend(ReactiveTickCore):
         self.close()
 
     def close(self) -> None:
-        """Zero the motors and release driver/sensor/camera. Idempotent."""
+        """Release everything in safe order: worker -> camera -> motors-safe.
+
+        Idempotent. Ordering (async-perception task): (1) stop the perception
+        worker so it no longer reads the camera or drives motion; (2) stop the
+        camera; (3) leave the motors SAFE — zero the wheels, then release the driver
+        and range sensor. Each step is best-effort so teardown never raises. (When
+        reached via ``run()`` the independent watchdog has already issued a final
+        motor stop, so the wheels are stopped before we get here.)
+        """
         if self._closed:
             return
         self._closed = True
-        # Zero the wheels FIRST so the robot is stopped before pins are released,
-        # then release each resource best-effort (teardown must not raise).
+        # 1. Perception worker.
+        try:
+            self.stop_perception()
+        except Exception:  # pragma: no cover - best effort during teardown
+            pass
+        # 2. Camera.
+        if self._camera_started:
+            try:
+                self._camera.stop()
+            except Exception:  # pragma: no cover - best effort during teardown
+                pass
+            finally:
+                self._camera_started = False
+        # 3. Motors safe: zero the wheels, then release the driver + range sensor.
         for action in (
             self._motor_driver.stop,
             self._motor_driver.close,
@@ -253,13 +295,6 @@ class RealReactiveBackend(ReactiveTickCore):
                 action()
             except Exception:  # pragma: no cover - best effort during teardown
                 pass
-        if self._camera_started:
-            try:
-                self._camera.stop()
-            except Exception:  # pragma: no cover - best effort during teardown
-                pass
-            finally:
-                self._camera_started = False
 
 
 __all__ = ["RealReactiveBackend"]

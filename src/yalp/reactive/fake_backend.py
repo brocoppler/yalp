@@ -137,6 +137,14 @@ class FakeReactiveBackend(ReactiveTickCore):
         return self
 
     def stop(self) -> None:
+        """Tear down in safe order: perception WORKER first, then the camera.
+
+        Stopping the worker before the camera means it never reads from a
+        torn-down device. The fake has no wheels, so "motors-safe" is a no-op here
+        (the shared shutdown ordering worker -> camera -> motors-safe still holds).
+        Idempotent.
+        """
+        self.stop_perception()
         if self._camera_started:
             self._camera.stop()
             self._camera_started = False
@@ -171,6 +179,10 @@ class FakeReactiveBackend(ReactiveTickCore):
         rate = hz or self.tick_hz
         dt = 1.0 / rate
         self.start()
+        # Perception (the heavy detector) runs on its OWN worker thread for the
+        # whole run, so FOLLOW ticks only READ the latest observation and never
+        # block on inference (the async-perception task). Idle until FOLLOW.
+        self.start_perception()
         try:
             while stop_event is None or not stop_event.is_set():
                 t0 = time.monotonic()
@@ -181,7 +193,7 @@ class FakeReactiveBackend(ReactiveTickCore):
                 if dt > elapsed:
                     time.sleep(dt - elapsed)
         finally:
-            self.stop()
+            self.stop()  # worker -> camera (see stop()); fake has no motors
 
 
 __all__ = ["FakeReactiveBackend"]
