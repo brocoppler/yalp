@@ -10,6 +10,7 @@ exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
     yalp agent --steps 6 --command "explore the room and report"
     yalp agent --synthetic "look around"  # force the synthetic test pattern
     yalp agent                         # interactive prompt loop (real webcam)
+    yalp agent --host izzy.local       # drive the REAL body on the Pi over IPC
 
 Vision (REAL EYES + FAKE WHEELS): the body is simulated but, by default, the
 agent's ``describe_scene`` sees through the REAL webcam — the reactive backend
@@ -17,12 +18,22 @@ owns one camera per run (webcam with an automatic synthetic fallback) and
 ``describe_scene`` reads frames from that same camera. ``--synthetic`` forces the
 synthetic source for a no-camera demo / reproducible runs.
 
-It spins up a :class:`~yalp.reactive.fake_backend.FakeReactiveBackend` behind a
-:class:`~yalp.contract.ipc.ReactiveServer` on a background thread (the simulated
-reactive process), connects a :class:`~yalp.contract.ipc.DeliberativeClient`, and
-runs the :class:`~yalp.deliberative.agent.Agent` — exactly the laptop-first
-topology from the spec (two processes, one socket). With no API key it prints the
-same friendly SETUP.md pointer as ``yalp see`` instead of crashing.
+By default it spins up a :class:`~yalp.reactive.fake_backend.FakeReactiveBackend`
+behind a :class:`~yalp.contract.ipc.ReactiveServer` on a background thread (the
+simulated reactive process), connects a
+:class:`~yalp.contract.ipc.DeliberativeClient`, and runs the
+:class:`~yalp.deliberative.agent.Agent` — exactly the laptop-first topology from
+the spec (two processes, one socket).
+
+REMOTE BODY (``--host``): pass ``--host <pi>`` (optionally ``--port``) to drive a
+reactive layer running on ANOTHER machine (the Pi's ``yalp reactive --backend
+real --host 0.0.0.0``) instead of the local fake. The agent then talks to a
+:class:`~yalp.deliberative.remote_backend.RemoteReactiveBackend` over the same
+socket contract, reconnecting with backoff and degrading gracefully if the WiFi
+link drops. The camera stays LOCAL (laptop webcam) in both modes — remote Pi
+stills are a documented follow-up. ``--synthetic`` always controls that local
+camera. With no API key it prints the same friendly SETUP.md pointer as ``yalp
+see`` instead of crashing.
 """
 
 from __future__ import annotations
@@ -75,7 +86,29 @@ def add_parser(subparsers) -> None:
         help=(
             "Force the synthetic camera test-pattern instead of the real webcam "
             "(useful for a no-camera demo / reproducible runs). Default: REAL "
-            "webcam, auto-falling back to synthetic when no camera can be opened."
+            "webcam, auto-falling back to synthetic when no camera can be opened. "
+            "Controls the LOCAL camera in both local and remote (--host) mode."
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        metavar="HOST",
+        default=None,
+        help=(
+            "Drive a REMOTE reactive layer at HOST instead of the local fake body "
+            "(e.g. --host izzy.local for the Pi). The reactive process must be "
+            "running there: 'yalp reactive --backend real --host 0.0.0.0'. Default "
+            "unset = today's fully-local fake backend, unchanged. The camera stays "
+            "LOCAL (the laptop webcam); remote Pi stills are a known follow-up."
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            "Port of the remote reactive server (used with --host; default "
+            f"{config.IPC_PORT}). Ignored in local mode."
         ),
     )
     parser.add_argument(
@@ -172,35 +205,26 @@ def run(args) -> int:
         return 0
 
     # Heavy imports are local so importing this module stays light.
-    from ..contract.ipc import DeliberativeClient, ReactiveServer
     from .agent import Agent, format_transcript
 
-    # REAL EYES + FAKE WHEELS: the reactive layer OWNS one camera for this run.
-    # Default is the real webcam (auto-falling back to synthetic); --synthetic
-    # forces the synthetic test-pattern. describe_scene reads frames from THIS
-    # same shared camera (see _make_describe), so the device is opened only once.
-    backend = _make_backend(
-        synthetic=bool(getattr(args, "synthetic", False)),
-        detector=getattr(args, "follow_detector", None),
-    )
-    server = ReactiveServer(host="127.0.0.1", port=0, mailbox=backend.mailbox)
-    server.start()
-    stop = threading.Event()
-    runner = threading.Thread(
-        target=backend.run,
-        kwargs={"server": server, "stop_event": stop},
-        daemon=True,
-    )
-    runner.start()
-
-    client = DeliberativeClient("127.0.0.1", server.port)
-    client.connect()
-    server.wait_for_client(2.0)
-
-    describe = _make_describe(backend)
-    # The 'look' ability and the per-turn still both read the SAME shared camera
-    # the reactive layer owns (never a second device), mirroring _make_describe.
-    capture_still = _make_capture_still(backend)
+    # REMOTE vs LOCAL topology. Default (no --host) is today's fully-local fake
+    # body — unchanged. With --host we instead drive a reactive layer running on
+    # ANOTHER machine (the Pi) over the same socket contract; the camera stays
+    # LOCAL either way (see _make_describe / RemoteReactiveBackend).
+    remote_host = getattr(args, "host", None)
+    if remote_host:
+        reactive, describe, teardown = _setup_remote(args, remote_host)
+        backend = None  # no local body/server/thread in remote mode
+        # The 'look' ability and the per-turn still read the SAME shared LOCAL
+        # camera the RemoteReactiveBackend owns (never a second device),
+        # mirroring _make_describe.
+        capture_still = _make_capture_still(reactive)
+    else:
+        reactive, describe, backend, teardown = _setup_local(args)
+        # The 'look' ability and the per-turn still both read the SAME shared
+        # camera the reactive layer owns (never a second device), mirroring
+        # _make_describe.
+        capture_still = _make_capture_still(backend)
     # Answer delivery goes through a Responder (yalp.responder) so a reply always
     # lands SOMEWHERE. Text-first: ConsoleResponder is the always-available
     # default. --speak fans the same answers out to a TtsResponder as well —
@@ -218,7 +242,7 @@ def run(args) -> int:
 
     agent = Agent(
         client=None,  # real LLM client built lazily by llm.call_with_tools
-        reactive=client,
+        reactive=reactive,
         describe_scene=describe,
         capture_still=capture_still,
         max_steps=args.steps,
@@ -245,7 +269,12 @@ def run(args) -> int:
         # via --listen), don't exit a heartbeat later — bring up the live camera
         # loop on the EXISTING backend (it is still ticking on its thread) and
         # follow until the user stops it. Best-effort; never crashes the CLI.
-        _maybe_follow_tail(backend, args)
+        # LOCAL only: the live follow tail renders/monitors a LOCAL ticking body.
+        # In remote mode the body ticks on the Pi (which keeps following on its
+        # own) and the laptop has no local frame to render, so we skip the tail
+        # (remote live preview is part of the documented remote-vision follow-up).
+        if backend is not None:
+            _maybe_follow_tail(backend, args)
     finally:
         # Voice is fire-and-forget, so drain any outstanding speech (the final
         # report) before we exit — otherwise the last utterance is cut off the
@@ -254,11 +283,84 @@ def run(args) -> int:
             from .. import voice
 
             voice.wait_for_speech()
+        teardown()
+    return 0
+
+
+def _setup_local(args):
+    """Build the fully-local fake-body topology (default, unchanged behavior).
+
+    REAL EYES + FAKE WHEELS: the reactive layer OWNS one camera for this run
+    (real webcam by default, --synthetic forces the test-pattern). describe_scene
+    reads frames from THIS same shared camera, so the device is opened only once.
+
+    Returns ``(reactive, describe, backend, teardown)`` where ``reactive`` is the
+    :class:`~yalp.contract.ipc.DeliberativeClient` the agent drives, ``backend`` is
+    the local ticking body (for the FOLLOW tail), and ``teardown`` cleans up the
+    thread / client / server.
+    """
+    from ..contract.ipc import DeliberativeClient, ReactiveServer
+
+    backend = _make_backend(
+        synthetic=bool(getattr(args, "synthetic", False)),
+        detector=getattr(args, "follow_detector", None),
+    )
+    server = ReactiveServer(host="127.0.0.1", port=0, mailbox=backend.mailbox)
+    server.start()
+    stop = threading.Event()
+    runner = threading.Thread(
+        target=backend.run,
+        kwargs={"server": server, "stop_event": stop},
+        daemon=True,
+    )
+    runner.start()
+
+    client = DeliberativeClient("127.0.0.1", server.port)
+    client.connect()
+    server.wait_for_client(2.0)
+
+    describe = _make_describe(backend)
+
+    def teardown() -> None:
         stop.set()
         runner.join(timeout=2.0)
         client.close()
         server.stop()
-    return 0
+
+    return client, describe, backend, teardown
+
+
+def _setup_remote(args, host: str):
+    """Build the REMOTE topology: drive a reactive layer on another machine.
+
+    The reactive process runs on the Pi (``yalp reactive --backend real --host
+    0.0.0.0``); here we only stand up the deliberative CLIENT side. The camera
+    stays LOCAL (the laptop webcam; --synthetic forces the test-pattern), since
+    remote Pi stills are a documented follow-up. The connect is best-effort and
+    non-blocking: if the Pi isn't up yet the agent still starts and degrades until
+    it appears (per the wifi-degradation contract).
+
+    Returns ``(reactive, describe, teardown)``.
+    """
+    from ..config import IPC_PORT
+    from .remote_backend import RemoteReactiveBackend
+
+    port = getattr(args, "port", None) or IPC_PORT
+    source = _camera_source(args)  # LOCAL camera source (--synthetic aware)
+    reactive = RemoteReactiveBackend(host=host, port=port, camera_source=source)
+    reactive.connect()
+    print(
+        f"yalp agent — REMOTE reactive body at {host}:{port} "
+        f"(local camera={source!r}); "
+        + ("connected." if reactive.connected else "not up yet — degrading until it appears.")
+    )
+
+    describe = _make_describe(reactive)
+
+    def teardown() -> None:
+        reactive.close()
+
+    return reactive, describe, teardown
 
 
 def _resolve_preview(args) -> bool:

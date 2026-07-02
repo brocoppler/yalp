@@ -264,10 +264,24 @@ class DeliberativeClient:
         host: str = config.IPC_HOST,
         port: int = config.IPC_PORT,
         connect_timeout: float = 2.0,
+        *,
+        reconnect_retries: int = 40,
+        reconnect_backoff: float = 0.05,
+        reconnect_max_backoff: float = 1.0,
     ) -> None:
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
+        # Policy for the TRANSPARENT auto-reconnect inside ``_send`` (a broken
+        # socket mid-command). Defaults reproduce the historical behavior (a long,
+        # patient reconnect suited to the always-up loopback server). A caller that
+        # owns its own backoff schedule — e.g. the deliberative
+        # ``RemoteReactiveBackend`` talking to a Pi over WiFi — passes small values
+        # so a dropped link fails fast and NON-blocking, letting that layer decide
+        # when to retry rather than wedging the agent loop for tens of seconds.
+        self._reconnect_retries = int(reconnect_retries)
+        self._reconnect_backoff = float(reconnect_backoff)
+        self._reconnect_max_backoff = float(reconnect_max_backoff)
         self._sock: Optional[socket.socket] = None
         self._lb = _LineBuffer()
         self._latest_state: Optional[RobotState] = None
@@ -338,15 +352,23 @@ class DeliberativeClient:
     # -- internals -----------------------------------------------------------
     def _send(self, data: bytes) -> None:
         if self._sock is None:
-            self.connect()
+            self._reconnect()
         assert self._sock is not None
         try:
             self._sock.sendall(data)
         except OSError:
             self.close()
-            self.connect()
+            self._reconnect()
             assert self._sock is not None
             self._sock.sendall(data)
+
+    def _reconnect(self) -> None:
+        """Reconnect using this client's configured backoff policy."""
+        self.connect(
+            retries=self._reconnect_retries,
+            backoff=self._reconnect_backoff,
+            max_backoff=self._reconnect_max_backoff,
+        )
 
     def _drain(self) -> bool:
         """Read all currently-available lines (non-blocking). Returns True if a

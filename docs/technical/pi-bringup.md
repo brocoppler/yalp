@@ -147,24 +147,43 @@ with `yalp follow --fetch-model` (it downloads into `config.FOLLOW_MODEL_CACHE_D
 and prints the path); otherwise an offline robot silently degrades to face-only.
 
 ### Integration (two loops, two machines)
-On the Pi, start the reactive layer driving real hardware and serving the IPC
-contract:
+On the Pi, start the reactive layer driving real hardware and **exposing the IPC
+contract on the LAN** (bind all interfaces so the laptop can reach it):
 ```
-yalp reactive --backend real          # binds IPC at config.IPC_HOST:IPC_PORT (127.0.0.1:8765)
+# On the Pi:
+yalp reactive --backend real --host 0.0.0.0     # serves IPC on all interfaces, port 8765
 ```
-Use `--host 0.0.0.0 --port <port>` to expose it on the LAN, plus `--hz`,
-`--camera-source`, and `--detector` as needed. The reactive process keeps ticking
-and stays safe whether or not a deliberative client is attached.
+Add `--port <port>`, `--hz`, `--camera-source`, and `--detector` as needed. The
+reactive process keeps ticking and stays safe whether or not a deliberative client
+is attached (`--host 127.0.0.1`, the default, keeps it loopback-only).
 
-On the laptop, run the Claude agent loop:
+On the laptop, point the agent at the Pi with `--host` (real body over WiFi;
+**real-webcam eyes stay LOCAL** on the laptop):
 ```
-yalp agent                            # interactive; real-webcam eyes, local fake body
+# On the laptop:
+yalp agent --host izzy.local                    # remote real body, local webcam eyes
+yalp agent --host izzy.local --port 8765 "drive forward and tell me what you see"
 ```
-Note: `yalp agent` runs its own local fake reactive backend (real webcam for
-vision, simulated wheels) — it has no remote-host flag today. Wiring the laptop
-agent to the **Pi's** reactive server is done over the same IPC contract
-(`DeliberativeClient` → `ReactiveServer`) that `tests/test_contract.py` exercises;
-the cross-machine glue is integration work, not a CLI flag.
+With `--host` set, the agent builds a `RemoteReactiveBackend`
+(`yalp.deliberative.remote_backend`) that speaks the same line-framed socket
+contract — `DeliberativeClient` → the Pi's `ReactiveServer` — that
+`tests/test_contract.py` exercises: Intents up, `RobotState` snapshots down,
+single-slot last-write-wins, monotonic `seq`. It reconnects with exponential
+backoff and, while the link is down, serves the last-known snapshot so the agent
+degrades exactly as the WiFi-degradation gate specifies (the robot stays safe on
+the Pi regardless). Without `--host` the agent runs its own local fake body
+exactly as before. `--synthetic` controls the **local** camera in both modes.
+
+> **Camera is local (known follow-up).** In remote mode the *body* is the Pi's
+> real hardware but the *eyes* are still the laptop's webcam — `describe_scene`
+> reads the machine-local camera. Streaming stills from the **Pi's** camera back
+> over the contract is a documented follow-up, not yet built.
+
+Verify the round-trip over loopback (no hardware) with
+`tests/test_remote_backend.py`, which stands up an in-process `yalp reactive`
+equivalent, connects the agent's `RemoteReactiveBackend`, round-trips an intent +
+state (`speed_limit`, `goal_status`), then kills the server to assert the
+reconnect/backoff and degradation behavior.
 
 ### WiFi-degradation gate (Milestone N)
 The robot must not run away if the deliberative link drops. The guarantee — the
@@ -188,7 +207,7 @@ to simulate the WiFi drop.
 | Collision-stop | `tests/test_backend_conformance.py` proves fake≡real safety semantics | Real ultrasonic feeding the same code path on the robot |
 | `yalp bench` | Runs end-to-end headless; numbers are a **ceiling** | The real Gate K / Gate H GO/NO-GO verdicts (`--backend real` on the Pi) |
 | `yalp reactive --backend real` | On a laptop with no GPIO, `bench`'s real backend transparently falls back to fakes | True real-hardware ticking + live motors |
-| `yalp agent` | Full deliberative loop with real-webcam eyes + simulated body | Driving the **real** body (via the Pi's reactive server over IPC) |
+| `yalp agent` | Full deliberative loop with real-webcam eyes + simulated body | Driving the **real** body: `yalp agent --host <pi>` connects over IPC to the Pi's `yalp reactive --backend real` (eyes stay local; remote Pi stills are a follow-up) |
 | WiFi-degradation | `tests/test_wifi_degradation.py` fully proves the safety contract over loopback | A real WiFi drop between laptop and Pi (behavior is identical — the link is the same socket contract) |
 
 In short: the **logic** of every milestone is laptop-testable (that is the whole
