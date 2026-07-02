@@ -277,20 +277,38 @@ SAFE_STOP_THRESHOLD_M: float = 0.30
 REACTIVE_TICK_HZ: float = 20.0
 
 # --- FOLLOW hysteresis: the lost-grace window (the acquired/lost flicker fix) --
-# Tick-domain equivalent of FOLLOW_LOST_GRACE_S above (derived from the default
-# reactive tick rate, ~18 ticks at 20 Hz). Standing in front of the camera must
-# read as a STABLE "tracking" state, not an acquired/lost flicker: track-by-
-# detection only fires the DETECTOR intermittently (every few ticks) and the cheap
-# tracker COASTS the box in between, so a brief, NORMAL detection gap must NOT read
-# as "lost". A coasted box younger than this window stays "tracking"
-# (target_visible True) — it is NOT "stale" — and only past it does FOLLOW
-# genuinely let go (-> "searching: no target"); the grace does NOT latch a dead
-# box forever. It is the SINGLE window used by both the tracker (its coast budget)
-# and the steering controller (its "stale" gate), so the published STATE always
-# matches the drawn green box. Kept deliberately >= the detector cadence
+# The grace window is authoritatively expressed in SECONDS (FOLLOW_LOST_GRACE_S,
+# above). A backend converts it to a TICK count from its OWN actual tick rate at
+# construction time (see ``lost_grace_ticks`` below), so the intended ~0.9 s window
+# is honored whether the entry point runs at 15, 20, or 50 Hz — instead of being
+# frozen at import time against the 20 Hz default (which silently stretched/shrank
+# the real-world window at other rates). Standing in front of the camera must read
+# as a STABLE "tracking" state, not an acquired/lost flicker: track-by-detection
+# only fires the DETECTOR intermittently (every few ticks) and the cheap tracker
+# COASTS the box in between, so a brief, NORMAL detection gap must NOT read as
+# "lost". A coasted box younger than this window stays "tracking" (target_visible
+# True) — it is NOT "stale" — and only past it does FOLLOW genuinely let go
+# (-> "searching: no target"); the grace does NOT latch a dead box forever. It is
+# the SINGLE window used by both the tracker (its coast budget) and the steering
+# controller (its "stale" gate), so the published STATE always matches the drawn
+# green box. Kept deliberately >= the detector cadence
 # (FOLLOW_*_DETECT_INTERVAL_TICKS) so a normal gap between detector hits never
 # reads as lost (the flip-flop bug).
-FOLLOW_LOST_GRACE_TICKS: int = max(1, int(round(FOLLOW_LOST_GRACE_S * REACTIVE_TICK_HZ)))
+def lost_grace_ticks(tick_hz: float = REACTIVE_TICK_HZ) -> int:
+    """Convert the seconds-domain lost-grace window to ticks at ``tick_hz``.
+
+    Backends call this at construction with their ACTUAL tick rate so the ~0.9 s
+    window holds across 15/20/50 Hz entry points (never re-derives it from the
+    20 Hz default). At 20 Hz this returns 18, preserving today's semantics.
+    """
+    return max(1, int(round(FOLLOW_LOST_GRACE_S * float(tick_hz))))
+
+
+# Back-compat: the tick-domain window derived from the DEFAULT reactive tick rate
+# (~18 ticks at 20 Hz). Retained as a derived value because ``FollowController`` /
+# ``PersonTracker`` import it as a default; a backend overrides it per its own
+# tick_hz via ``lost_grace_ticks`` at construction.
+FOLLOW_LOST_GRACE_TICKS: int = lost_grace_ticks(REACTIVE_TICK_HZ)
 
 # Independent watchdog timeout (ms): the motor GPIO is zeroed if the reactive
 # tick's heartbeat is older than this (software-spec.md §2.6).
@@ -499,6 +517,7 @@ __all__ = [
     "FOLLOW_COAST_TICKS",
     "FOLLOW_LOST_GRACE_S",
     "FOLLOW_LOST_GRACE_TICKS",
+    "lost_grace_ticks",
     "FOLLOW_DARK_BRIGHTNESS",
     "IPC_HOST",
     "IPC_PORT",

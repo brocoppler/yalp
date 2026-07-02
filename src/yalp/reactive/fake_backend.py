@@ -20,6 +20,13 @@ so the entire deliberative path and the loop-to-loop seam can be exercised with
     device, opened once. Headless callers and tests pass an explicit synthetic
     camera or ``camera_source="synthetic"``.
 
+The tick contract itself (sensor read → sticky safety override → mailbox drain →
+mode step) lives ONCE in :class:`~yalp.reactive.tick_core.ReactiveTickCore`, shared
+byte-for-byte with :class:`~yalp.reactive.real_backend.RealReactiveBackend`; the
+fake only supplies the simulated range read (``read_range``) and leaves the motor
+hooks as no-ops (there are no wheels to drive). This class stays dependency-free
+(stdlib + numpy; OpenCV is imported lazily inside the FOLLOW step only).
+
 It also provides a ``run`` loop that ticks at a target rate and publishes state
 through a ``ReactiveServer``.
 """
@@ -28,17 +35,17 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 from .. import config
 from ..camera import Camera
-from ..contract.messages import GoalStatus, Intent, Mode, RobotState
+from ..contract.messages import GoalStatus, Mode, RobotState
 from ..contract.ipc import IntentMailbox, ReactiveServer
-from .backend import ReactiveBackend
-from .follow import FollowController, FollowDecision, frame_brightness
+from .follow import FollowController, FollowDecision
+from .tick_core import ReactiveTickCore
 
 
-class FakeReactiveBackend(ReactiveBackend):
+class FakeReactiveBackend(ReactiveTickCore):
     """A simulated reactive layer that honors the full preemption/safety contract.
 
     Parameters
@@ -82,14 +89,19 @@ class FakeReactiveBackend(ReactiveBackend):
         self.max_speed_mps = max(1e-3, max_speed_mps)
         self.turn_rate_dps = max(1e-3, turn_rate_dps)
         self.tick_hz = max(1.0, tick_hz)
+        # Convert the seconds-domain lost-grace window to ticks at OUR actual tick
+        # rate (not the 20 Hz import-time default), so the ~0.9 s window holds.
+        self._lost_grace_ticks = config.lost_grace_ticks(self.tick_hz)
 
         # FOLLOW mode (software-spec.md §4): a track-by-detection tracker reads the
         # shared camera and a controller turns its result into steering. Both are
         # injectable so tests drive FOLLOW with a fake detector/tracker and no
-        # hardware. The PersonTracker (which lazily builds the OpenCV HOG detector)
-        # is created on first FOLLOW tick so constructing the backend stays light.
+        # hardware. The PersonTracker (which lazily builds the OpenCV detector) is
+        # created on first FOLLOW tick so constructing the backend stays light.
         self._tracker = tracker
-        self._follow = follow_controller or FollowController()
+        self._follow = follow_controller or FollowController(
+            coast_ticks=self._lost_grace_ticks
+        )
         #: The most recent FOLLOW steering decision (for the CLI live read-out).
         self.last_follow_decision: Optional[FollowDecision] = None
 
@@ -108,6 +120,14 @@ class FakeReactiveBackend(ReactiveBackend):
         self._sensor_distance_m = 10.0
         self._sensor_known = True
 
+    # -- shared-core hook: the simulated range read --------------------------
+    def read_range(self) -> Tuple[float, bool]:
+        """Return the simulated ultrasonic reading (non-blocking)."""
+        return self._sensor_distance_m, self._sensor_known
+
+    # (command_motors / stop_motors intentionally left as the core's no-op
+    # defaults: pure simulation has no wheels to drive.)
+
     # -- camera --------------------------------------------------------------
     def start(self) -> "FakeReactiveBackend":
         """Start the camera capture thread (idempotent)."""
@@ -120,9 +140,6 @@ class FakeReactiveBackend(ReactiveBackend):
         if self._camera_started:
             self._camera.stop()
             self._camera_started = False
-
-    def camera(self) -> Camera:
-        return self._camera
 
     # -- obstacle simulation (test / demo hooks) -----------------------------
     def set_sensor(self, distance_m: float, known: bool = True) -> None:
@@ -137,65 +154,6 @@ class FakeReactiveBackend(ReactiveBackend):
     def clear_obstacle(self, distance_m: float = 10.0) -> None:
         """Simulate a clear path ahead."""
         self.set_sensor(distance_m, known=True)
-
-    # -- contract ------------------------------------------------------------
-    def apply_intent(self, intent: Intent) -> None:
-        self.mailbox.put(intent)
-
-    def get_state(self) -> RobotState:
-        with self._lock:
-            return self._snapshot()
-
-    def tick(self) -> RobotState:
-        dt = 1.0 / self.tick_hz
-        with self._lock:
-            s = self._state
-
-            # 1. READ SENSORS (simulated; non-blocking).
-            s.distance_m = self._sensor_distance_m
-            s.distance_known = self._sensor_known
-            s.obstacle = (not s.distance_known) or (
-                s.distance_m < self.safe_stop_threshold_m
-            )
-
-            # Refresh the latest-frame handle (a stale frame is fine).
-            frame = self._camera.latest() if self._camera_started else None
-            if frame is not None:
-                self._frame_id += 1
-                s.last_frame_id = f"f-{self._frame_id}"
-            s.ts = time.monotonic()
-
-            # 2. SAFETY OVERRIDE — beats everything, every tick.
-            #    HALT, never open-loop reverse (no rear sensor). A pending intent
-            #    in the mailbox is deliberately NOT drained here, so it cannot
-            #    override the safety stop while still blocked.
-            if s.obstacle:
-                s.mode = Mode.SAFE_STOP
-                s.goal_status = GoalStatus.BLOCKED
-                s.goal = {
-                    "reason": "obstacle" if s.distance_known else "echo_timeout",
-                    "distance": s.distance_m,
-                }
-                return self._snapshot()
-
-            # 3. DRAIN SINGLE-SLOT MAILBOX, then adopt (preempt in-progress mode).
-            #    Reaching here means the obstacle is clear, so adopting a fresh
-            #    intent is also what lifts a sticky SAFE_STOP.
-            new = self.mailbox.take()
-            if new is not None:
-                self._adopt(new)
-
-            # 4. EXECUTE CURRENT MODE (no EXPLORE branch — deliberative sugar).
-            if s.mode in (Mode.IDLE, Mode.SAFE_STOP):
-                # Wheels stopped. A SAFE_STOP with the obstacle now clear but no
-                # fresh intent stays latched (sticky) — that is intentional.
-                pass
-            elif s.mode == Mode.DRIVE_GOAL:
-                self._step_drive_goal(dt)
-            elif s.mode == Mode.FOLLOW:
-                self._step_follow()
-
-            return self._snapshot()
 
     # -- run loop ------------------------------------------------------------
     def run(
@@ -224,128 +182,6 @@ class FakeReactiveBackend(ReactiveBackend):
                     time.sleep(dt - elapsed)
         finally:
             self.stop()
-
-    # -- internals -----------------------------------------------------------
-    def _adopt(self, intent: Intent) -> None:
-        s = self._state
-        s.mode = intent.mode
-        s.goal = dict(intent.goal) if intent.goal else None
-        s.goal_status = GoalStatus.RUNNING
-        s.goal_elapsed_s = 0.0
-        self._goal_duration_s = 0.0
-        if s.mode == Mode.DRIVE_GOAL and s.goal is not None:
-            self._goal_duration_s = self._drive_duration(s.goal)
-            s.goal["progress"] = 0.0
-            s.goal["elapsed_s"] = 0.0
-
-    def _drive_duration(self, goal: dict) -> float:
-        """Convert a drive/turn target into a timed open-loop duration (s)."""
-        kind = goal.get("kind", "straight")
-        target = abs(float(goal.get("target", 0.0)))
-        # Clamp commanded speed to the current speed limit (software-spec.md §2.3).
-        speed = min(float(goal.get("speed", 0.5)), self._state.speed_limit)
-        speed = max(1e-3, speed)
-        if kind == "rotate":
-            return target / (self.turn_rate_dps * speed)
-        return target / (self.max_speed_mps * speed)
-
-    def _step_drive_goal(self, dt: float) -> None:
-        s = self._state
-        s.goal_elapsed_s += dt
-        duration = self._goal_duration_s
-        if s.goal is not None:
-            progress = 1.0 if duration <= 0 else min(1.0, s.goal_elapsed_s / duration)
-            s.goal["progress"] = progress
-            s.goal["elapsed_s"] = s.goal_elapsed_s
-        if s.goal_elapsed_s >= duration:
-            # Never a bare "completed": open-loop, timed, unverified (§2.3).
-            s.goal_status = GoalStatus.COMPLETED
-            s.mode = Mode.IDLE
-        else:
-            s.goal_status = GoalStatus.RUNNING
-
-    def _step_follow(self) -> None:
-        """Track-by-detection FOLLOW: read the shared camera, steer, stay honest.
-
-        Each tick grabs the latest frame from the reactive layer's OWNED camera,
-        runs the track-by-detection tracker, and turns the result into a steering
-        decision (turn toward the person, drive forward until close). It publishes
-        the spec's honesty signals every tick (``target_visible`` / ``target_bbox``
-        / ``tracker_score`` / ``ticks_since_last_detector_confirmation``, §2.2) and
-        degrades gracefully: if the person is lost/stale or the frame is too dark
-        it STOPS and reports "I lost you" instead of driving blind on a stale box.
-        Collision-stop / ``SAFE_STOP`` already overrode this upstream (§2.3).
-        """
-        s = self._state
-        s.goal_status = GoalStatus.RUNNING
-
-        if self._tracker is None:
-            # Lazy: build the real track-by-detection tracker (HOG detector) only
-            # when FOLLOW actually runs, so the OpenCV import cost is never paid by
-            # callers that never follow.
-            from .person_tracker import PersonTracker
-
-            self._tracker = PersonTracker()
-
-        frame = self._camera.latest() if self._camera_started else None
-        result = self._tracker.update(frame)
-
-        if frame is not None:
-            fh, fw = frame.shape[:2]
-            brightness = frame_brightness(frame)
-        else:
-            fw = int(getattr(self._camera, "width", 640) or 640)
-            fh = int(getattr(self._camera, "height", 480) or 480)
-            brightness = 0.0  # no frame -> degrade to "lost" via the dark/lost path
-
-        decision = self._follow.decide(result, fw, fh, brightness)
-        self.last_follow_decision = decision
-
-        # Publish honesty signals every tick (software-spec.md §2.2 / §2.4).
-        s.target_visible = decision.target_visible
-        s.target_bbox = (
-            tuple(result.bbox)
-            if (decision.target_visible and result.bbox is not None)
-            else None
-        )
-        s.tracker_score = float(result.score)
-        s.ticks_since_last_detector_confirmation = int(
-            result.ticks_since_last_detector_confirmation
-        )
-
-        # Record the simulated motion + last-seen box on the goal payload (the
-        # FOLLOW goal is {target, last_seen_bbox, last_seen_ts}, §2.2). When the
-        # target is lost the commanded turn/forward are both 0 — a clean stop.
-        goal = dict(s.goal) if s.goal else {"target": "nearest_person"}
-        goal.update(
-            {
-                "last_seen_bbox": list(result.bbox) if result.bbox is not None else None,
-                "last_seen_ts": s.ts,
-                "turn": decision.turn,
-                "forward": decision.forward,
-                "status": decision.status,
-            }
-        )
-        s.goal = goal
-
-    def _snapshot(self) -> RobotState:
-        s = self._state
-        return RobotState(
-            mode=s.mode,
-            goal=dict(s.goal) if s.goal else None,
-            goal_status=s.goal_status,
-            goal_elapsed_s=s.goal_elapsed_s,
-            distance_m=s.distance_m,
-            distance_known=s.distance_known,
-            obstacle=s.obstacle,
-            target_visible=s.target_visible,
-            target_bbox=s.target_bbox,
-            tracker_score=s.tracker_score,
-            ticks_since_last_detector_confirmation=s.ticks_since_last_detector_confirmation,
-            last_frame_id=s.last_frame_id,
-            speed_limit=s.speed_limit,
-            ts=s.ts,
-        )
 
 
 __all__ = ["FakeReactiveBackend"]
