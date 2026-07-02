@@ -38,6 +38,7 @@ from typing import Optional
 import numpy as np
 
 from yalp.config import (
+    AUDIO_INPUT_DEVICE,
     VOICE_AUDIO_FILE,
     VOICE_CHANNELS,
     VOICE_RECORD_SECONDS,
@@ -69,6 +70,115 @@ DEFAULT_AUDIO_TIMEOUT = 10.0
 Audio = "np.ndarray"  # mono float32, shape (n,), sampled at sample_rate Hz.
 
 
+# --- input-device resolution ------------------------------------------------
+# The configured device (YALP_AUDIO_INPUT_DEVICE / the ``device`` argument) is
+# resolved LAZILY at capture start — never at import — so a laptop with a
+# different device layout than the Pi never fails just by importing this module.
+
+
+def _dev_max_input_channels(dev: object) -> int:
+    """Best-effort ``max_input_channels`` for one ``query_devices`` entry."""
+    try:
+        return int(dev.get("max_input_channels", 0))  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def _input_device_lines(devices) -> list[str]:
+    """Render the input-capable devices as ``  [i] name (N in)`` lines."""
+    lines: list[str] = []
+    for i, dev in enumerate(devices):
+        max_in = _dev_max_input_channels(dev)
+        if max_in > 0:
+            try:
+                name = str(dev.get("name", f"device {i}"))  # type: ignore[attr-defined]
+            except AttributeError:
+                name = f"device {i}"
+            lines.append(f"  [{i}] {name} ({max_in} in)")
+    return lines
+
+
+def _no_input_device_message(device: object, devices, *, reason: str) -> str:
+    """A friendly, actionable message for an unmatched input-device selection."""
+    lines = _input_device_lines(devices)
+    available = (
+        "Available input devices:\n" + "\n".join(lines)
+        if lines
+        else "No audio input devices are available."
+    )
+    if reason == "index":
+        what = f"index {device!r} is not a valid input-capable audio device"
+    else:
+        what = f"no input device name contains {device!r}"
+    return (
+        f"Audio input device not found: {what}.\n"
+        f"{available}\n"
+        "Set YALP_AUDIO_INPUT_DEVICE (or the Microphone ``device`` argument) to a "
+        "device INDEX or a case-insensitive SUBSTRING of one of the names above, "
+        "or leave it empty ('') to use the system default. "
+        "Run `yalp audio --list` to see all devices."
+    )
+
+
+def _as_device_index(device: object) -> Optional[int]:
+    """Return ``device`` as an integer index if it *is* one, else ``None``.
+
+    An ``int`` (but not ``bool``) is taken verbatim; an all-digits string like
+    ``"2"`` (surrounding whitespace ignored) is parsed. Anything else -> ``None``
+    (it is treated as a name substring by the caller).
+    """
+    if isinstance(device, bool):
+        return None
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str) and device.strip().isdigit():
+        return int(device.strip())
+    return None
+
+
+def _resolve_input_device(device: object, sd_module) -> Optional[int]:
+    """Resolve a configured input-device selection to a concrete device index.
+
+    ``device`` may be:
+
+      * ``None`` or ``""`` / whitespace -> ``None`` (the system default input).
+      * an ``int`` or an all-digits string (``"2"``) -> that device INDEX,
+        validated to refer to an existing, input-capable device.
+      * any other string -> a case-insensitive SUBSTRING matched against device
+        names; returns the index of the FIRST input-capable device that contains
+        it (e.g. ``"C270"`` or ``"usb"``).
+
+    Raises :class:`ValueError` with a friendly, actionable message listing the
+    available input devices when a *specified* device cannot be matched. The
+    unspecified (default) case never raises — it returns ``None``.
+    """
+    if device is None:
+        return None
+    if isinstance(device, str) and device.strip() == "":
+        return None
+
+    devices = list(sd_module.query_devices())
+
+    index = _as_device_index(device)
+    if index is not None:
+        if 0 <= index < len(devices) and _dev_max_input_channels(devices[index]) > 0:
+            return index
+        raise ValueError(_no_input_device_message(device, devices, reason="index"))
+
+    needle = str(device).strip().lower()
+    for i, dev in enumerate(devices):
+        if _dev_max_input_channels(dev) <= 0:
+            continue
+        try:
+            name = str(dev.get("name", ""))  # type: ignore[attr-defined]
+        except AttributeError:
+            name = ""
+        if needle in name.lower():
+            return i
+
+    raise ValueError(_no_input_device_message(device, devices, reason="name"))
+
+
 class Microphone:
     """A latest-chunk microphone with a background capture thread.
 
@@ -85,7 +195,13 @@ class Microphone:
     path:
         WAV file path for the ``file`` source.
     device:
-        Optional ``sounddevice`` input-device index/name (``None`` = default).
+        Which ``sounddevice`` INPUT device to capture from. Defaults to
+        :data:`yalp.config.AUDIO_INPUT_DEVICE` (``YALP_AUDIO_INPUT_DEVICE``).
+        May be an integer index, an all-digits string (``"2"``), or a
+        case-insensitive SUBSTRING of a device name (``"C270"``); ``None`` or
+        ``""`` selects the system default. It is resolved LAZILY at capture
+        start against :func:`sounddevice.query_devices`, and a specified-but-
+        unmatched device raises a friendly error listing the available inputs.
     """
 
     def __init__(
@@ -96,7 +212,7 @@ class Microphone:
         channels: int = VOICE_CHANNELS,
         record_seconds: float = VOICE_RECORD_SECONDS,
         path: Optional[str] = VOICE_AUDIO_FILE or None,
-        device: Optional[object] = None,
+        device: Optional[object] = AUDIO_INPUT_DEVICE,
     ) -> None:
         self.source = source
         self.sample_rate = int(sample_rate)
@@ -104,6 +220,9 @@ class Microphone:
         self.record_seconds = float(record_seconds)
         self.path = path
         self.device = device
+        # The concrete sounddevice device argument (int index or None for the
+        # system default), resolved lazily from ``self.device`` at capture start.
+        self._resolved_device: Optional[int] = None
 
         self._file_audio: Optional[np.ndarray] = None  # the loaded/looped WAV samples
         self._file_pos = 0  # read cursor into the looped file audio
@@ -186,7 +305,15 @@ class Microphone:
                 )
                 self.source = "synthetic"
                 return
-            if not self._has_input_device():
+            # Resolve the configured input device (index / name substring) NOW,
+            # while sounddevice is available. A device that was explicitly
+            # requested but cannot be matched is a MISCONFIGURATION: raise the
+            # friendly, actionable error rather than silently degrading — the
+            # operator asked for a specific mic and should be told it is missing.
+            self._resolved_device = _resolve_input_device(self.device, sd)
+            # No explicit device (system default) and no input at all -> synthetic
+            # so laptop dev / CI never require real audio hardware.
+            if self._resolved_device is None and not self._has_input_device():
                 logger.warning(
                     "no audio input device available — falling back to synthetic audio"
                 )
@@ -293,7 +420,7 @@ class Microphone:
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype="float32",
-                device=self.device,
+                device=self._resolved_device,
             )
             sd.wait()
         except Exception as exc:
@@ -371,4 +498,43 @@ __all__ = [
     "DEFAULT_CHANNELS",
     "DEFAULT_RECORD_SECONDS",
     "DEFAULT_AUDIO_TIMEOUT",
+    "list_input_devices",
 ]
+
+
+def list_input_devices(sd_module) -> list[dict]:
+    """Return ``[{index, name, max_input_channels, is_default}]`` for input devices.
+
+    A small, dependency-light view over :func:`sounddevice.query_devices` used by
+    ``yalp audio --list``. Only input-capable devices (``max_input_channels > 0``)
+    are returned. The default input device (from ``sd.default.device``, a
+    ``(input, output)`` pair) is flagged with ``is_default``.
+    """
+    devices = list(sd_module.query_devices())
+
+    default_input: Optional[int] = None
+    try:
+        default_pair = sd_module.default.device
+        # sounddevice exposes default.device as an (input, output) pair.
+        default_input = int(default_pair[0])
+    except (AttributeError, TypeError, ValueError, IndexError):
+        default_input = None
+
+    out: list[dict] = []
+    for i, dev in enumerate(devices):
+        max_in = _dev_max_input_channels(dev)
+        if max_in <= 0:
+            continue
+        try:
+            name = str(dev.get("name", f"device {i}"))  # type: ignore[attr-defined]
+        except AttributeError:
+            name = f"device {i}"
+        out.append(
+            {
+                "index": i,
+                "name": name,
+                "max_input_channels": max_in,
+                "is_default": (default_input is not None and i == default_input),
+            }
+        )
+    return out

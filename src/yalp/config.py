@@ -336,6 +336,15 @@ VOICE_CHANNELS: int = _env_int("YALP_VOICE_CHANNELS", 1)
 VOICE_RECORD_SECONDS: float = _env_float("YALP_VOICE_RECORD_SECONDS", 5.0)
 # Path to the WAV file used when VOICE_SOURCE='file'. Empty string means unset.
 VOICE_AUDIO_FILE: str = _env_str("YALP_VOICE_AUDIO_FILE", "")  # WAV path when VOICE_SOURCE='file'
+# Which audio INPUT device the microphone captures from (VOICE_SOURCE='microphone').
+# Empty string ('' = the default) uses the system default input device — the laptop
+# mic in dev. On the Pi, set this to select the Logitech C270 webcam's built-in mono
+# mic (zero new hardware). The value is resolved lazily at capture start against
+# sounddevice.query_devices(): a string that is all digits is treated as a device
+# INDEX (e.g. '2'); otherwise it is a case-insensitive SUBSTRING matched against
+# device names (e.g. 'C270' or 'usb'), selecting the first input-capable device
+# whose name contains it. See yalp.voice.microphone and `yalp audio --list`.
+AUDIO_INPUT_DEVICE: str = _env_str("YALP_AUDIO_INPUT_DEVICE", "")  # '' = system default
 # Speech-to-text backend: 'faster-whisper' for local on-device inference, or
 # 'fake' for deterministic unit tests that return canned text.
 STT_BACKEND: str = _env_str("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whisper' | 'fake'
@@ -442,6 +451,7 @@ class Config:
     voice_channels: int = VOICE_CHANNELS
     voice_record_seconds: float = VOICE_RECORD_SECONDS
     voice_audio_file: str = VOICE_AUDIO_FILE
+    audio_input_device: str = AUDIO_INPUT_DEVICE
     stt_backend: str = STT_BACKEND
     stt_model: str = STT_MODEL
     # --- Reactive hardware GPIO pin map ---
@@ -531,6 +541,7 @@ __all__ = [
     "VOICE_CHANNELS",
     "VOICE_RECORD_SECONDS",
     "VOICE_AUDIO_FILE",
+    "AUDIO_INPUT_DEVICE",
     "STT_BACKEND",
     "STT_MODEL",
     "MOTOR_LEFT_PWM_PIN",
