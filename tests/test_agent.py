@@ -386,6 +386,97 @@ def test_blocked_state_surfaced_and_no_blind_reverse():
         harness.close()
 
 
+# --- set_speed_limit: honest, specific, and actually clamps ------------------
+def test_set_speed_limit_is_honest_and_records_the_clamp(harness):
+    client = ScriptedClient([
+        [_text("Slowing down."), _tool("set_speed_limit", max_speed=0.4)],
+        [_text("Okay, going slow now.")],  # no tool_use -> loop ends
+    ])
+    agent = Agent(client=client, reactive=harness.client, describe_scene=RecordingDescribe())
+
+    transcript = agent.run_turn("go slow")
+
+    # The control ability was dispatched...
+    tools = [e for e in transcript if e.kind == "tool"]
+    assert any(e.data.get("name") == "set_speed_limit" for e in tools)
+    # ...with an HONEST, SPECIFIC surface (and no lingering 'advisory' language).
+    joined = " ".join(e.text for e in transcript).lower()
+    assert "advisory" not in joined
+    states = [e for e in transcript if e.kind == "state"]
+    assert any("speed limit 0.40 applied" in e.text and "clamp" in e.text.lower()
+               for e in states)
+
+    # The reactive layer ACTUALLY recorded the clamp (control-only intent adopted).
+    deadline = time.time() + 2.0
+    while time.time() < deadline and harness.backend.get_state().speed_limit != 0.4:
+        time.sleep(0.02)
+    st = harness.backend.get_state()
+    assert st.speed_limit == 0.4
+    # A control-only intent never changes the mode (still IDLE here).
+    assert st.mode == Mode.IDLE
+
+
+def test_set_speed_limit_clamps_out_of_band_request(harness):
+    client = ScriptedClient([
+        [_tool("set_speed_limit", max_speed=0.02)],  # below the sane floor
+        [_text("done")],
+    ])
+    agent = Agent(client=client, reactive=harness.client, describe_scene=RecordingDescribe())
+    transcript = agent.run_turn("crawl")
+    states = [e for e in transcript if e.kind == "state"]
+    # Reported as the clamped floor (0.10), not the raw 0.02.
+    assert any("speed limit 0.10 applied" in e.text for e in states)
+    deadline = time.time() + 2.0
+    while time.time() < deadline and harness.backend.get_state().speed_limit != 0.1:
+        time.sleep(0.02)
+    assert harness.backend.get_state().speed_limit == 0.1
+
+
+# --- look: returns a REAL frame handle in a live run -------------------------
+def test_look_returns_real_frame_handle_in_live_run(harness):
+    client = ScriptedClient([
+        [_text("Taking a look."), _tool("look")],
+        [_text("Saw the room.")],
+    ])
+    agent = Agent(client=client, reactive=harness.client, describe_scene=RecordingDescribe())
+    transcript = agent.run_turn("what do you see")
+    states = [e for e in transcript if e.kind == "state"]
+    # The reactive layer owns a started (synthetic) camera, so the tick populates
+    # last_frame_id and look returns a REAL handle -- never "no frame handle yet".
+    assert states, "look should surface a state entry"
+    assert any(e.data.get("frame") for e in states)
+    assert all("no frame handle yet" not in e.text for e in states)
+
+
+# --- capture_still: CLI wires it to the shared backend camera ----------------
+def test_agent_cli_wires_capture_still_to_shared_camera():
+    """`_make_capture_still` reads the ONE reactive-owned camera and returns JPEG
+    bytes -- so the CLI's Agent gets real eyes for the per-turn still and `look`.
+    """
+    from yalp.deliberative.agent_cli import _make_capture_still
+
+    backend = FakeReactiveBackend(tick_hz=50.0, camera_source="synthetic")
+    backend.start()
+    try:
+        # Let the synthetic camera publish a frame.
+        cam = backend.camera()
+        cam.wait_for_frame(timeout=2.0)
+        capture = _make_capture_still(backend)
+        blob = capture()
+        assert isinstance(blob, (bytes, bytearray)) and len(blob) > 0
+    finally:
+        backend.stop()
+
+
+def test_capture_still_is_none_before_any_frame():
+    """No frame yet (camera not started) -> capture_still returns None, never raises."""
+    from yalp.deliberative.agent_cli import _make_capture_still
+
+    backend = FakeReactiveBackend(tick_hz=50.0, camera_source="synthetic")
+    capture = _make_capture_still(backend)
+    assert capture() is None  # camera not started -> no frame -> None (best-effort)
+
+
 # --- CLI parsing: positional words and --command alias -----------------------
 
 def _make_agent_parser():

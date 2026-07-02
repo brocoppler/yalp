@@ -17,10 +17,13 @@ import time
 from yalp.contract.abilities import ANTHROPIC_TOOLS, intent_for
 from yalp.contract.ipc import DeliberativeClient, IntentMailbox, ReactiveServer
 from yalp.contract.messages import (
+    SPEED_LIMIT_MAX,
+    SPEED_LIMIT_MIN,
     GoalStatus,
     Intent,
     Mode,
     RobotState,
+    clamp_speed_limit,
     parse_line,
 )
 from yalp.reactive.fake_backend import FakeReactiveBackend
@@ -41,6 +44,42 @@ def test_intent_json_roundtrip():
     assert back.seq == 7
     # parse_line dispatches on the "type" discriminator.
     assert isinstance(parse_line(line), Intent)
+
+
+# --- 1b. speed_limit field: round-trip + WIRE COMPATIBILITY ------------------
+def test_intent_speed_limit_roundtrips_and_is_wire_compatible():
+    # A carried speed_limit round-trips.
+    carried = Intent(mode=Mode.DRIVE_GOAL, goal={"kind": "straight"}, seq=3, speed_limit=0.4)
+    back = Intent.from_json(carried.to_json())
+    assert back.speed_limit == 0.4
+
+    # WIRE COMPAT: an ORDINARY motion intent carries no speed_limit key at all
+    # (byte-identical to a pre-speed-limit build), and an OLD-STYLE line missing
+    # the key decodes to speed_limit=None -> "leave the reactive default (1.0)".
+    plain = Intent(mode=Mode.DRIVE_GOAL, goal={"kind": "straight"}, seq=1)
+    assert "speed_limit" not in plain.to_dict()
+    old_style = '{"type": "intent", "mode": "DRIVE_GOAL", "goal": null, "seq": 1, "ts": 0.0}'
+    assert Intent.from_json(old_style).speed_limit is None
+
+
+def test_control_only_intent_has_no_mode():
+    # A control-only intent (set_speed_limit): mode=None round-trips, and the
+    # RobotState default speed_limit is the wire default.
+    ctrl = Intent(mode=None, seq=5, speed_limit=0.25)
+    d = ctrl.to_dict()
+    assert d["mode"] is None
+    back = Intent.from_json(ctrl.to_json())
+    assert back.mode is None
+    assert back.speed_limit == 0.25
+    assert RobotState().speed_limit == 1.0
+
+
+def test_clamp_speed_limit_bounds():
+    assert clamp_speed_limit(0.4) == 0.4
+    assert clamp_speed_limit(0.0) == SPEED_LIMIT_MIN
+    assert clamp_speed_limit(-1.0) == SPEED_LIMIT_MIN
+    assert clamp_speed_limit(5.0) == SPEED_LIMIT_MAX
+    assert clamp_speed_limit(SPEED_LIMIT_MAX) == SPEED_LIMIT_MAX
 
 
 def test_state_json_roundtrip():

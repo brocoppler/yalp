@@ -201,7 +201,149 @@ def test_unknown_echo_biases_to_safe_stop(factory):
 
 
 # --------------------------------------------------------------------------- #
-# (6) FOLLOW parity — identical frame/tracker input must yield identical mode /
+# (6) speed_limit parity — a control-only intent -> RobotState.speed_limit is
+#     recorded identically, and clamps subsequent motion identically.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_speed_limit_intent_recorded_in_state(factory):
+    h = factory()
+    backend = h.backend
+    assert backend.get_state().speed_limit == 1.0  # wire default
+
+    # A control-only intent (mode=None) records the clamp WITHOUT changing mode.
+    backend.apply_intent(Intent(mode=None, seq=1, speed_limit=0.4))
+    st = backend.tick()
+    assert st.mode == Mode.IDLE          # no mode change from a control-only intent
+    assert st.speed_limit == 0.4         # ...but the clamp is recorded in state
+
+    # Out-of-band requests are clamped into [0.1, 1.0] identically on both sides.
+    backend.apply_intent(Intent(mode=None, seq=2, speed_limit=9.0))
+    assert backend.tick().speed_limit == 1.0
+    backend.apply_intent(Intent(mode=None, seq=3, speed_limit=0.0))
+    assert backend.tick().speed_limit == 0.1
+
+    # Real-backend-only: with a tight cap, a full-speed drive is clamped at the pins.
+    if h.motor is not None:
+        backend.apply_intent(Intent(mode=None, seq=4, speed_limit=0.3))
+        backend.tick()
+        backend.apply_intent(
+            Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 2.0, "speed": 1.0}, seq=5)
+        )
+        backend.tick()
+        assert h.motor.last[0] == pytest.approx(0.3)
+        assert h.motor.last[1] == pytest.approx(0.3)
+
+
+# --------------------------------------------------------------------------- #
+# (7) PREEMPTED parity — a new mode intent replacing an ACTIVE goal emits a
+#     one-tick PREEMPTED transition, then adopts; NEVER on completion or while
+#     SAFE_STOP-blocked. Identical on both backends.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_preempting_active_goal_emits_preempted_then_adopts(factory):
+    h = factory()
+    backend = h.backend
+    # A long, slow drive goal is RUNNING.
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 5.0, "speed": 0.2}, seq=1)
+    )
+    assert backend.tick().goal_status == GoalStatus.RUNNING
+
+    # A NEWER mode intent replaces the active goal: publish ONE observable
+    # PREEMPTED snapshot for the outgoing goal (halt), then adopt next tick.
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "rotate", "target": 90.0, "speed": 0.3}, seq=2)
+    )
+    st = backend.tick()
+    assert st.goal_status == GoalStatus.PREEMPTED
+    assert st.goal["reason"] == "superseded"
+    assert st.goal["preempted_by_seq"] == 2
+    if h.motor is not None:
+        assert h.motor.last == (0.0, 0.0)  # the outgoing goal was halted this tick
+
+    # The pending intent is adopted on the NEXT tick and starts RUNNING.
+    st = backend.tick()
+    assert st.mode == Mode.DRIVE_GOAL
+    assert st.goal_status == GoalStatus.RUNNING
+    assert st.goal["kind"] == "rotate"
+
+
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_idle_hold_is_not_preempted_by_a_new_goal(factory):
+    """A stop (IDLE hold) is not an active goal: a following drive adopts DIRECTLY.
+
+    ``stop`` adopts as IDLE with goal_status RUNNING (a held stop), so this guards
+    the trap where an IDLE→DRIVE_GOAL transition would spuriously emit a one-tick
+    PREEMPTED and confuse the deliberative poller.
+    """
+    h = factory()
+    backend = h.backend
+    backend.apply_intent(Intent(Mode.IDLE, None, seq=1))  # stop / hold
+    st = backend.tick()
+    assert st.mode == Mode.IDLE
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 1.0, "speed": 0.5}, seq=2)
+    )
+    st = backend.tick()
+    # Adopted directly on the very next tick — no PREEMPTED blip in between.
+    assert st.mode == Mode.DRIVE_GOAL
+    assert st.goal_status == GoalStatus.RUNNING
+
+
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_no_preempted_on_normal_completion(factory):
+    h = factory()
+    backend = h.backend
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 0.2, "speed": 1.0}, seq=1)
+    )
+    statuses = []
+    for _ in range(5000):
+        st = backend.tick()
+        statuses.append(st.goal_status)
+        if st.goal_status == GoalStatus.COMPLETED:
+            break
+    # A goal that runs to completion is NEVER reported as preempted.
+    assert GoalStatus.PREEMPTED not in statuses
+    assert statuses[-1] == GoalStatus.COMPLETED
+
+
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_no_preempted_while_blocked_or_on_sticky_release(factory):
+    h = factory()
+    backend = h.backend
+    # A drive goal is RUNNING...
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 5.0, "speed": 0.2}, seq=1)
+    )
+    assert backend.tick().goal_status == GoalStatus.RUNNING
+
+    # ...then a collision latches SAFE_STOP/BLOCKED (never PREEMPTED).
+    h.set_obstacle(0.10, known=True)
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal_status == GoalStatus.BLOCKED
+
+    # A fresh intent WHILE blocked must NOT preempt — safety wins (sticky).
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "rotate", "target": 90.0, "speed": 0.3}, seq=2)
+    )
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal_status == GoalStatus.BLOCKED  # still blocked, not preempted
+
+    # Clearing the obstacle adopts the pending intent DIRECTLY (no PREEMPTED tick):
+    # a BLOCKED goal is terminal, not RUNNING, so lifting a sticky SAFE_STOP is
+    # untouched by the preemption rule.
+    h.set_obstacle(4.0, known=True)
+    st = backend.tick()
+    assert st.goal_status != GoalStatus.PREEMPTED
+    assert st.mode == Mode.DRIVE_GOAL
+    assert st.goal_status == GoalStatus.RUNNING
+
+
+# --------------------------------------------------------------------------- #
+# (8) FOLLOW parity — identical frame/tracker input must yield identical mode /
 #     goal_status / honesty-signal transitions in BOTH backends.
 # --------------------------------------------------------------------------- #
 # FOLLOW is the second place the fake and real tick logic must not diverge: both

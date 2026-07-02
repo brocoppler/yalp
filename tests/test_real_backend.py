@@ -262,6 +262,43 @@ def test_commanded_speed_clamps_to_speed_limit():
     assert abs(right) <= backend._state.speed_limit + 1e-9
 
 
+def test_speed_limit_intent_writes_state_then_clamps_motor_commands():
+    """END-TO-END: a control-only speed-limit intent -> RobotState.speed_limit ->
+    clamped wheel PWM. This is the honesty fix: 'go slow' actually slows the wheels.
+
+    A control-only Intent (mode=None, speed_limit=0.4) is adopted WITHOUT changing
+    the mode, writing RobotState.speed_limit. A SUBSEQUENT drive at speed=1.0 is
+    then clamped to 0.4 at the pins (not driven full speed).
+    """
+    backend, motor, sensor = _make_backend()
+    assert backend.get_state().speed_limit == 1.0  # wire default before any limit
+
+    # 1. Control-only intent sets the limit (no motion, mode unchanged from IDLE).
+    backend.apply_intent(Intent(mode=None, seq=1, speed_limit=0.4))
+    st = backend.tick()
+    assert st.mode == Mode.IDLE  # a control-only intent does NOT change the mode
+    assert st.speed_limit == 0.4  # ...but the reactive layer recorded the clamp
+
+    # 2. A subsequent full-speed drive is clamped to the recorded limit at the pins.
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 2.0, "speed": 1.0}, seq=2)
+    )
+    st = backend.tick()
+    assert st.mode == Mode.DRIVE_GOAL
+    left, right = motor.last
+    assert left == pytest.approx(0.4)
+    assert right == pytest.approx(0.4)
+
+
+def test_speed_limit_intent_clamps_into_sane_band():
+    """A requested limit outside [0.1, 1.0] is clamped by the reactive core."""
+    backend, motor, sensor = _make_backend()
+    backend.apply_intent(Intent(mode=None, seq=1, speed_limit=5.0))  # absurd
+    assert backend.tick().speed_limit == 1.0  # clamped to the max
+    backend.apply_intent(Intent(mode=None, seq=2, speed_limit=0.0))  # too slow
+    assert backend.tick().speed_limit == 0.1  # clamped to the min
+
+
 def test_follow_throttles_also_clamp_to_speed_limit():
     # A confident, off-center, very-far box would otherwise command > the cap.
     result = TrackResult(True, (600, 50, 200, 400), 0.95, 0, True)
