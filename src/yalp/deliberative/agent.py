@@ -356,12 +356,40 @@ class Agent:
                          distance_known=getattr(state, "distance_known", None))
             return text
         if name == "look":
-            handle = getattr(state, "last_frame_id", None) if state else None
+            handle = self._look_frame_handle(state)
             text = (f"captured still (frame handle {handle})." if handle
                     else "captured still (no frame handle yet).")
             self._record("state", text, frame=handle)
             return text
         return f"query '{name}' not handled."
+
+    def _look_frame_handle(self, state: Optional[RobotState]) -> Optional[str]:
+        """Grab a still from the shared camera and return the reactive frame handle.
+
+        The reactive layer OWNS the one camera and stamps ``RobotState.last_frame_id``
+        once a frame is flowing. On the very first turn of a live run that can lag
+        the ``look`` call by a few ticks (the webcam is still warming), which is why
+        ``look`` used to answer "no frame handle yet". Here we actively capture a
+        still through the injected ``capture_still`` (the SAME reactive-owned camera
+        ``describe_scene`` reads) and briefly poll state for the handle the tick
+        assigns — so a live run returns a REAL handle. Bounded by ``settle_timeout``
+        and fully best-effort (a missing capture/camera just yields ``None``).
+        """
+        handle = getattr(state, "last_frame_id", None) if state else None
+        if handle:
+            return handle
+        deadline = time.monotonic() + min(self.settle_timeout, 1.5)
+        while True:
+            if self.capture_still is not None:
+                try:
+                    self.capture_still()  # exercise the shared camera this turn
+                except Exception:  # noqa: BLE001 — capture is best-effort, never fatal
+                    pass
+            fresh = self._read_state()
+            handle = getattr(fresh, "last_frame_id", None) if fresh else None
+            if handle or time.monotonic() >= deadline:
+                return handle
+            time.sleep(self.poll_interval)
 
     def _dispatch_deliberative(self, name: str, params: dict) -> str:
         if name == "describe_scene":

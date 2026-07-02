@@ -198,6 +198,9 @@ def run(args) -> int:
     server.wait_for_client(2.0)
 
     describe = _make_describe(backend)
+    # The 'look' ability and the per-turn still both read the SAME shared camera
+    # the reactive layer owns (never a second device), mirroring _make_describe.
+    capture_still = _make_capture_still(backend)
     # Answer delivery goes through a Responder (yalp.responder) so a reply always
     # lands SOMEWHERE. Text-first: ConsoleResponder is the always-available
     # default. --speak fans the same answers out to a TtsResponder as well —
@@ -217,6 +220,7 @@ def run(args) -> int:
         client=None,  # real LLM client built lazily by llm.call_with_tools
         reactive=client,
         describe_scene=describe,
+        capture_still=capture_still,
         max_steps=args.steps,
         responder=responder,
     )
@@ -628,6 +632,34 @@ def _make_describe(backend):
         )
 
     return describe
+
+
+def _make_capture_still(backend):
+    """Build the agent's ``capture_still`` callable bound to the backend camera.
+
+    Mirrors :func:`_make_describe`: it grabs the newest frame from the reactive
+    layer's OWNED/SHARED camera (real webcam by default, synthetic with
+    ``--synthetic``) and JPEG-encodes it for upload — so the agent's per-turn
+    still and the ``look`` ability get a REAL frame from the one camera opened per
+    run (never a second device). Returns ``None`` when no frame is available yet
+    (camera not started / no capture), which the Agent treats as "no image this
+    turn" — it must never raise (vision is optional and best-effort).
+    """
+    from ..camera import encode_jpeg
+
+    def capture_still() -> Optional[bytes]:
+        cam = backend.camera()
+        if cam is None:
+            return None
+        frame = cam.latest()
+        if frame is None:
+            return None
+        try:
+            return encode_jpeg(frame)
+        except Exception:  # noqa: BLE001 — encoding is best-effort; never wedge
+            return None
+
+    return capture_still
 
 
 __all__ = ["add_parser", "run"]
