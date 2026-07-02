@@ -283,8 +283,7 @@ blink (milestone G); build & bench-check the HC-SR04 1k/2k voltage divider to ~3
 (milestone I); wire the drivetrain + sensor with power off (§5) — no soldering needed.
 What **waits on the inbound 4×AA NiMH battery holder**: Gate E (power/brownout, F),
 "hello motors" (H), collision-stop reflex (J), and the detector-fps gates (K/L) — i.e.
-anything where motors actually spin. Then: implement `RealReactiveBackend` so the same
-brain drives real wheels. See
+anything where motors actually spin. Then: wire the motors physically and run on-hardware validation — `RealReactiveBackend` is already fully implemented (tick loop, collision-stop safety override, motor translation, `MotorWatchdog` integration) and laptop-tested; it is awaiting on-hardware confirmation because motors are not yet physically wired. See
 [docs/technical/roadmap.md](docs/technical/roadmap.md) for the gate ladder and
 [docs/technical/hardware-runbook.md](docs/technical/hardware-runbook.md) for bring-up steps.
 
