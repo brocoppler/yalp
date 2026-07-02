@@ -146,6 +146,15 @@ Pre-stage the `person` detector's MobileNet-SSD model **while the Pi is online**
 with `yalp follow --fetch-model` (it downloads into `config.FOLLOW_MODEL_CACHE_DIR`
 and prints the path); otherwise an offline robot silently degrades to face-only.
 
+> **Gate H is already measured on the real Pi (no motors needed) — it's a GO.**
+> A 2026-07 no-motor validation pass on `izzy` recorded the `person`
+> MobileNet-SSD detector sustaining **~26.6 Hz** (and `hog` ~55 Hz) on the real
+> C270 — ~8.8× the 3 Hz floor, on a no-NPU Pi 5. The fake-driver Gate K ceiling,
+> the model pre-stage, the C270 mic trial, the `[voice]`-wheels probe, and two
+> Pi-only bugs (a cv2/Qt headless abort; order-dependent test failures) are all
+> written up in **[pi-validation-2026-07.md](./pi-validation-2026-07.md)**. The
+> real Gate K and everything that spins a wheel still wait on motors.
+
 ### Integration (two loops, two machines)
 On the Pi, start the reactive layer driving real hardware and **exposing the IPC
 contract on the LAN** (bind all interfaces so the laptop can reach it):
