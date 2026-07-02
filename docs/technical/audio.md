@@ -9,7 +9,7 @@
 yalp has two independent voice halves:
 
 - **Voice OUTPUT (TTS)** — `--speak` reads a text reply aloud. Ships in software, needs no extra hardware on the laptop, and is a silent no-op when no TTS binary is present.
-- **Voice INPUT (STT)** — `--listen` records a short clip from the microphone, transcribes it locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and feeds the transcript through the agent loop.
+- **Voice INPUT (STT)** — `--listen` records a short clip from the microphone, transcribes it locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and feeds the transcript through the agent loop. The **Logitech C270 webcam has a built-in mono mic** — no separate USB mic is needed on the Pi.
 
 Both are opt-in flags on the CLI; neither is required for the base install or the test suite.
 

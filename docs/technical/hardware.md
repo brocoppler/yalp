@@ -18,7 +18,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 |---|---|---|---|
 | **Brain** | Raspberry Pi 5 4GB via **CanaKit Starter Kit PRO** | ~$180 | RAM headroom + multiple real USB ports = fewer first-build gremlins; kit bundles 27W PD wall PSU, fan case, 128GB OS card. |
 | microSD | 128GB card (in the kit) | have | OS + code; re-flash with Pi OS Lite + WiFi/SSH for headless. |
-| **Eyes** | Logitech C270 USB webcam | ~$22 | UVC plug-and-play, no driver fuss; doubles as a laptop dev cam while building the brain. |
+| **Eyes** | Logitech C270 USB webcam | ~$22 | UVC plug-and-play, no driver fuss; doubles as a laptop dev cam while building the brain. **Built-in mono mic** — no separate USB mic needed for voice input. |
 | **Motors** | 2× TT DC gear motors + wheels (4-pack) | ~$15 | Differential drive; the textbook cheap hobby drivetrain. Spares in the pack. |
 | Balance | 1–2× ball caster | ~$3 ea | Passive roller, no power; the third contact point that makes two-wheel drive stable. |
 | **Motor driver** | **DRV8833** (TB6612FNG = fallback) | ~$5 | **The board in use is the DRV8833** (`MOTOR_DRIVER_KIND="drv8833"` default in `config.py`); TB6612FNG is a drop-in fallback only if the DRV8833 runs hot near its current limit. Either is cooler, cheaper, more efficient than an L298N (which drops ~2V and runs hot, wasting battery). The common bare board needs its **header pins hand-soldered on** (first-timer guide in `hardware-runbook.md`); a **pre-soldered version is an easier alternative if available.** |
@@ -26,7 +26,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
 | Chassis | Cardboard / hot glue / zip ties / foam tape | ~$19 | v1 — looks don't matter. Hot glue gun is the one tool worth buying. |
-| **Voice INPUT** *(trial with C270 first)* | small USB speaker (for spoken output) | ~$5 | The **Logitech C270 webcam has a built-in mono microphone** — voice INPUT (`--listen`) can be trialled with zero new hardware before buying anything extra. Voice **OUTPUT** (TTS) already ships in software (`say` / `espeak-ng`) and needs only a small USB speaker on the Pi. The Phase-3 deferred purchase is therefore just the **speaker** (mic is free via the C270). |
+| **Voice** *(INPUT trial-ready via C270 mic; OUTPUT speaker deferred)* | small USB speaker (for spoken output) | ~$5 | The **Logitech C270 webcam has a built-in mono microphone** — voice INPUT (`--listen`) can be trialled with **zero new hardware** before buying anything extra, so no separate USB mic is needed. Voice **OUTPUT** (TTS) already ships in software (`say` / `espeak-ng` on the Pi; macOS `say` via opt-in `--speak` on the laptop, which needs **no hardware**) and needs only a small USB speaker on the Pi — so get the rest of the loop working text-first. The only deferred (Phase-3) purchase is therefore just the **speaker** (mic is free via the C270). |
 
 > **DECISION —** Brain = Raspberry Pi 5 4GB via the CanaKit Starter Kit PRO. **Ordered.** Skip the AI HAT / NPU — local models on a Pi accelerator are a known hobbyist trap; CPU + cloud is the v1 move.
 
