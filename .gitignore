@@ -10,8 +10,25 @@ dist/
 .venv/
 venv/
 
-# --- Secrets ---
+# --- Secrets & credentials (NEVER commit real values) ---
+# Local env files hold the live ANTHROPIC_API_KEY and other secrets.
 .env
+.env.*
+# ...but keep the committed, value-free template:
+!.env.example
+# TLS certs / private keys / SSH material.
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+known_hosts
+# Ad-hoc credential drops (e.g. host password files kept outside the repo).
+ssh-izzy*
 
 # --- Captured media (camera/VLM stills) ---
 captures/
