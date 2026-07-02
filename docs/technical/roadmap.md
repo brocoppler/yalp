@@ -21,7 +21,7 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 ## ⭐ Current status & next steps — read this first
 
-> **Phase 1 (the brain) is COMPLETE and laptop-tested — 437 tests passing.** The full
+> **Phase 1 (the brain) is COMPLETE and laptop-tested — 597+ tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
 > wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **8 of 16
 > rungs are green (0, A, B, C, D, E + the first two Pi-hardware rungs G and I)** plus voice
@@ -98,7 +98,7 @@ the Phase 1 hardware already in hand.
 > **Progress: 8 of 16 green — the entire laptop phase plus the first two Pi-hardware
 > rungs are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and** INPUT
 > and the full follow brain — the whole voice → follow → voice-stop loop works end to end),
-> all laptop-tested (**437 tests passing**); and on the **real Pi 5 ("Izzy")** the
+> all laptop-tested (**597+ tests passing**); and on the **real Pi 5 ("Izzy")** the
 > power-off bring-up rungs are now green too — **GPIO first light (G)** and the **HC-SR04
 > divider + first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on
 > the actual hardware (`yalp hwtest --check camera`, `yalp see` both run on Izzy). The
@@ -114,14 +114,14 @@ the Phase 1 hardware already in hand.
 | **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
 | **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
-| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (437 passing). | Laptop | |
+| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (597+ passing). | Laptop | |
 | **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
 | **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
 | **H** | **Hello motors** *(NEXT)* | Drive the wheels from Python through the driver: forward, turn, stop. **Not yet wired** — DRV8833 + 2× TT motors + 4×AA pack is the next bench step (gated on Gate E **F**). | Pi 5 + Phase 2 + F + G | |
 | **I** ✅ DONE *(Pi)* | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. **Green on Izzy:** wired with an as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider (kit had no 2 kΩ; pins/software unchanged); `yalp hwtest --check ultrasonic` returns real distances (~22/25 good reads tracking a hand). Full as-built wiring: `as-built-wiring.md`. | Pi 5 + HC-SR04 + resistors | |
 | **J** | **Safety reflex** (collision-stop) | A fast local loop overrides any drive command when something's too close: commanded forward drive halts within the threshold distance on the bench. In *before* any autonomous driving. | Pi 5 + Phase 2 | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
-| **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. | Pi 5 + Phase 2 | |
+| **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. **→ DETECTOR-FPS CRITERION MEASURED GO (2026-07-01, real Pi 5 + C270, no motors):** `person` (MobileNet-SSD) ~26.6 Hz sustained (p99 25.5 Hz), `hog` ~55 Hz — vs the 3 Hz floor (~8.8× and ~18× margin). See [pi-validation-2026-07.md](./pi-validation-2026-07.md) §5. **Caveat:** this is the detector-fps criterion only; the motor-loaded flavor of Gate H (sustained fps under reactive loop + camera + motor-PWM stress) remains open until motors are wired. **Thermal note:** sustained detection drives the Pi to 80–83 °C with soft throttling (`0xe0000`/`0xe0008`); fps stays well above the gate but active cooling is recommended for prolonged FOLLOW. **Gate K fake-backend ceiling (§6 of validation doc):** tick p99 18.63 ms vs 33 ms budget — PASS as a fake-driver ceiling, NOT the real Gate K (real Gate K needs `--backend real` with live motor writes). | Pi 5 + Phase 2 | |
 | **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): the laptop-proven track-by-detection pipeline runs on the Pi — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): swap in the blob/color `Detector` behind the same pluggable interface — robot follows a colored target, collision-stop underneath, own bench demo. The follow *logic/steering* is already proven; only the Pi's detector fps is the open question Gate H answers. A NO-GO is a *different detector, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
 | **N** | **WiFi-degradation test** (gated milestone) | Kill the link **mid-DRIVE_GOAL** and **mid-FOLLOW** and assert: DRIVE_GOAL **safe-stops within the bounded-goal timeout**; FOLLOW **continues locally then safe-stops on target loss**. Both asserts logged green. | Pi 5 + Phase 2 | |
 | **O** ✅ DONE (laptop) | **It listens and speaks** *(separate track)* | **TTS OUTPUT SHIPPED ✅** (cross-platform: macOS `say` / Linux/Pi `espeak-ng`, the `--speak` flag on `yalp see` / `yalp agent`, headless-safe no-op if absent). **Voice INPUT SHIPPED ✅** — `yalp agent --listen` records a ~5 s window and transcribes locally with faster-whisper (default `tiny`, `YALP_STT_MODEL`); saying "follow me" follows live until a hands-free "stop"/"halt" (`--no-voice-stop` to disable). Optional `[voice]` extra (sounddevice + faster-whisper); base install + tests need none (fake STT + synthetic/file audio). Future: voice-activity-detection + a "hey Yalp" wake-word (still fixed-duration push-to-talk today). **Verify:** `pytest tests/test_stt.py tests/test_voice.py tests/test_microphone.py`. | Laptop today (mic optional via `[voice]`) | ⭐ |
@@ -199,6 +199,14 @@ instead of negotiations. See `software-spec.md` and `architecture.md`.
 > Gate H answers (and may force the lighter blob/color `Detector` fallback). See
 > `software-spec.md`.
 
+> **STATUS UPDATE (2026-07-01) — DETECTOR-FPS CRITERION: GO.** Measured on the real Pi 5
+> (`izzy`) + Logitech C270, no motors: `person` (MobileNet-SSD) sustains **~26.6 Hz**
+> (p99 25.5 Hz) and `hog` **~55 Hz** — both emphatic GO against the 3 Hz floor (~8.8× and
+> ~18× margin). A NO-GO forcing the blob/color fallback is implausible. See
+> [pi-validation-2026-07.md](./pi-validation-2026-07.md) §5. **The motor-loaded flavor of
+> Gate H** (fps under reactive loop + motor-PWM stress) remains open until motors are wired
+> — the ~8.8× headroom makes a sub-3 Hz outcome under concurrent load very unlikely.
+
 The Pi 5 has no NPU (the AI HAT is deliberately skipped). The follow *logic/steering*
 is proven; the Pi's *detector fps* is the remaining open question. The NO-GO path is
 **not a dead end**: the blob/color tracker slots in behind the same pluggable `Detector`
@@ -257,7 +265,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 ## 3. Current status
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
-> (437 tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
+> (597+ tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
 > robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **8 of 16 rungs green** — the entire
 > laptop phase (**0, A, B, C, D, E**) plus the first two Pi-hardware rungs, **GPIO first
 > light (G)** and the **HC-SR04 divider (I)**, with **B (camera)** and **C (vision)**
@@ -289,7 +297,7 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 - **Phase 3 deferred:** USB mic + small speaker.
 - **Laptop brain covers all three headline behaviors:** `yalp see` (**see**), `yalp agent` (**agent**), and `yalp follow` (**follow**) are all implemented and laptop-tested; the follow pipeline (`Detector` interface, track-by-detection tracker, steering, lost/too-dark → stop) was built ahead of the hardware.
 
-**DONE — already shipped and laptop-tested (437 tests passing):**
+**DONE — already shipped and laptop-tested (597+ tests passing):**
 
 1. **Milestone 0 fired** — Phase 2 order placed 2026-06-20; parts inbound.
 2. **Laptop phase (A–E) green:** the loop contract proven with a live socket round-trip

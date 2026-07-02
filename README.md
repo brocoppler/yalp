@@ -50,7 +50,7 @@ cp .env.example .env
 
 # 4. Sanity-check the install
 yalp --help        # shows all available commands
-pytest             # the full suite — 540 tests as of 2026-07 — runs hardware-free; all should pass
+pytest             # the full suite — 597+ tests as of July 2026 — runs hardware-free; all should pass
 ```
 
 ## Commands
@@ -255,7 +255,7 @@ Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
 *Annotated build overview — labels the deliberative-loop (cloud), the vision/follow reactive layer, and the 0.30 m collision-stop threshold.*
 
 **The laptop "brain" is COMPLETE** — the full voice → follow → voice-stop loop runs
-end to end on the laptop ("real eyes, fake wheels"), and **the full suite — 540 tests as of 2026-07 — runs hardware-free**:
+end to end on the laptop ("real eyes, fake wheels"), and **the full suite — 597+ tests as of July 2026 — runs hardware-free**:
 
 - `yalp see` — single-frame vision: webcam → Claude → spoken/typed scene description.
 - `yalp agent` — deliberative loop (Claude) driving abilities against the reactive

@@ -91,6 +91,11 @@ and an earlier hardware test loads it into `sys.modules`. See §8 issue #2.
 **Net:** 562/570 pass on real hardware; 2 abort (cv2/Qt); 6 are order-dependent
 false-failures. No yalp *logic* defect surfaced on the Pi.
 
+> **Post-script (2026-07-01):** Both defects above are fixed on `main` — issue #1 in
+> commit `fb4a799` and issue #2 in commit `73cce75` (see §9 for details). A clean
+> full-suite run on Izzy is expected after the next `git pull` there; the Pi has not
+> been re-run yet to confirm.
+
 ---
 
 ## 4. DNN model pre-stage (`yalp follow --fetch-model`)
@@ -265,7 +270,7 @@ install, `yalp audio --list` (and any `sounddevice` capture) will fail to import
 
 ## 9. Issues found (for follow-up — not motor-blocked)
 
-**Issue #1 — cv2 GUI abort on the headless Pi (breaks the suite + `yalp follow --preview`).**
+**Issue #1 — cv2 GUI abort on the headless Pi (breaks the suite + `yalp follow --preview`).** ✅ **RESOLVED in commit fb4a799.**
 `pyproject.toml` pins full **`opencv-python`** (not `opencv-python-headless`).
 Its bundled Qt ships only the `xcb` plugin; with no display, `cv2.namedWindow()`
 calls `qFatal → abort()` (SIGABRT). That is a native C++ abort — Python's
@@ -273,17 +278,19 @@ calls `qFatal → abort()` (SIGABRT). That is a native C++ abort — Python's
 "never raises, headless-safe" contract is violated and the process dies. This
 aborts the full test suite (§3) and would hard-crash `yalp follow --preview` on
 the real robot. `QT_QPA_PLATFORM=offscreen` does **not** help (the bundled Qt has
-no `offscreen` plugin). *Recommended fix:* use `opencv-python-headless` on the Pi
-(headless build; `namedWindow` then raises catchably), **and** have
-`gui_available()` pre-check for a display (e.g. `DISPLAY`/`WAYLAND_DISPLAY`)
-before probing, since a C++ `abort()` is uncatchable by design.
+no `offscreen` plugin). *Fix (fb4a799):* `gui_available()` now pre-checks
+`DISPLAY`/`WAYLAND_DISPLAY` on Linux before any `cv2` window probe, so the
+uncatchable C++ abort is never reached on a headless Pi; `scripts/pi_setup.sh`
+installs `opencv-python-headless` on the Pi (headless build; `namedWindow` then
+raises catchably rather than aborting).
 
-**Issue #2 — 6 tests are order-dependent false-failures on real hardware.**
+**Issue #2 — 6 tests are order-dependent false-failures on real hardware.** ✅ **RESOLVED in commit 73cce75.**
 The "module imports without gpiozero" tests assert `"gpiozero" not in sys.modules`
 as a *global* condition. Valid on a laptop (gpiozero unimportable), invalid on a
 Pi where an earlier hardware test loads gpiozero into `sys.modules`. All six pass
-in isolation. *Recommended fix:* skip/guard these when hardware libs are actually
-importable, or assert the "no side-effect import" in a fresh subprocess.
+in isolation. *Fix (73cce75):* the six tests now run their no-side-effect-import
+assertion in a fresh subprocess via `tests/_import_isolation.py`, making the check
+hermetic regardless of what the parent process has already imported.
 
 ---
 
