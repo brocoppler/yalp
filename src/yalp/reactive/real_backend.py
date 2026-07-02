@@ -28,15 +28,22 @@ a laptop inject :class:`~yalp.reactive.hardware.FakeMotorDriver` /
 :class:`~yalp.reactive.hardware.FakeRangeSensor` plus a synthetic camera, so the
 full tick contract is exercised with no hardware present.
 
-A separate watchdog process (hardware.md / software-spec.md §2.6) independently
-zeroes the motor GPIO on a stale heartbeat; that lives outside this class.
+Dead-man's switch (hardware.md / software-spec.md §2.6): the backend OWNS an
+in-process :class:`~yalp.reactive.watchdog.MotorWatchdog` — a daemon thread that
+zeroes the motor GPIO if the control loop stops heartbeating (a wedged tick, a
+blocking call, a dead thread). It is armed by :meth:`start` (which
+:meth:`run` calls) and, crucially, the heartbeat lives INSIDE :meth:`tick`, so a
+caller driving ``tick()`` directly — not just ``run()`` — is covered. It does not
+depend on the tick's own logic. A truly independent, *process-level* (or hardware)
+watchdog outside this Python process remains future hardware work and is NOT built
+here.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from .. import config
 from ..camera import Camera
@@ -46,6 +53,9 @@ from .calibration import MotorCalibration, load_if_present
 from .follow import FollowController, FollowDecision
 from .tick_core import ReactiveTickCore
 from .watchdog import MotorWatchdog
+
+if TYPE_CHECKING:  # typing-only: hardware.py's Protocols are laptop-safe to name
+    from .hardware import MotorDriver, RangeSensor
 
 
 class RealReactiveBackend(ReactiveTickCore):
@@ -79,13 +89,18 @@ class RealReactiveBackend(ReactiveTickCore):
         Injected FOLLOW collaborators (so tests drive FOLLOW with a fake
         detector/tracker). The ``PersonTracker`` is built lazily on the first
         FOLLOW tick, so constructing the backend stays light.
+    watchdog:
+        The dead-man's switch (:class:`~yalp.reactive.watchdog.MotorWatchdog`).
+        ``None`` (the default) lazily builds one over ``motor_driver``. It is
+        armed by :meth:`start` and heartbeated from inside :meth:`tick`, so even
+        a direct-``tick()`` caller gets the safety net; :meth:`close` retires it.
     """
 
     def __init__(
         self,
         *,
-        motor_driver: Optional[object] = None,
-        range_sensor: Optional[object] = None,
+        motor_driver: "Optional[MotorDriver]" = None,
+        range_sensor: "Optional[RangeSensor]" = None,
         camera: Optional[Camera] = None,
         camera_source: str = "webcam",
         mailbox: Optional[IntentMailbox] = None,
@@ -97,6 +112,7 @@ class RealReactiveBackend(ReactiveTickCore):
         follow_controller: Optional[FollowController] = None,
         calibration: Optional[MotorCalibration] = None,
         calibration_path: Optional[object] = None,
+        watchdog: Optional[MotorWatchdog] = None,
     ) -> None:
         self.mailbox = mailbox or IntentMailbox()
         self.safe_stop_threshold_m = safe_stop_threshold_m
@@ -144,6 +160,11 @@ class RealReactiveBackend(ReactiveTickCore):
         self._motor_driver = motor_driver
         self._range_sensor = range_sensor
 
+        # Dead-man's switch (software-spec.md §2.6). Owned by the backend so it is
+        # available to ANY caller, not just run(): armed in start(), heartbeated
+        # from inside tick(), retired in close(). Built (not started) here.
+        self._watchdog = watchdog or MotorWatchdog(self._motor_driver)
+
         # FOLLOW mode (software-spec.md §4): reuse the SAME track-by-detection
         # tracker + steering controller as the fake. Both are injectable so tests
         # drive FOLLOW with a fake detector/tracker. PersonTracker (which lazily
@@ -184,11 +205,32 @@ class RealReactiveBackend(ReactiveTickCore):
 
     # -- camera --------------------------------------------------------------
     def start(self) -> "RealReactiveBackend":
-        """Start the camera capture thread (idempotent)."""
+        """Start the camera capture thread and arm the watchdog (idempotent).
+
+        Arming the dead-man's switch here (not just in :meth:`run`) means the
+        standard direct-drive lifecycle — ``start()`` then a ``tick()`` loop —
+        is covered by the safety net, since :meth:`tick` refreshes the heartbeat.
+        """
         if not self._camera_started:
             self._camera.start()
             self._camera_started = True
+        self._watchdog.start()  # idempotent; heartbeats fresh on (re)arm
         return self
+
+    # -- tick (heartbeat the dead-man's switch on EVERY path) ----------------
+    def tick(self) -> RobotState:
+        """Run the shared reactive tick, then heartbeat the watchdog.
+
+        The heartbeat lives here — after the full tick returns — so it fires on
+        every tick regardless of which internal path (obstacle halt, preemption,
+        normal step) produced the snapshot, and so a wedged/blocking tick fails
+        to heartbeat and correctly trips the watchdog. It is a no-op cost when
+        the watchdog thread has not been armed (e.g. a bare ``tick()`` in a unit
+        test that never called :meth:`start`).
+        """
+        state = super().tick()
+        self._watchdog.heartbeat()
+        return state
 
     # -- run loop ------------------------------------------------------------
     def run(
@@ -205,49 +247,46 @@ class RealReactiveBackend(ReactiveTickCore):
         """
         rate = hz or self.tick_hz
         dt = 1.0 / rate
+        # start() arms the backend-owned watchdog (the independent safety net,
+        # hardware.md / software-spec.md §2.6) and starts the camera. tick()
+        # heartbeats the watchdog on every path, so this loop needs no explicit
+        # heartbeat; publish() only ENQUEUES (a dedicated writer thread does the
+        # socket I/O), so a slow/stalled client can never stall a tick.
         self.start()
         # Perception (the heavy person detector) runs on its OWN worker thread for
         # the whole run — the async-perception task. FOLLOW ticks only READ the
         # latest observation non-blockingly, so ``tracker.update()`` (100–500 ms on
         # a Pi) never runs under the tick lock and can never blow TICK_BUDGET_MS /
         # trip the watchdog. Idle (no inference) until a FOLLOW intent is adopted.
+        # (The independent watchdog is the backend-owned ``self._watchdog``, armed
+        # by start() above and heartbeated from inside tick() — no local one here.)
         self.start_perception()
-        # Independent safety net (hardware.md / software-spec.md §2.6): a daemon
-        # watchdog that zeroes the motor GPIO if this loop ever stops heartbeating
-        # (wedged tick, blocking call, dead thread). It does NOT depend on the
-        # tick's own logic. We refresh its heartbeat at the END of every tick.
-        watchdog = MotorWatchdog(self._motor_driver)
-        watchdog.start()
         try:
             while stop_event is None or not stop_event.is_set():
                 t0 = time.monotonic()
                 state = self.tick()
                 if server is not None:
                     server.publish(state)
-                watchdog.heartbeat()
                 elapsed = time.monotonic() - t0
                 if dt > elapsed:
                     time.sleep(dt - elapsed)
         finally:
-            # Shutdown ordering (async-perception task). The loop has exited, so the
-            # tick will no longer heartbeat the watchdog. Retire the watchdog FIRST:
+            # Shutdown ordering (async-perception task + independent watchdog).
+            # The loop has exited, so tick() will no longer heartbeat the watchdog.
+            # Delegate to close()/stop(), which retires the backend-owned watchdog
+            # FIRST — before the (potentially blocking) perception-worker join and
+            # any hardware release — so teardown never looks like a wedged tick.
             #   * its stop() issues a final independent motor stop, so the wheels are
             #     guaranteed zeroed BEFORE any driver release and never run free
             #     during teardown (the worker never commands motors, so nothing
-            #     re-spins them after this — they stay zeroed through the rest of
-            #     teardown); and
-            #   * retiring it before the perception-worker join below is what keeps
-            #     the join HONEST: stop_perception() can block for up to one in-flight
+            #     re-spins them — they stay zeroed through the rest of teardown); and
+            #   * retiring it before the perception-worker join keeps that join
+            #     HONEST: stop_perception() can block for up to one in-flight
             #     tracker.update() (a whole detector frame, ~100–500 ms on a Pi), and
             #     with the watchdog still armed that heartbeat-less window would look
             #     exactly like a wedged tick — tripping the watchdog and logging a
             #     scary "TRIPPED" alarm on EVERY normal FOLLOW shutdown. That cry-wolf
             #     would train operators to ignore real trips, so we avoid it.
-            # Then the perception worker (stops reading the camera / feeding motion),
-            # then close() — which itself keeps the worker -> camera -> motors-safe
-            # ordering (worker stop is idempotent; motors are re-zeroed + released).
-            watchdog.stop()
-            self.stop_perception()
             self.stop()
 
     # -- teardown ------------------------------------------------------------
@@ -260,24 +299,42 @@ class RealReactiveBackend(ReactiveTickCore):
         self.close()
 
     def close(self) -> None:
-        """Release everything in safe order: worker -> camera -> motors-safe.
+        """Release everything in safe order: watchdog -> worker -> camera -> motors-safe.
 
-        Idempotent. Ordering (async-perception task): (1) stop the perception
-        worker so it no longer reads the camera or drives motion; (2) stop the
-        camera; (3) leave the motors SAFE — zero the wheels, then release the driver
-        and range sensor. Each step is best-effort so teardown never raises. (When
-        reached via ``run()`` the independent watchdog has already issued a final
-        motor stop, so the wheels are stopped before we get here.)
+        Idempotent. Ordering (async-perception task + independent watchdog):
+        (1) retire the watchdog FIRST — it joins its own thread and issues a final
+        independent motor stop, and (unlike the steps below) can never look like a
+        wedged tick, so retiring it before the potentially blocking perception join
+        avoids a cry-wolf "TRIPPED" alarm on every normal FOLLOW shutdown; (2) stop
+        the perception worker so it no longer reads the camera or drives motion;
+        (3) stop the camera; (4) leave the motors SAFE — zero the wheels, release
+        the RANGE SENSOR before the motor driver, and only then close the motor
+        driver. Each step is best-effort so teardown never raises. (When reached via
+        ``run()`` the watchdog has already issued a final motor stop, so the wheels
+        are stopped before we get here.)
         """
         if self._closed:
             return
         self._closed = True
-        # 1. Perception worker.
+        # 1. Retire the watchdog FIRST. It joins its own thread and issues a final
+        #    independent motor stop, and — unlike the perception join and hardware
+        #    release below — it can never look like a wedged tick. Retiring it
+        #    before the (potentially blocking) perception join is what keeps the
+        #    watchdog from crying wolf: stop_perception() can block for a whole
+        #    in-flight tracker.update() (~100–500 ms on a Pi), a heartbeat-less
+        #    window that would otherwise look exactly like a wedged tick and trip
+        #    the alarm. It never re-enables motors, so the wheels stay stopped
+        #    through the rest of teardown.
+        try:
+            self._watchdog.stop()
+        except Exception:  # pragma: no cover - best effort during teardown
+            pass
+        # 2. Perception worker (stops reading the camera / feeding motion).
         try:
             self.stop_perception()
         except Exception:  # pragma: no cover - best effort during teardown
             pass
-        # 2. Camera.
+        # 3. Camera.
         if self._camera_started:
             try:
                 self._camera.stop()
@@ -285,11 +342,15 @@ class RealReactiveBackend(ReactiveTickCore):
                 pass
             finally:
                 self._camera_started = False
-        # 3. Motors safe: zero the wheels, then release the driver + range sensor.
+        # 4. Motors safe: zero the wheels, close the RANGE SENSOR before the motor
+        #    driver, and only then close the motor driver. The motor driver's
+        #    close() tears down the process-global gpiozero pin factory, which would
+        #    break an ultrasonic sensor still holding pins — so the sensor must be
+        #    released first (motors are already stopped, so nothing is driving).
         for action in (
             self._motor_driver.stop,
-            self._motor_driver.close,
             self._range_sensor.close,
+            self._motor_driver.close,
         ):
             try:
                 action()

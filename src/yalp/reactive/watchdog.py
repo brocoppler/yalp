@@ -26,9 +26,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .. import config
+
+if TYPE_CHECKING:  # import only for typing — keep the module hardware-free at load
+    from .hardware import MotorDriver
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +42,9 @@ class MotorWatchdog:
     Parameters
     ----------
     motor_driver:
-        Anything with a ``stop()`` method (the
-        :class:`~yalp.reactive.hardware.MotorDriver` protocol). ``stop()`` is
-        expected to be idempotent/cheap, since it may be called repeatedly.
+        A :class:`~yalp.reactive.hardware.MotorDriver` (the watchdog only ever
+        calls ``stop()``, which is expected to be idempotent/cheap since it may be
+        called repeatedly).
     timeout_ms:
         How stale (in milliseconds) the heartbeat may get before the watchdog
         trips and stops the motors. Defaults to
@@ -52,11 +55,21 @@ class MotorWatchdog:
     Call :meth:`start` to spin up the watcher thread, :meth:`heartbeat` at the end
     of every control tick, and :meth:`stop` (which joins the thread) on teardown.
     Both :meth:`start` and :meth:`stop` are idempotent.
+
+    Thread-safety
+    -------------
+    The watcher runs on its own thread while the control loop calls
+    :meth:`heartbeat` (and reads :attr:`tripped` / :attr:`trip_count`) from
+    another. **All** mutable shared state — the heartbeat timestamp and the
+    ``tripped`` / ``trip_count`` latch — is guarded by a single lock so no reader
+    ever sees torn state. The lock is only ever held around cheap in-memory work;
+    ``motor_driver.stop()`` is called *outside* the lock so a slow driver can
+    never block :meth:`heartbeat`.
     """
 
     def __init__(
         self,
-        motor_driver: object,
+        motor_driver: "MotorDriver",
         timeout_ms: int = config.WATCHDOG_TIMEOUT_MS,
     ) -> None:
         self._motor_driver = motor_driver
@@ -67,12 +80,13 @@ class MotorWatchdog:
         # busy-spinning. ~timeout/3, floored so a tiny timeout still sleeps.
         self._poll_s = max(1e-3, self.timeout_s / 3.0)
 
+        # One lock guards ALL of: _last_heartbeat, _tripped, _trip_count.
         self._lock = threading.Lock()
         self._last_heartbeat = time.monotonic()
         #: True once a stale heartbeat has tripped the watchdog (latched).
-        self.tripped = False
+        self._tripped = False
         #: Number of distinct trips (latched-edge crossings) for diagnostics.
-        self.trip_count = 0
+        self._trip_count = 0
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -111,16 +125,33 @@ class MotorWatchdog:
         except Exception:  # pragma: no cover - teardown must not raise
             logger.exception("motor watchdog: motor_driver.stop() raised on teardown")
 
-    # -- heartbeat -----------------------------------------------------------
-    def heartbeat(self) -> None:
-        """Record a fresh liveness timestamp (called at the end of every tick)."""
+    # -- shared-state accessors (all reads go through the lock) --------------
+    @property
+    def tripped(self) -> bool:
+        """True while the watchdog is latched after a stale-heartbeat trip."""
         with self._lock:
-            self._last_heartbeat = time.monotonic()
+            return self._tripped
+
+    @property
+    def trip_count(self) -> int:
+        """Number of distinct trip edges seen (diagnostics)."""
+        with self._lock:
+            return self._trip_count
 
     @property
     def last_heartbeat(self) -> float:
         with self._lock:
             return self._last_heartbeat
+
+    # -- heartbeat -----------------------------------------------------------
+    def heartbeat(self) -> None:
+        """Record a fresh liveness timestamp (called at the end of every tick).
+
+        Deliberately cheap: it only takes the lock around a single monotonic
+        timestamp write, so heartbeating from the tick's hot path is negligible.
+        """
+        with self._lock:
+            self._last_heartbeat = time.monotonic()
 
     # -- watcher -------------------------------------------------------------
     def _run(self) -> None:
@@ -130,24 +161,35 @@ class MotorWatchdog:
         while not self._stop_event.wait(self._poll_s):
             with self._lock:
                 stale = (time.monotonic() - self._last_heartbeat) > self.timeout_s
+                if not stale and self._tripped:
+                    # Heartbeat recovered — re-arm (under the same lock as the
+                    # staleness read, so the latch flip is atomic) so a future
+                    # stall trips (and logs) again rather than staying silently
+                    # latched forever.
+                    self._tripped = False
             if stale:
                 self._trip()
-            elif self.tripped:
-                # Heartbeat recovered — re-arm so a future stall trips (and logs)
-                # again rather than staying silently latched forever.
-                self.tripped = False
 
     def _trip(self) -> None:
-        """Zero the motors on a stale heartbeat; log once per trip edge."""
+        """Zero the motors on a stale heartbeat; log once per trip edge.
+
+        ``motor_driver.stop()`` runs OUTSIDE the lock (a slow/blocking driver
+        must never stall a concurrent :meth:`heartbeat`); only the tiny latch
+        update is taken under the lock, and the log line is emitted once per
+        edge, after the lock is released.
+        """
         try:
             self._motor_driver.stop()
         except Exception:  # pragma: no cover - safety path must not raise
             logger.exception("motor watchdog: motor_driver.stop() raised")
-        if not self.tripped:
-            # Log once per trip edge, not once per poll, to avoid log spam while
-            # the loop stays wedged.
-            self.tripped = True
-            self.trip_count += 1
+        with self._lock:
+            first_edge = not self._tripped
+            if first_edge:
+                # Latch and count once per trip edge, not once per poll, so a
+                # sustained stall is a single counted/logged event.
+                self._tripped = True
+                self._trip_count += 1
+        if first_edge:
             logger.error(
                 "motor watchdog TRIPPED: heartbeat stale > %.0fms; motors zeroed",
                 self.timeout_s * 1000.0,

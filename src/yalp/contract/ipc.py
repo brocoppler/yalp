@@ -9,7 +9,11 @@ Implements the wire described in ``docs/technical/software-spec.md`` §2.2:
   * The **reactive process is the server**: it owns the camera/GPIO, publishes the
     latest ``RobotState`` every tick (newest wins; older unread snapshots are
     dropped), and reads ``Intent`` lines into a **single-slot, last-write-wins**
-    mailbox. Its socket work is non-blocking and off the tick's critical path.
+    mailbox. To keep socket work off the tick's critical path, ``publish`` only
+    hands the snapshot to a tiny drop-oldest slot; a **dedicated writer thread**
+    does the actual (possibly blocking) ``sendall``. A stalled or slow client can
+    therefore never stall a tick — the tick just overwrites the pending snapshot
+    (latest wins) and moves on.
   * The **deliberative process is the client**: it connects (with backoff +
     reconnect), sends ``Intent`` lines, and *pulls* the latest ``RobotState``
     snapshot. It can never make the reactive tick block.
@@ -88,8 +92,9 @@ class ReactiveServer:
     an older one). A background reader thread drains ``Intent`` lines into the
     single-slot mailbox and answers explicit state requests. ``publish(state)``
     is called by the reactive run loop every tick; it stores the latest snapshot
-    and best-effort pushes it to the connected client, dropping the send if the
-    socket would block (newest wins) so it never stalls the tick.
+    and hands it to a **dedicated writer thread** via a drop-oldest, latest-wins
+    slot. The tick thread NEVER touches the socket, so a slow/stalled client can
+    never stall a tick — an unsent snapshot is simply overwritten by the next.
     """
 
     def __init__(
@@ -111,6 +116,13 @@ class ReactiveServer:
         self._client_connected = threading.Event()
         self._accept_thread: Optional[threading.Thread] = None
 
+        # Drop-oldest, latest-wins hand-off from the tick thread to the writer
+        # thread. ``publish`` only sets ``_pending_state`` (overwriting any
+        # unsent snapshot) and notifies; the writer thread does the socket I/O.
+        self._pending_cv = threading.Condition()
+        self._pending_state: Optional[RobotState] = None
+        self._writer_thread: Optional[threading.Thread] = None
+
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> "ReactiveServer":
         """Bind, listen, and start accepting clients in the background."""
@@ -125,11 +137,21 @@ class ReactiveServer:
             target=self._accept_loop, name="yalp-ipc-accept", daemon=True
         )
         self._accept_thread.start()
+        # Dedicated writer: the ONLY thread that ever pushes published snapshots
+        # onto the socket, so the tick thread never blocks on a slow client.
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop, name="yalp-ipc-writer", daemon=True
+        )
+        self._writer_thread.start()
         return self
 
     def stop(self) -> None:
         self._running.clear()
         self._client_connected.clear()
+        # Wake the writer thread so it observes ``_running`` is clear and exits.
+        with self._pending_cv:
+            self._pending_state = None
+            self._pending_cv.notify_all()
         for sock in (self._client, self._sock):
             if sock is not None:
                 try:
@@ -141,6 +163,9 @@ class ReactiveServer:
         if self._accept_thread is not None:
             self._accept_thread.join(timeout=1.0)
             self._accept_thread = None
+        if self._writer_thread is not None:
+            self._writer_thread.join(timeout=1.0)
+            self._writer_thread = None
 
     def __enter__(self) -> "ReactiveServer":
         return self.start()
@@ -154,14 +179,33 @@ class ReactiveServer:
 
     # -- publish (called from the reactive tick) -----------------------------
     def publish(self, state: RobotState) -> None:
-        """Store the latest snapshot and best-effort push it to the client.
+        """Store the latest snapshot and hand it to the writer thread.
 
-        Never blocks the caller: if the socket is not writable right now the
-        push is dropped (the next tick's snapshot supersedes it anyway).
+        Runs on the tick thread and NEVER touches the socket: it only records
+        the snapshot (for on-demand state requests) and drops it into the
+        drop-oldest slot the writer thread drains. If the writer has not sent the
+        previous snapshot yet, this simply overwrites it (latest wins), so a
+        stalled/slow client can never slow the tick.
         """
         with self._latest_lock:
             self._latest = state
-        self._send_to_client(state.to_json())
+        with self._pending_cv:
+            self._pending_state = state  # drop-oldest: overwrite any unsent snap
+            self._pending_cv.notify()
+
+    def _writer_loop(self) -> None:
+        """Drain the drop-oldest slot and push each snapshot to the client.
+
+        This is the only place published snapshots hit the socket, so a blocking
+        ``sendall`` here can stall this thread but never the tick thread.
+        """
+        while self._running.is_set():
+            with self._pending_cv:
+                while self._running.is_set() and self._pending_state is None:
+                    self._pending_cv.wait(0.5)
+                state, self._pending_state = self._pending_state, None
+            if state is not None and self._running.is_set():
+                self._send_to_client(state.to_json())
 
     # -- internals -----------------------------------------------------------
     def _accept_loop(self) -> None:

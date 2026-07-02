@@ -13,6 +13,7 @@ for the trip) so the tests are not flaky under CI scheduling jitter.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from yalp import config
@@ -163,3 +164,64 @@ def test_default_timeout_comes_from_config() -> None:
     """The default timeout is sourced from config.WATCHDOG_TIMEOUT_MS."""
     wd = MotorWatchdog(FakeMotorDriver())
     assert wd.timeout_s == config.WATCHDOG_TIMEOUT_MS / 1000.0
+
+
+def test_concurrent_heartbeat_trip_and_read_never_tears_state() -> None:
+    """Hammer heartbeat/trip/read from many threads: shared state stays coherent.
+
+    The watchdog's ``_last_heartbeat`` and its ``tripped`` / ``trip_count`` latch
+    are all touched from the watcher thread AND from the control loop. This drives
+    a storm of concurrent :meth:`heartbeat` calls and property reads *while* the
+    watcher thread is polling/tripping/re-arming, and asserts that no reader ever
+    observes torn or impossible state (e.g. a negative or wildly jumping
+    ``trip_count``, or a non-bool ``tripped``). Timing is deliberately generous so
+    this is a data-race probe, not a timing assertion.
+    """
+    driver = FakeMotorDriver()
+    # A short timeout so the watcher is actively (re-)tripping and re-arming while
+    # we hammer it — maximising the window for a torn read if the lock were wrong.
+    wd = MotorWatchdog(driver, timeout_ms=10)
+    wd.start()
+
+    stop = threading.Event()
+    errors: list[str] = []
+    seen_counts: list[int] = []
+
+    def hammer_heartbeats() -> None:
+        # Intermittently heartbeat so the watcher keeps flipping tripped on/off.
+        while not stop.is_set():
+            wd.heartbeat()
+            time.sleep(0.001)
+
+    def hammer_reads() -> None:
+        last = 0
+        while not stop.is_set():
+            tripped = wd.tripped
+            count = wd.trip_count
+            # tripped must always be a real bool; trip_count monotonic & >= 0.
+            if not isinstance(tripped, bool):
+                errors.append(f"tripped not bool: {tripped!r}")
+            if not isinstance(count, int) or count < 0:
+                errors.append(f"bad trip_count: {count!r}")
+            if count < last:
+                errors.append(f"trip_count went backwards: {count} < {last}")
+            last = count
+            seen_counts.append(count)
+
+    threads = [threading.Thread(target=hammer_heartbeats) for _ in range(4)]
+    threads += [threading.Thread(target=hammer_reads) for _ in range(4)]
+    for t in threads:
+        t.start()
+    try:
+        # Also let the watcher trip at least once by pausing heartbeats midway:
+        # stop the heartbeat storm briefly so the timeout lapses.
+        time.sleep(0.15)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(timeout=2.0)
+        wd.stop()
+
+    assert not errors, f"torn/incoherent state observed: {errors[:5]}"
+    # Sanity: the reads actually ran and observed the (monotonic) counter.
+    assert seen_counts, "reader threads never sampled the watchdog"

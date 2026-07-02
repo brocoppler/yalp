@@ -12,6 +12,7 @@ Covers the loop-to-loop seam specified in software-spec.md §2:
 
 from __future__ import annotations
 
+import socket
 import time
 
 from yalp.contract.abilities import ANTHROPIC_TOOLS, intent_for
@@ -152,9 +153,17 @@ def test_loopback_intent_and_state():
         assert got.seq == 1
         assert got.mode == Mode.FOLLOW
 
-        # Server -> client: a published RobotState is read back.
+        # Server -> client: a published RobotState is read back. Delivery is
+        # asynchronous (a dedicated writer thread pushes snapshots off the tick
+        # path) and latest-wins, so poll until the published snapshot arrives.
         server.publish(RobotState(mode=Mode.DRIVE_GOAL, goal_status=GoalStatus.RUNNING))
-        state = client.request_state(timeout=2.0)
+        state = None
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            state = client.request_state(timeout=0.5)
+            if state is not None and state.mode == Mode.DRIVE_GOAL:
+                break
+            time.sleep(0.01)
         assert state is not None
         assert state.mode == Mode.DRIVE_GOAL
         assert state.goal_status == GoalStatus.RUNNING
@@ -162,6 +171,66 @@ def test_loopback_intent_and_state():
         if client is not None:
             client.close()
         server.stop()
+
+
+# --- 3b. A stalled reader must NEVER slow the publishing (tick) loop ----------
+def test_publish_never_stalls_on_a_wedged_client():
+    """publish() stays fast even when the connected client never reads.
+
+    Uses a REAL connected socket pair: the server writes to one end while we
+    deliberately never drain the other, so its send buffer fills and any
+    ``sendall`` blocks. Because publish() only ENQUEUES for the dedicated writer
+    thread (which is the one that may block), a mock-free ticking loop calling
+    publish() must keep running at speed — proving a wedged client can't stall
+    the tick.
+    """
+    # A genuine connected pair. server_end is what the ReactiveServer writes to;
+    # we hold reader_end and NEVER read it, so server_end's buffer fills up.
+    server_end, reader_end = socket.socketpair()
+    # Shrink the buffers so they fill after a snapshot or two, forcing the
+    # writer thread to block inside sendall (the exact hazard we're guarding).
+    try:
+        server_end.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2048)
+        reader_end.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
+    except OSError:  # pragma: no cover - platform without settable bufs
+        pass
+
+    server = ReactiveServer(host="127.0.0.1", port=0)
+    server.start()
+    try:
+        # Attach our stalled socket as the server's client (real socket path).
+        server._adopt_client(server_end)
+
+        # A big snapshot so a single push overflows the tiny send buffer and the
+        # writer thread wedges on sendall.
+        big = RobotState(
+            mode=Mode.DRIVE_GOAL,
+            goal_status=GoalStatus.RUNNING,
+            goal={"pad": "x" * 200_000},
+        )
+
+        # Simulate a ticking loop: publish repeatedly and time each call. None of
+        # them may block on the wedged client.
+        max_latency = 0.0
+        t_start = time.monotonic()
+        for _ in range(200):
+            t0 = time.monotonic()
+            server.publish(big)
+            max_latency = max(max_latency, time.monotonic() - t0)
+        total = time.monotonic() - t_start
+
+        assert max_latency < 0.25, (
+            f"a single publish() blocked for {max_latency:.3f}s — the tick path "
+            "is coupled to the stalled client"
+        )
+        assert total < 1.0, f"200 publishes took {total:.3f}s — tick loop stalled"
+    finally:
+        server.stop()
+        for s in (server_end, reader_end):
+            try:
+                s.close()
+            except OSError:
+                pass
 
 
 # --- 4. Fake backend: timed, unverified drive completion ---------------------

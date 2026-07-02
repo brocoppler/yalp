@@ -27,6 +27,7 @@ and FOLLOW steering maps to motor throttles (clean stop when lost).
 from __future__ import annotations
 
 import sys
+import time
 
 import numpy as np
 import pytest
@@ -356,3 +357,118 @@ def test_close_zeroes_motors_and_releases_hardware():
     assert cam.stopped is True
     # Idempotent.
     backend.close()
+
+
+def test_close_order_watchdog_first_then_sensor_before_motor():
+    """Teardown order (instrumented fakes): watchdog retired first, range sensor
+    closed BEFORE the motor driver, motors stopped before any pins are released.
+
+    The motor driver's close() tears down the process-global gpiozero pin
+    factory; releasing the range sensor first keeps that from yanking the factory
+    out from under an open sensor. Retiring the watchdog first means teardown
+    never looks like a wedged tick.
+    """
+    log: list[str] = []
+
+    class _LogMotor(FakeMotorDriver):
+        def stop(self) -> None:
+            log.append("motor.stop")
+            super().stop()
+
+        def close(self) -> None:
+            log.append("motor.close")
+            super().close()
+
+    class _LogSensor(FakeRangeSensor):
+        def close(self) -> None:
+            log.append("sensor.close")
+            super().close()
+
+    class _LogWatchdog:
+        """A watchdog stand-in that only records its lifecycle calls."""
+
+        def __init__(self) -> None:
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+            return self
+
+        def stop(self, timeout: float = 1.0) -> None:
+            log.append("watchdog.stop")
+            self.stopped = True
+
+        def heartbeat(self) -> None:
+            pass
+
+    motor = _LogMotor()
+    sensor = _LogSensor()
+    wd = _LogWatchdog()
+    backend = RealReactiveBackend(
+        motor_driver=motor,
+        range_sensor=sensor,
+        camera=Camera(source="synthetic"),
+        tick_hz=50.0,
+        watchdog=wd,
+    )
+    backend.close()
+
+    assert wd.stopped is True
+    # 1) The watchdog is retired before any hardware is touched.
+    assert log[0] == "watchdog.stop"
+    # 2) Motors are stopped before any pins are released.
+    assert log.index("motor.stop") < log.index("sensor.close")
+    # 3) The range sensor is closed BEFORE the motor driver (pin-factory teardown).
+    assert log.index("sensor.close") < log.index("motor.close")
+
+
+def test_watchdog_armed_by_start_and_retired_by_close():
+    """start() arms the backend-owned watchdog; close() joins/retires it."""
+    backend, motor, sensor = _make_backend(camera=_BrightCamera())
+    assert backend._watchdog._thread is None  # not armed until start()
+    backend.start()
+    thread = backend._watchdog._thread
+    assert thread is not None and thread.is_alive()
+    backend.close()
+    assert backend._watchdog._thread is None
+    assert not thread.is_alive()
+
+
+def test_direct_tick_caller_is_covered_by_the_watchdog():
+    """A direct start()+tick() loop heartbeats the watchdog; stalling trips it.
+
+    Proves item (b): a caller driving tick() directly (not run()) still gets the
+    dead-man's switch, because the heartbeat lives inside tick().
+    """
+    from yalp.reactive.watchdog import MotorWatchdog
+
+    motor = FakeMotorDriver()
+    sensor = FakeRangeSensor()
+    wd = MotorWatchdog(motor, timeout_ms=30)
+    backend = RealReactiveBackend(
+        motor_driver=motor,
+        range_sensor=sensor,
+        camera=Camera(source="synthetic"),
+        tick_hz=200.0,
+        watchdog=wd,
+    )
+    backend.start()
+    try:
+        # Ticking keeps the heartbeat fresh -> never trips.
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            backend.tick()
+            time.sleep(0.002)
+        assert wd.tripped is False
+        assert wd.trip_count == 0
+
+        # Stop ticking -> the heartbeat goes stale -> the watchdog trips.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not wd.tripped:
+            time.sleep(0.005)
+        assert wd.tripped is True
+        assert wd.trip_count >= 1
+        assert motor.last == (0.0, 0.0)
+    finally:
+        backend.close()

@@ -317,7 +317,13 @@ class GpiozeroMotorDriver:
         self._right_pwm.value = 0.0
 
     def close(self) -> None:
-        """Zero PWM, close every gpiozero device, and release the pin factory."""
+        """Zero PWM, close every gpiozero device, and release the pin factory.
+
+        The process-global pin factory is only torn down when no other device
+        still holds pins on it (see :meth:`_factory_has_open_reservations`), so
+        closing the motors never yanks the factory out from under a still-open
+        ultrasonic sensor.
+        """
         if self._closed:
             return
         self._closed = True
@@ -332,16 +338,39 @@ class GpiozeroMotorDriver:
                 dev.close()
             except Exception:  # pragma: no cover - best effort during teardown
                 pass
-        # Best-effort: tear down the lgpio pin factory we installed.
+        # Best-effort: tear down the lgpio pin factory we installed — but ONLY if
+        # no other device still holds pins on it. The pin factory is a
+        # PROCESS-GLOBAL that the ultrasonic sensor shares; closing it out from
+        # under a still-open sensor would break that sensor's own close(). If any
+        # reservation remains we leave the factory in place (harmless — the OS
+        # reclaims GPIO at process exit); the caller's teardown order should close
+        # the sensor first so this branch normally does reset the factory.
         try:
             import gpiozero
 
             factory = getattr(gpiozero.Device, "pin_factory", None)
-            if factory is not None:
+            if factory is not None and not self._factory_has_open_reservations(factory):
                 factory.close()
                 gpiozero.Device.pin_factory = None
         except Exception:  # pragma: no cover - best effort during teardown
             pass
+
+    @staticmethod
+    def _factory_has_open_reservations(factory: Any) -> bool:  # pragma: no cover - needs a real Pi env
+        """True if another live device still holds pins on the shared factory.
+
+        gpiozero tracks live pin reservations on the factory (releasing them as
+        each device closes). If any remain after we've closed our own devices,
+        something else — e.g. the ultrasonic sensor — is still using the shared
+        factory, so we must NOT close it. Defensive across gpiozero versions: an
+        unknown/absent reservation map is treated as "nothing open" so we fall
+        back to the historical reset behaviour.
+        """
+        reservations = getattr(factory, "_reservations", None)
+        try:
+            return bool(reservations)
+        except Exception:
+            return False
 
 
 class GpiozeroUltrasonicSensor:
