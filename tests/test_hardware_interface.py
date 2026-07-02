@@ -7,8 +7,7 @@ present, and the fakes must satisfy the runtime-checkable protocols.
 
 from __future__ import annotations
 
-import sys
-
+from tests._import_isolation import assert_import_leaves_module_unloaded
 from yalp.reactive.hardware import (
     FakeMotorDriver,
     FakeRangeSensor,
@@ -18,9 +17,16 @@ from yalp.reactive.hardware import (
 
 
 def test_imports_with_no_hardware_libs_present():
-    """The module must import without any GPIO library loaded."""
-    for mod in ("gpiozero", "lgpio", "RPi", "RPi.GPIO", "pigpio"):
-        assert mod not in sys.modules, f"{mod} should not be imported"
+    """The module must import without any GPIO library loaded.
+
+    Verified in a fresh subprocess so this holds on a Pi (where the libs ARE
+    installed and an earlier test may have imported them) as well as on a
+    laptop — see tests/_import_isolation.py.
+    """
+    assert_import_leaves_module_unloaded(
+        "yalp.reactive.hardware",
+        ("gpiozero", "lgpio", "RPi", "RPi.GPIO", "pigpio"),
+    )
 
 
 def test_fakes_satisfy_protocols():

@@ -26,12 +26,15 @@ and FOLLOW steering maps to motor throttles (clean stop when lost).
 
 from __future__ import annotations
 
-import sys
 import time
 
 import numpy as np
 import pytest
 
+from tests._import_isolation import (
+    assert_import_leaves_module_unloaded,
+    assert_isolated_program_succeeds,
+)
 from yalp.camera import Camera
 from yalp.contract.messages import GoalStatus, Intent, Mode
 from yalp.reactive.hardware import FakeMotorDriver, FakeRangeSensor
@@ -107,19 +110,52 @@ def _make_backend(*, camera=None, tracker=None, **kwargs):
 # Import / construction hygiene
 # --------------------------------------------------------------------------- #
 def test_module_imports_without_gpio_libraries():
-    import yalp.reactive.real_backend  # noqa: F401  (re-import is cheap)
-
-    for mod in ("gpiozero", "lgpio", "RPi", "RPi.GPIO"):
-        assert mod not in sys.modules, f"{mod} must not be imported at module load"
+    # Checked in a fresh subprocess so this is order-independent and holds on a
+    # Pi (where these libs ARE installed) as well as on a laptop — see
+    # tests/_import_isolation.py.
+    assert_import_leaves_module_unloaded(
+        "yalp.reactive.real_backend",
+        ("gpiozero", "lgpio", "RPi", "RPi.GPIO"),
+    )
 
 
 def test_injected_fakes_skip_the_hardware_imports():
-    backend, motor, sensor = _make_backend()
-    # Constructing with BOTH fakes injected must not import gpiozero/lgpio.
-    for mod in ("gpiozero", "lgpio"):
-        assert mod not in sys.modules
-    assert backend._motor_driver is motor
-    assert backend._range_sensor is sensor
+    # Constructing the real backend with BOTH fakes injected must not import
+    # gpiozero/lgpio. We assert this in a *fresh subprocess* (mirroring
+    # `_make_backend()`'s construction) so it is order-independent and holds on a
+    # Pi where gpiozero IS installed and a prior test may have imported it — an
+    # in-process `sys.modules` check would false-fail there. See
+    # tests/_import_isolation.py.
+    program = (
+        "import sys\n"
+        "from yalp.camera import Camera\n"
+        "from yalp.reactive.hardware import FakeMotorDriver, FakeRangeSensor\n"
+        "from yalp.reactive.real_backend import RealReactiveBackend\n"
+        "motor = FakeMotorDriver()\n"
+        "sensor = FakeRangeSensor()\n"
+        "backend = RealReactiveBackend(\n"
+        "    motor_driver=motor,\n"
+        "    range_sensor=sensor,\n"
+        "    camera=Camera(source='synthetic'),\n"
+        "    max_speed_mps=1.0,\n"
+        "    tick_hz=50.0,\n"
+        "    tracker=None,\n"
+        ")\n"
+        "assert backend._motor_driver is motor, 'motor_driver not wired through'\n"
+        "assert backend._range_sensor is sensor, 'range_sensor not wired through'\n"
+        "_leaked = [m for m in ('gpiozero', 'lgpio') if m in sys.modules]\n"
+        "if _leaked:\n"
+        "    sys.stderr.write('constructing injected-fake backend imported: '"
+        " + ', '.join(_leaked) + '\\n')\n"
+        "raise SystemExit(1 if _leaked else 0)\n"
+    )
+    assert_isolated_program_succeeds(
+        program,
+        what=(
+            "constructing RealReactiveBackend with injected fakes pulled in a "
+            "hardware library (gpiozero/lgpio) or failed to wire the fakes through."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

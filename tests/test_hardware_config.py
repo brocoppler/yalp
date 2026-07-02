@@ -10,9 +10,9 @@ installed.  They verify:
 
 from __future__ import annotations
 
-import sys
-
 import pytest
+
+from tests._import_isolation import assert_import_leaves_module_unloaded
 
 
 # ---------------------------------------------------------------------------
@@ -20,14 +20,15 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def test_config_import_does_not_import_gpiozero():
-    """yalp.config must be importable without pulling in gpiozero."""
-    # Ensure a fresh import state (other tests may have run first, but we at
-    # least verify gpiozero is absent after the import of yalp.config).
-    import yalp.config  # noqa: F401 — import for side-effect check
-    assert "gpiozero" not in sys.modules, (
-        "gpiozero was imported as a side-effect of 'import yalp.config'. "
-        "Hardware libraries must only be imported lazily inside hardware modules."
-    )
+    """yalp.config must be importable without pulling in gpiozero.
+
+    Checked in a *fresh subprocess* rather than by inspecting this process's
+    ``sys.modules``: on a Pi gpiozero IS installed and an earlier test may have
+    imported it, which would false-fail an in-process global check. A clean
+    interpreter proves the real guarantee — importing ``yalp.config`` does not
+    pull gpiozero in as a side effect — on both laptop and Pi, in any order.
+    """
+    assert_import_leaves_module_unloaded("yalp.config", "gpiozero")
 
 
 # ---------------------------------------------------------------------------

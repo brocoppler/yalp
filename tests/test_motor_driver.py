@@ -19,20 +19,28 @@ import types
 
 import pytest
 
+from tests._import_isolation import assert_import_leaves_module_unloaded
+
 
 # --------------------------------------------------------------------------- #
 # 1. The module must import with NO gpiozero present (lazy imports).
 # --------------------------------------------------------------------------- #
 def test_module_imports_without_gpiozero():
-    """Importing hardware.py must not require gpiozero/lgpio/RPi."""
-    assert "gpiozero" not in sys.modules
+    """Importing hardware.py must not require gpiozero/lgpio/RPi.
+
+    The "no side-effect import" half is checked in a *fresh subprocess* so it is
+    order-independent and holds on a Pi (where gpiozero/lgpio are installed) as
+    well as on a laptop — see tests/_import_isolation.py. The structural check on
+    the class runs in-process below.
+    """
+    assert_import_leaves_module_unloaded(
+        "yalp.reactive.hardware", ("gpiozero", "lgpio")
+    )
+
     import yalp.reactive.hardware as hw  # noqa: F401  (import must not raise)
 
     # The class is present and satisfies the MotorDriver protocol structurally.
     assert hasattr(hw, "GpiozeroMotorDriver")
-    # Still no hardware library pulled in just by importing the module.
-    assert "gpiozero" not in sys.modules
-    assert "lgpio" not in sys.modules
 
 
 # --------------------------------------------------------------------------- #

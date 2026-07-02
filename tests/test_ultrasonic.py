@@ -22,18 +22,23 @@ import types
 
 import pytest
 
+from tests._import_isolation import assert_import_leaves_module_unloaded
+
 
 # --------------------------------------------------------------------------- #
 # 1. The module must import with NO gpiozero present (lazy imports).
 # --------------------------------------------------------------------------- #
 def test_module_imports_without_gpiozero():
-    assert "gpiozero" not in sys.modules
+    # The "no side-effect import" half is checked in a *fresh subprocess* so it
+    # is order-independent and holds on a Pi (where gpiozero/lgpio are installed)
+    # as well as on a laptop — see tests/_import_isolation.py.
+    assert_import_leaves_module_unloaded(
+        "yalp.reactive.hardware", ("gpiozero", "lgpio")
+    )
+
     import yalp.reactive.hardware as hw  # noqa: F401  (import must not raise)
 
     assert hasattr(hw, "GpiozeroUltrasonicSensor")
-    # Merely importing must not drag in any hardware library.
-    assert "gpiozero" not in sys.modules
-    assert "lgpio" not in sys.modules
 
 
 def test_class_satisfies_rangesensor_protocol_structurally():
