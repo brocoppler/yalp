@@ -60,6 +60,29 @@ TYPE_STATE = "state"
 
 Bbox = Tuple[float, float, float, float]
 
+# Speed-limit clamp bounds (software-spec.md §2.3). ``set_speed_limit`` and the
+# reactive ``RobotState.speed_limit`` clamp are constrained to this sane band:
+# never faster than full (1.0), never so slow the wheels can't overcome stiction
+# (0.1).
+SPEED_LIMIT_MIN = 0.1
+SPEED_LIMIT_MAX = 1.0
+
+
+def clamp_speed_limit(value: float) -> float:
+    """Clamp a requested speed limit into the sane ``[0.1, 1.0]`` band.
+
+    One source of truth so the reactive core (which writes
+    ``RobotState.speed_limit`` on adoption) and the deliberative layer (which
+    reports the *applied* value back to the model) can never disagree on the
+    number.
+    """
+    v = float(value)
+    if v < SPEED_LIMIT_MIN:
+        return SPEED_LIMIT_MIN
+    if v > SPEED_LIMIT_MAX:
+        return SPEED_LIMIT_MAX
+    return v
+
 
 def _mode_to_str(mode: Union[Mode, str]) -> str:
     return mode.value if isinstance(mode, Mode) else str(mode)
@@ -77,9 +100,15 @@ class Intent:
     Fields
     ------
     mode:
-        Requested mode (``IDLE`` / ``DRIVE_GOAL`` / ``FOLLOW`` / ``SAFE_STOP``).
+        Requested mode (``IDLE`` / ``DRIVE_GOAL`` / ``FOLLOW`` / ``SAFE_STOP``),
+        or ``None`` for a **control-only intent** — one that carries no mode
+        change and only adjusts a reactive control value (currently
+        ``speed_limit``). A control-only intent is adopted without preempting the
+        in-progress goal (see the reactive tick core), so "go slow" clamps the
+        current motion instead of stopping it.
     goal:
-        The mode's typed goal payload, or ``None`` (e.g. for ``IDLE``).
+        The mode's typed goal payload, or ``None`` (e.g. for ``IDLE`` and for a
+        control-only intent).
     seq:
         Monotonically increasing sequence number; newer ``seq`` wins. It does
         **not** reset across reconnects, so a stale ``Intent`` from a half-open
@@ -87,25 +116,39 @@ class Intent:
     ts:
         Monotonic timestamp the intent was created (diagnostics only; not part
         of the preemption rule, which is ``seq``-ordered).
+    speed_limit:
+        Optional safety speed clamp to apply on adoption (software-spec.md §2.3).
+        ``None`` (the wire default when the key is absent) leaves the reactive
+        layer's current ``RobotState.speed_limit`` untouched — this is what keeps
+        an old-style intent (no ``speed_limit`` key) wire-compatible. When
+        present it is clamped into ``[0.1, 1.0]`` by the reactive core and
+        written to ``RobotState.speed_limit``; every subsequent throttle is
+        clamped to it.
     """
 
-    mode: Mode
+    mode: Optional[Mode] = None
     goal: Optional[dict] = None
     seq: int = 0
     ts: float = field(default_factory=time.monotonic)
+    speed_limit: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.mode, Mode):
+        if self.mode is not None and not isinstance(self.mode, Mode):
             self.mode = Mode(self.mode)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "type": TYPE_INTENT,
-            "mode": _mode_to_str(self.mode),
+            "mode": _mode_to_str(self.mode) if self.mode is not None else None,
             "goal": self.goal,
             "seq": int(self.seq),
             "ts": self.ts,
         }
+        # Only emit the speed_limit key when carrying one, so an ordinary motion
+        # intent stays byte-identical on the wire to a pre-speed-limit build.
+        if self.speed_limit is not None:
+            d["speed_limit"] = float(self.speed_limit)
+        return d
 
     def to_json(self) -> str:
         """Serialize to a single ``\\n``-terminated JSON line."""
@@ -113,11 +156,14 @@ class Intent:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Intent":
+        m = d.get("mode")
+        sl = d.get("speed_limit")
         return cls(
-            mode=Mode(d["mode"]),
+            mode=Mode(m) if m is not None else None,
             goal=d.get("goal"),
             seq=int(d.get("seq", 0)),
             ts=float(d.get("ts", 0.0)),
+            speed_limit=None if sl is None else float(sl),
         )
 
     @classmethod
@@ -246,5 +292,8 @@ __all__ = [
     "Bbox",
     "TYPE_INTENT",
     "TYPE_STATE",
+    "SPEED_LIMIT_MIN",
+    "SPEED_LIMIT_MAX",
+    "clamp_speed_limit",
     "parse_line",
 ]

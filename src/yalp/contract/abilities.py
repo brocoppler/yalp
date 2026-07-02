@@ -212,12 +212,26 @@ ABILITIES: Tuple[Ability, ...] = (
     ),
     Ability(
         name="set_speed_limit",
-        description="Clamp all subsequent motion speed (safety / 'go slow').",
+        description=(
+            "Clamp all subsequent motion speed (safety / 'go slow'). Applies "
+            "immediately without stopping the robot; values are clamped to "
+            "[0.1, 1.0]."
+        ),
         kind=KIND_CONTROL,
         params=(
-            Param("max_speed", "number", "Speed clamp 0..1.", required=True, minimum=0, maximum=1),
+            Param(
+                "max_speed",
+                "number",
+                "Speed clamp; 1.0 = full speed, 0.1 = slowest. Clamped to [0.1, 1.0].",
+                required=True,
+                minimum=0.1,
+                maximum=1.0,
+            ),
         ),
-        maps_to="Control: set RobotState.speed_limit; reactive clamps subsequent motion.",
+        maps_to=(
+            "Control-only Intent(mode=None, speed_limit): reactive core writes "
+            "RobotState.speed_limit on adoption and clamps subsequent motion."
+        ),
     ),
 )
 

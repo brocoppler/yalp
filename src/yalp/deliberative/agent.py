@@ -55,7 +55,13 @@ from ..contract.abilities import (
     KIND_QUERY,
     intent_for,
 )
-from ..contract.messages import GoalStatus, Intent, Mode, RobotState
+from ..contract.messages import (
+    GoalStatus,
+    Intent,
+    Mode,
+    RobotState,
+    clamp_speed_limit,
+)
 from . import model_router
 from .model_router import Budget, BudgetExceeded, RoutingContext
 
@@ -383,13 +389,28 @@ class Agent:
 
     def _dispatch_control(self, name: str, params: dict) -> str:
         if name == "set_speed_limit":
-            limit = float(params.get("max_speed", 1.0))
-            # v1: there is no control-Intent mode; the reactive layer owns
-            # speed_limit. Record the request so it is auditable and surfaced
-            # back to the model; clamping wires through in a later wave.
-            self._record("note", f"speed limit requested: {limit:.2f} (advisory in v1).",
-                         max_speed=limit)
-            return f"speed limit set to {limit:.2f} (clamps subsequent motion)."
+            requested = float(params.get("max_speed", 1.0))
+            applied = clamp_speed_limit(requested)
+            # A CONTROL-ONLY intent (mode=None): the reactive core writes it to
+            # RobotState.speed_limit on adoption and clamps every subsequent
+            # throttle to it, WITHOUT preempting the in-progress goal. Send the raw
+            # request; the core is the single clamp authority. We report the
+            # clamped value we know it will apply (a fresh state read here can
+            # still predate the adoption tick, so trust the clamp, not the echo).
+            self._seq += 1
+            try:
+                self.reactive.send_intent(
+                    Intent(mode=None, seq=self._seq, speed_limit=requested)
+                )
+            except Exception:  # noqa: BLE001 — a send failure must not wedge the loop
+                pass
+            self._record(
+                "state",
+                f"speed limit {applied:.2f} applied; motion clamped.",
+                max_speed=applied,
+                requested=requested,
+            )
+            return f"speed limit {applied:.2f} applied; motion clamped to {applied:.2f}."
         return f"control ability '{name}' not handled."
 
     # -- internals: reactive I/O ---------------------------------------------

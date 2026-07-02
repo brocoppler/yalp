@@ -48,7 +48,13 @@ from typing import Optional, Tuple
 
 from .. import config
 from ..camera import Camera
-from ..contract.messages import GoalStatus, Intent, Mode, RobotState
+from ..contract.messages import (
+    GoalStatus,
+    Intent,
+    Mode,
+    RobotState,
+    clamp_speed_limit,
+)
 from .backend import ReactiveBackend
 from .follow import FollowDecision, frame_brightness
 
@@ -199,6 +205,17 @@ class ReactiveTickCore(ReactiveBackend):
     # -- adoption / drive timing --------------------------------------------
     def _adopt(self, intent: Intent) -> None:
         s = self._state
+        # A speed-limit rider applies FIRST, clamped into the sane band, so it is
+        # in force for THIS adoption's own drive timing/throttle math and every
+        # subsequent tick (software-spec.md §2.3).
+        if intent.speed_limit is not None:
+            s.speed_limit = clamp_speed_limit(intent.speed_limit)
+        # A CONTROL-ONLY intent (no mode) carries no motion change: it only
+        # adjusts the control value above, leaving the current mode/goal running
+        # (so "go slow" clamps the in-progress drive rather than stopping it).
+        if intent.mode is None:
+            self._safe_notify(self.on_intent_adopted, intent)
+            return
         s.mode = intent.mode
         s.goal = dict(intent.goal) if intent.goal else None
         s.goal_status = GoalStatus.RUNNING
