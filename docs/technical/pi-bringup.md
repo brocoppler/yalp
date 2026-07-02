@@ -13,6 +13,19 @@ definition. All pins are **BCM** numbering.
 
 ---
 
+## Connecting to the Pi
+
+Key-based SSH is configured — no password required:
+
+```bash
+ssh izzy                 # via the ~/.ssh/config alias
+ssh izzy@izzy.local      # explicit form (same key, same host)
+```
+
+All commands in this doc that run "on the Pi over SSH" use one of the above.
+
+---
+
 ## 1. Install on the Pi
 
 Run the idempotent provisioner (safe to re-run; sudo is needed for the `apt`

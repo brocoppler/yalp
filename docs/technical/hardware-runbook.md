@@ -128,9 +128,11 @@ enabled at flash time).
 4. Click the **gear / "Edit Settings"** (advanced options) and set, before
    writing:
    - **Hostname:** `izzy` (so you reach it at `izzy.local`)
-   - **Enable SSH** → *Use password authentication* (or paste a public key)
-   - **Username & password:** pick a username (this runbook uses `izzy`) and a real
-     password — write it down
+   - **Enable SSH** → *Use password authentication* (initial flash only; key-based
+     auth is set up separately — or paste a public key here now)
+   - **Username & password:** set username to `izzy` (this runbook uses `izzy`, and
+     it matches the SSH alias configured for this robot) and a strong password —
+     write it down
    - **Wireless LAN:** your **SSID + password**, and set the correct **Wi-Fi
      country** (required, or Wi-Fi stays disabled)
    - **Locale:** your time zone and keyboard layout
@@ -140,11 +142,12 @@ enabled at flash time).
 7. From your laptop terminal:
 
    ```bash
-   ssh izzy@izzy.local
+   ssh izzy              # uses the ~/.ssh/config alias (key-based, no password)
+   ssh izzy@izzy.local   # explicit form — same result
    ```
 
-   (Use the username you set. If `izzy.local` doesn't resolve, see the "can't SSH"
-   entry in §11.)
+   Key-based auth is already configured; no password prompt. If `izzy.local`
+   doesn't resolve, see the "can't SSH" entry in §11.
 
 **DONE WHEN:** you get a shell prompt on the Pi over SSH — `izzy@izzy:~ $` — with no
 monitor attached.
@@ -718,7 +721,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 
 ### Session checklist (the gates and milestones, in bench order)
 
-- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `izzy@izzy.local`
+- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `ssh izzy` or `ssh izzy@izzy.local` (key-based auth)
 - [ ] **§2** Python + `gpiozero`/`lgpio` installed; lgpio factory confirmed, no
       `RPi.GPIO`; `pip install -e ".[dev]"` + `pytest` pass on the Pi
 - [ ] **§3** 🟢 **G — GPIO first light:** LED blinks via gpiozero+lgpio
@@ -741,7 +744,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 | Symptom | Likely cause → what to do |
 |---|---|
 | **Pi won't boot** (no green/activity LED, never appears) | Re-seat the microSD; re-flash Lite (§1); confirm the **27W PD** supply (a weak phone charger browns the Pi at boot); try a different USB-C cable. |
-| **Can't SSH / `izzy.local` won't resolve** | Wait the full ~90 s on first boot. Confirm SSH was enabled and the **Wi-Fi SSID + country** were set in the Imager (§1). Try the Pi's IP from your router instead of `.local`. Confirm laptop and Pi are on the **same network**. |
+| **Can't SSH / `izzy.local` won't resolve** | Wait the full ~90 s on first boot. Confirm SSH was enabled and the **Wi-Fi SSID + country** were set in the Imager (§1). Try `ssh izzy@<ip>` using the Pi's IP from your router if `.local` fails. Confirm laptop and Pi are on the **same network**. If SSH asks for a password, the key may not be installed — re-run `ssh-copy-id -i ~/.ssh/id_ed25519.pub izzy@izzy.local`. |
 | **`gpiozero` does nothing / pins dead, no error** | `RPi.GPIO` in the path — it **silently fails on Pi 5**. Re-run the §2 probes; ensure the **lgpio/native** factory is active and `RPi.GPIO` isn't imported. (`hardware.md` §5.) |
 | **Motors don't move** | Check **common ground** (NiMH GND ↔ Pi GND) first — the #1 omission. Confirm NiMH pack is charged and on VM; on TB6612FNG, **STBY must be high** (GPIO24); verify GPIO12/13/17/22 wiring against the §5 table. Motor spins backwards → swap that channel's two output leads. |
 | **Pi reboots / resets when motors move** | **Brownout** — motor stall spikes sagging the rail. This is **not** a software bug. Go to the **Gate E NO-GO recovery** (§6): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten leads, confirm NiMH (not alkaline), re-test. |
