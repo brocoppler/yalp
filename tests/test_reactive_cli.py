@@ -305,3 +305,113 @@ class TestCliRegistration:
         parser = build_parser()
         args = parser.parse_args(["reactive", "--backend", "fake"])
         assert args.backend == "fake"
+
+
+# ---------------------------------------------------------------------------
+# --detector is WIRED: run() builds a tracker of the chosen detector kind and
+# passes it to whichever backend it constructs (no cv2 needed — 'person'/'auto'
+# detectors construct lazily). Backends + the IPC server are replaced with fakes
+# so the loop never actually ticks and no socket/gpiozero is touched.
+# ---------------------------------------------------------------------------
+class _CaptureBackend:
+    """A stand-in backend that records its constructor kwargs (esp. ``tracker``)."""
+
+    last = None
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.mailbox = object()  # server is faked; it only needs *some* mailbox
+        type(self).last = self
+
+    def run(self, server=None, stop_event=None):
+        return None
+
+    def stop(self):
+        pass
+
+
+class _FakeServer:
+    """A no-op ReactiveServer replacement (never binds a real socket)."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def publish(self, state):
+        pass
+
+
+class TestDetectorWiring:
+    def _run(self, argv):
+        from yalp.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        return args.handler(args)
+
+    def test_fake_backend_gets_tracker_of_chosen_detector(self):
+        import yalp.contract.ipc as ipc
+        import yalp.reactive.fake_backend as fb
+        from yalp.reactive.person_tracker import DnnPersonDetector, PersonTracker
+
+        _CaptureBackend.last = None
+        with patch.object(fb, "FakeReactiveBackend", _CaptureBackend), \
+                patch.object(ipc, "ReactiveServer", _FakeServer):
+            rc = self._run([
+                "reactive", "--backend", "fake",
+                "--camera-source", "synthetic", "--port", "0",
+                "--detector", "person",
+            ])
+
+        assert rc == 0
+        tracker = _CaptureBackend.last.kwargs.get("tracker")
+        assert isinstance(tracker, PersonTracker), "tracker= not passed to the backend"
+        # 'person' -> the orientation-agnostic cv2.dnn body detector (built lazily).
+        assert isinstance(tracker._detector, DnnPersonDetector)
+
+    def test_real_backend_gets_tracker_and_imports_no_gpiozero(self):
+        import yalp.contract.ipc as ipc
+        import yalp.reactive.real_backend as rb
+        from yalp.reactive.person_tracker import AutoDetector, PersonTracker
+
+        saved = {k: sys.modules.pop(k) for k in list(sys.modules)
+                 if k.startswith("gpiozero")}
+        _CaptureBackend.last = None
+        try:
+            with patch.object(rb, "RealReactiveBackend", _CaptureBackend), \
+                    patch.object(ipc, "ReactiveServer", _FakeServer):
+                rc = self._run([
+                    "reactive", "--backend", "real",
+                    "--camera-source", "synthetic", "--port", "0",
+                    "--detector", "auto",
+                ])
+            assert rc == 0
+            assert "gpiozero" not in sys.modules, "gpiozero imported for a faked backend"
+            tracker = _CaptureBackend.last.kwargs.get("tracker")
+            assert isinstance(tracker, PersonTracker)
+            assert isinstance(tracker._detector, AutoDetector)
+        finally:
+            sys.modules.update(saved)
+
+    def test_default_detector_wires_a_tracker(self):
+        """Even with no --detector flag, a tracker is built (config default) and
+        passed — the backend never silently falls back to its lazy HOG default."""
+        import yalp.contract.ipc as ipc
+        import yalp.reactive.fake_backend as fb
+        from yalp.reactive.person_tracker import PersonTracker
+
+        _CaptureBackend.last = None
+        with patch.object(fb, "FakeReactiveBackend", _CaptureBackend), \
+                patch.object(ipc, "ReactiveServer", _FakeServer):
+            rc = self._run([
+                "reactive", "--backend", "fake",
+                "--camera-source", "synthetic", "--port", "0",
+            ])
+
+        assert rc == 0
+        assert isinstance(_CaptureBackend.last.kwargs.get("tracker"), PersonTracker)

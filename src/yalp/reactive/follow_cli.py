@@ -11,6 +11,7 @@ exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
     yalp follow --preview          # also show an OpenCV window (if a display exists)
     yalp follow --synthetic        # no-camera demo (synthetic frames; will report lost)
     yalp follow --benchmark        # print the SELECTED detector/tracker/FOLLOW fps baseline
+    yalp follow --fetch-model      # pre-stage the 'person' model into the cache, then exit
 
 DETECTOR (``--detector``): the default ``face`` (OpenCV's bundled Haar cascade) is
 reliable at DESK range, where a webcam frames only the user's head+shoulders — the
@@ -38,6 +39,13 @@ for the SELECTED detector's fps (run ``--benchmark --detector person`` for the
 cv2.dnn person-detector baseline — the Gate H candidate) and compares it to
 ``config.GATE_H_GO_HZ``. The Pi will be slower — the laptop fps is a CEILING, not
 the gate verdict; Gate H is the number measured on the Pi later.
+
+``--fetch-model`` PRE-STAGES the ``person`` detector's MobileNet-SSD model files
+into the cache (``config.FOLLOW_MODEL_CACHE_DIR``) and exits. Run it once while the
+machine is ONLINE so an offline robot never silently degrades to face-only: with
+the files already cached, ``--detector person`` loads them with no network. On
+failure it prints the same clear, hand-stage instructions the detector would and
+exits non-zero.
 """
 
 from __future__ import annotations
@@ -84,6 +92,17 @@ def add_parser(subparsers) -> None:
         ),
     )
     parser.add_argument(
+        "--fetch-model",
+        action="store_true",
+        help=(
+            "Pre-stage the 'person' detector model files into the cache "
+            "(config.FOLLOW_MODEL_CACHE_DIR) and exit. Run once while ONLINE so an "
+            "offline robot never silently degrades to face-only; prints the cache "
+            "path on success, or the hand-stage instructions and a non-zero exit on "
+            "failure."
+        ),
+    )
+    parser.add_argument(
         "--detector",
         choices=("face", "hog", "person", "auto"),
         default=None,  # resolved to config.FOLLOW_DETECTOR_DEFAULT ("face")
@@ -121,6 +140,8 @@ def run(args) -> int:
 
     source = "synthetic" if getattr(args, "synthetic", False) else "webcam"
     detector = getattr(args, "detector", None) or config.FOLLOW_DETECTOR_DEFAULT
+    if getattr(args, "fetch_model", False):
+        return _fetch_model()
     if getattr(args, "benchmark", False):
         return _benchmark(source=source, seconds=args.seconds or 4.0, detector=detector)
     return _live(
@@ -160,6 +181,38 @@ def _live(
         )
     finally:
         backend.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Pre-stage the 'person' detector model (offline-robot de-risk)
+# --------------------------------------------------------------------------- #
+def _fetch_model() -> int:
+    """Download+cache the ``person`` MobileNet-SSD model, then exit.
+
+    Returns 0 after the files are present in the cache (printing the cache path so
+    the operator knows exactly where they landed). On any failure — offline,
+    blocked mirror, partial write — it prints the SAME clear, hand-stage
+    instructions the detector itself would surface (filenames + cache path + source
+    URLs) and returns a non-zero exit code, so a scripted pre-stage step fails
+    loudly instead of a robot silently degrading to face-only in the field.
+    """
+    from pathlib import Path
+
+    from .person_tracker import ensure_dnn_model_files
+
+    try:
+        proto, model = ensure_dnn_model_files()
+    except Exception as exc:  # offline / blocked / partial write -> clear message
+        print(str(exc))
+        return 1
+
+    cache = Path(proto).parent
+    print("yalp follow --fetch-model — person detector model files are staged:")
+    print(f"  {proto}")
+    print(f"  {model}")
+    print(f"Cache path: {cache}")
+    print("Offline-ready: '--detector person' will now load with no network.")
+    return 0
 
 
 # --------------------------------------------------------------------------- #

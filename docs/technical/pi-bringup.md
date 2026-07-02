@@ -142,6 +142,10 @@ On a laptop the numbers are a **ceiling**, not the verdict (no NPU, synthetic
 camera) — bench says so explicitly. The real GO/NO-GO must be re-measured **on
 the Pi** with `--backend real`.
 
+Pre-stage the `person` detector's MobileNet-SSD model **while the Pi is online**
+with `yalp follow --fetch-model` (it downloads into `config.FOLLOW_MODEL_CACHE_DIR`
+and prints the path); otherwise an offline robot silently degrades to face-only.
+
 ### Integration (two loops, two machines)
 On the Pi, start the reactive layer driving real hardware and serving the IPC
 contract:

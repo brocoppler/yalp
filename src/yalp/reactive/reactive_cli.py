@@ -9,6 +9,7 @@ exposes ``add_parser(subparsers)`` and ``run(args) -> int`` and is listed in
     yalp reactive --port 9000            # custom port
     yalp reactive --hz 10                # lower tick rate
     yalp reactive --camera-source synthetic  # no-camera demo
+    yalp reactive --detector person      # FOLLOW body detector (front/back/side)
 
 Gpiozero is imported LAZILY inside ``run()`` only when ``--backend real`` is
 chosen, so importing this module never touches gpiozero or lgpio.
@@ -81,6 +82,7 @@ def run(args) -> int:
     """Handler for ``yalp reactive``. Returns a process exit code."""
     from .. import config
     from ..contract.ipc import ReactiveServer
+    from .follow_runner import build_follow_tracker
 
     host = getattr(args, "host", config.IPC_HOST)
     port = int(getattr(args, "port", config.IPC_PORT))
@@ -88,6 +90,15 @@ def run(args) -> int:
     camera_source = getattr(args, "camera_source", "webcam")
     detector = getattr(args, "detector", config.FOLLOW_DETECTOR_DEFAULT)
     backend_kind = getattr(args, "backend", "fake")
+
+    # Build the FOLLOW tracker for the chosen --detector up front and hand it to
+    # whichever backend we construct. Without this the backend would lazily build a
+    # default PersonTracker (HOG) on the first FOLLOW tick, silently ignoring
+    # --detector. ``build_follow_tracker`` returns None (falling back to that lazy
+    # default) only if the detector cannot be built at all — e.g. a broken OpenCV —
+    # so a bad build still runs FOLLOW (degrading to "lost") instead of crashing.
+    # cv2 is imported lazily inside the detector constructors, never at module load.
+    tracker = build_follow_tracker(detector)
 
     # Build the chosen backend — gpiozero is only imported here, when 'real' is
     # explicitly requested, so importing this module never touches gpiozero/lgpio.
@@ -97,6 +108,7 @@ def run(args) -> int:
         backend = RealReactiveBackend(
             camera_source=camera_source,
             tick_hz=hz,
+            tracker=tracker,
         )
     else:
         from .fake_backend import FakeReactiveBackend
@@ -104,6 +116,7 @@ def run(args) -> int:
         backend = FakeReactiveBackend(
             camera_source=camera_source,
             tick_hz=hz,
+            tracker=tracker,
         )
 
     # Share the backend's mailbox with the server so Intent lines land directly

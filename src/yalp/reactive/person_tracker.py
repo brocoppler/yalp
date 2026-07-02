@@ -43,11 +43,14 @@ and tests can inject a fake detector without touching hardware or heavy deps.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Protocol, Tuple
 
 from .. import config
+
+logger = logging.getLogger(__name__)
 
 Bbox = Tuple[int, int, int, int]  # (x, y, w, h) in original-frame pixels
 
@@ -422,28 +425,73 @@ class AutoDetector:
     caught by the cv2.dnn :class:`DnnPersonDetector`, so we try it FIRST. When it
     finds nobody (e.g. a desk-range close-up that frames only head+shoulders, which
     a whole-body detector can miss) we fall back to the cheap :class:`FaceDetector`.
-    Both are built lazily. If the person detector cannot load at all (offline / no
-    model file), we remember that and quietly run face-only thereafter — so FOLLOW
-    still works without the download instead of crashing.
+    Both are built lazily.
+
+    Failure handling is DELIBERATELY not trigger-happy. A single person-detector
+    exception is often TRANSIENT (a momentary decode hiccup, a one-off bad frame),
+    and permanently disabling the room-range body detector on the first stumble is a
+    silent, in-the-field quality downgrade to face-only (desk-range) tracking. So:
+
+      * every person-detector exception is logged at WARNING (with the exception),
+      * we only DOWNGRADE to face-only after :attr:`max_consecutive_failures`
+        failures **in a row** (default 3), announced once, loudly, at WARNING,
+      * any SUCCESSFUL person-detector run resets the streak to zero.
+
+    The failure streak (:attr:`person_failure_count`) and the latched
+    :attr:`person_downgraded` flag are public so operators and tests can observe the
+    degradation instead of guessing at it.
     """
+
+    #: Consecutive person-detector failures tolerated before downgrading to face-only.
+    max_consecutive_failures = 3
 
     def __init__(self, *, detect_width: int = config.FOLLOW_DETECT_WIDTH) -> None:
         self.detect_width = int(detect_width)
         self._person: Optional[DnnPersonDetector] = None
-        self._person_failed = False
         self._face: Optional[FaceDetector] = None
+        #: Number of consecutive person-detector failures (reset on any success).
+        self.person_failure_count = 0
+        #: True once the person detector has been permanently disabled (downgraded).
+        self.person_downgraded = False
 
     def detect(self, frame) -> List[Detection]:
-        if not self._person_failed:
+        if not self.person_downgraded:
             try:
                 if self._person is None:
                     self._person = DnnPersonDetector()
                 people = self._person.detect(frame)
+            except Exception as exc:
+                # Do NOT disable on a single (often transient) failure — count
+                # consecutive misses and only downgrade after a sustained streak.
+                self.person_failure_count += 1
+                logger.warning(
+                    "AutoDetector: person detector failed "
+                    "(%d/%d consecutive): %s: %s",
+                    self.person_failure_count,
+                    self.max_consecutive_failures,
+                    type(exc).__name__,
+                    exc,
+                )
+                if self.person_failure_count >= self.max_consecutive_failures:
+                    # Latch the downgrade and announce it ONCE, loudly. From here
+                    # on the person branch is skipped, so this never repeats.
+                    self.person_downgraded = True
+                    logger.warning(
+                        "AutoDetector: DOWNGRADING to face-only detection — the "
+                        "person (body) detector failed %d times in a row and is now "
+                        "disabled for the rest of this run. FOLLOW will track only "
+                        "head+shoulders at desk range (no front/back/side body "
+                        "tracking). Last error: %s: %s",
+                        self.person_failure_count,
+                        type(exc).__name__,
+                        exc,
+                    )
+            else:
+                # A successful person-detector run clears the failure streak so an
+                # isolated blip never accumulates toward a downgrade.
+                self.person_failure_count = 0
                 if people:
                     return people
-            except Exception:
-                # No model / offline / bad build -> stop trying, use face only.
-                self._person_failed = True
         if self._face is None:
             self._face = FaceDetector(detect_width=self.detect_width)
         return self._face.detect(frame)

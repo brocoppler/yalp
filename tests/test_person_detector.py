@@ -20,12 +20,16 @@ ever loading a net (construction is lazy).
 
 from __future__ import annotations
 
+import argparse
+import logging
+
 import numpy as np
 import pytest
 
 from yalp import config
 from yalp.reactive.follow import FollowController, REASON_REACHED
 from yalp.reactive.person_tracker import (
+    AutoDetector,
     Detection,
     DnnPersonDetector,
     PersonTracker,
@@ -248,3 +252,209 @@ def test_person_detected_from_behind_still_tracks():
     """
     dec = _steer_from_net([(PERSON, 0.85, 0.40, 0.20, 0.62, 0.85)])
     assert dec.target_visible is True
+
+
+# --------------------------------------------------------------------------- #
+# AutoDetector: warn -> retry -> downgrade (NOT trigger-happy) + reset-on-success
+#
+# The person detector must NOT be permanently disabled on a single (often
+# transient) exception. Every failure is logged at WARNING; only a sustained streak
+# (max_consecutive_failures, default 3) downgrades to face-only, announced once and
+# loudly; and any successful person-detector run resets the streak. Fakes are
+# injected onto the private ``_person`` / ``_face`` slots so no cv2 / model / camera
+# is touched.
+# --------------------------------------------------------------------------- #
+class _RaisingPersonDetector:
+    """A person detector whose ``detect`` always raises (records call count)."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.calls = 0
+
+    def detect(self, _frame):
+        self.calls += 1
+        raise self._exc
+
+
+class _CannedDetector:
+    """A detector that returns a fixed list of Detections (records call count)."""
+
+    def __init__(self, result) -> None:
+        self._result = list(result)
+        self.calls = 0
+
+    def detect(self, _frame):
+        self.calls += 1
+        return list(self._result)
+
+
+class _ScriptedPersonDetector:
+    """Follows a per-call script: an Exception raises, a list is returned."""
+
+    def __init__(self, script) -> None:
+        self._script = list(script)
+        self.i = 0
+
+    def detect(self, _frame):
+        action = self._script[self.i]
+        self.i += 1
+        if isinstance(action, Exception):
+            raise action
+        return list(action)
+
+
+def _auto_with_fakes(person, face_result=((1, 1, 2, 2), 0.5)):
+    """Build an AutoDetector with injected fake person + face detectors."""
+    det = AutoDetector()
+    det._person = person
+    det._face = _CannedDetector([Detection(face_result[0], face_result[1])])
+    return det
+
+
+def test_autodetector_starts_healthy():
+    det = AutoDetector()
+    assert det.person_failure_count == 0
+    assert det.person_downgraded is False
+
+
+def test_autodetector_warns_and_retries_before_downgrading(caplog):
+    """First two failures warn + fall back to FACE but do NOT downgrade; the third
+    downgrades exactly once, loudly, and then never calls the person detector again."""
+    person = _RaisingPersonDetector(RuntimeError("no model file / offline"))
+    det = _auto_with_fakes(person)
+    frame = _frame()
+
+    with caplog.at_level(logging.WARNING, logger="yalp.reactive.person_tracker"):
+        for expected in (1, 2):
+            out = det.detect(frame)
+            assert det.person_failure_count == expected
+            assert det.person_downgraded is False
+            # Fell back to the injected face detector (not empty).
+            assert out and out[0].bbox == (1, 1, 2, 2)
+
+        # Third consecutive failure -> latch the downgrade.
+        det.detect(frame)
+        assert det.person_failure_count == 3
+        assert det.person_downgraded is True
+
+        # Once downgraded, the person detector is skipped entirely on later ticks.
+        calls_at_downgrade = person.calls
+        det.detect(frame)
+        det.detect(frame)
+        assert person.calls == calls_at_downgrade  # no further attempts
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    # 3 per-failure warnings + exactly one loud downgrade line.
+    assert len(warnings) == 4
+    downgrade_lines = [r for r in warnings if "DOWNGRAD" in r.getMessage().upper()]
+    assert len(downgrade_lines) == 1
+    # The warnings include the exception text (so the field log is actionable).
+    assert any("offline" in r.getMessage() for r in warnings)
+
+
+def test_autodetector_success_resets_failure_streak():
+    """A successful person-detector run clears the streak, so isolated blips never
+    accumulate to a downgrade."""
+    # fail, fail, SUCCEED(empty), fail, fail  -> never 3 failures in a row.
+    person = _ScriptedPersonDetector(
+        [RuntimeError("x"), RuntimeError("x"), [], RuntimeError("x"), RuntimeError("x")]
+    )
+    det = _auto_with_fakes(person)
+    frame = _frame()
+
+    det.detect(frame)
+    assert det.person_failure_count == 1
+    det.detect(frame)
+    assert det.person_failure_count == 2
+    det.detect(frame)  # success (empty) resets the streak
+    assert det.person_failure_count == 0
+    assert det.person_downgraded is False
+    det.detect(frame)
+    assert det.person_failure_count == 1
+    det.detect(frame)
+    assert det.person_failure_count == 2
+    # Two-then-reset-then-two is never three in a row -> still healthy.
+    assert det.person_downgraded is False
+
+
+def test_autodetector_returns_person_detections_without_touching_face():
+    """When the person detector finds people, they are returned and the FACE
+    fallback is never consulted; the streak stays zero."""
+    people = [Detection((5, 5, 30, 30), 0.8)]
+    person = _CannedDetector(people)
+    det = _auto_with_fakes(person)
+    face = det._face
+
+    out = det.detect(_frame())
+    assert out == people
+    assert face.calls == 0
+    assert det.person_failure_count == 0
+    assert det.person_downgraded is False
+
+
+# --------------------------------------------------------------------------- #
+# `yalp follow --fetch-model`: pre-stage the person model (offline-robot de-risk)
+#
+# Uses a MONKEYPATCHED downloader (never the network) and a temp cache dir (never
+# the real ~/.cache), so both the happy path and the offline-failure path are
+# exercised hermetically.
+# --------------------------------------------------------------------------- #
+def _follow_args(argv):
+    from yalp.reactive import follow_cli
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers()
+    follow_cli.add_parser(sub)
+    return parser.parse_args(argv)
+
+
+def test_follow_cli_accepts_fetch_model_flag():
+    args = _follow_args(["follow", "--fetch-model"])
+    assert args.fetch_model is True
+    assert _follow_args(["follow"]).fetch_model is False
+
+
+def test_follow_fetch_model_happy_path(monkeypatch, tmp_path, capsys):
+    import yalp.reactive.person_tracker as pt
+    from yalp.reactive import follow_cli
+
+    # Redirect the cache to a temp dir and fake the network with a local write.
+    monkeypatch.setattr(pt.config, "FOLLOW_MODEL_CACHE_DIR", str(tmp_path))
+
+    def fake_download(_url, dest):
+        from pathlib import Path
+
+        Path(dest).write_bytes(b"stub-model-bytes")
+
+    monkeypatch.setattr(pt, "_download_file", fake_download)
+
+    rc = follow_cli.run(_follow_args(["follow", "--fetch-model"]))
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    # Prints the cache path so the operator knows where the files landed.
+    assert str(tmp_path) in out
+    # The files were actually staged into the cache.
+    assert (tmp_path / config.FOLLOW_DNN_PROTOTXT_NAME).exists()
+    assert (tmp_path / config.FOLLOW_DNN_CAFFEMODEL_NAME).exists()
+
+
+def test_follow_fetch_model_failure_path(monkeypatch, tmp_path, capsys):
+    import yalp.reactive.person_tracker as pt
+    from yalp.reactive import follow_cli
+
+    monkeypatch.setattr(pt.config, "FOLLOW_MODEL_CACHE_DIR", str(tmp_path))
+
+    def boom(_url, _dest):
+        raise OSError("network down")
+
+    monkeypatch.setattr(pt, "_download_file", boom)
+
+    rc = follow_cli.run(_follow_args(["follow", "--fetch-model"]))
+    out = capsys.readouterr().out
+
+    # Non-zero exit + the existing clear, hand-stage instructions.
+    assert rc == 1
+    assert config.FOLLOW_DNN_PROTOTXT_NAME in out
+    assert config.FOLLOW_DNN_CAFFEMODEL_NAME in out
+    assert str(tmp_path) in out
