@@ -18,8 +18,11 @@ dependencies (anthropic / opencv / numpy) installed — see tests/test_smoke.py.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 # --- .env hydration (optional) ----------------------------------------------
 # If python-dotenv is installed and a .env file is present, load it so local dev
@@ -33,12 +36,100 @@ except Exception:  # pragma: no cover - dotenv is optional
     pass
 
 
+# --- Robust env-override accessors ------------------------------------------
+# CRITICAL: this module is imported at startup by EVERY yalp process, including
+# the reactive safety loop. A malformed override (e.g. YALP_TICK_BUDGET_MS=fast)
+# must NOT raise during ``import yalp.config`` and kill the process — a bad env
+# var has to DEGRADE to the built-in default, not prevent the safety loop from
+# starting. These helpers make every YALP_* parse fail-soft: absent -> default
+# silently (unchanged behavior); present-but-malformed -> WARNING naming the
+# variable, the bad value, and the default, then return the default.
+
+# Recognized truthy/falsy spellings for boolean-ish overrides. Matches the
+# historical truthy set exactly ("1"/"true"/"yes"); the falsy set is the
+# symmetric complement so a clearly-intended "0"/"false"/"no" is silent while
+# genuine garbage warns.
+_ENV_TRUE_STRINGS: tuple[str, ...] = ("1", "true", "yes")
+_ENV_FALSE_STRINGS: tuple[str, ...] = ("0", "false", "no")
+
+
+def _env_str(name: str, default: str) -> str:
+    """Return env var ``name`` (verbatim) or ``default`` if unset.
+
+    Strings cannot be "malformed", so this never warns; it exists so every
+    YALP_* override flows through one uniform accessor.
+    """
+    val = os.environ.get(name)
+    return default if val is None else val
+
+
+def _env_int(name: str, default: int) -> int:
+    """Return env var ``name`` parsed as ``int``, or ``default``.
+
+    Absent -> ``default`` silently. Present-but-unparseable -> WARNING + default.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid value for %s=%r (expected an integer); using default %r.",
+            name, raw, default,
+        )
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Return env var ``name`` parsed as ``float``, or ``default``.
+
+    Absent -> ``default`` silently. Present-but-unparseable -> WARNING + default.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid value for %s=%r (expected a float); using default %r.",
+            name, raw, default,
+        )
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Return env var ``name`` parsed as ``bool``, or ``default``.
+
+    Truthy: 1/true/yes; falsy: 0/false/no (case-insensitive, surrounding
+    whitespace ignored). Absent or empty -> ``default`` silently. Any other
+    non-empty value -> WARNING + default.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    val = raw.strip().lower()
+    if val == "":
+        return default
+    if val in _ENV_TRUE_STRINGS:
+        return True
+    if val in _ENV_FALSE_STRINGS:
+        return False
+    logger.warning(
+        "Invalid value for %s=%r (expected a boolean: 1/true/yes or "
+        "0/false/no); using default %r.",
+        name, raw, default,
+    )
+    return default
+
+
 # --- Canonical constants from the specs -------------------------------------
 # Model routing tiers (software-spec.md §3). Env-overridable so the operator can
 # pin different model IDs without editing source.
-MODEL_FAST: str = os.environ.get("YALP_MODEL_FAST", "claude-haiku-4-5")
-MODEL_MID: str = os.environ.get("YALP_MODEL_MID", "claude-sonnet-4-6")
-MODEL_BIG: str = os.environ.get("YALP_MODEL_BIG", "claude-opus-4-8")
+MODEL_FAST: str = _env_str("YALP_MODEL_FAST", "claude-haiku-4-5")
+MODEL_MID: str = _env_str("YALP_MODEL_MID", "claude-sonnet-4-6")
+MODEL_BIG: str = _env_str("YALP_MODEL_BIG", "claude-opus-4-8")
 
 # Graceful-degrade light floor for follow / come-here (lux). Below this, vision
 # tracking is unreliable and the system should degrade rather than drive blind.
@@ -70,7 +161,7 @@ FOLLOW_DETECT_INTERVAL_TICKS: int = 5
 # prefers the person detector at range and falls back to face for close-ups.
 # Env-overridable for quick A/B. NOTE: the eventual robot defaults to "person";
 # "face" is the desk-only convenience default here.
-FOLLOW_DETECTOR_DEFAULT: str = os.environ.get("YALP_FOLLOW_DETECTOR", "face")
+FOLLOW_DETECTOR_DEFAULT: str = _env_str("YALP_FOLLOW_DETECTOR", "face")
 
 # --- Orientation-agnostic DNN person detector (Gate H candidate) -------------
 # A REAL person detector that fires from ANY angle (front/back/side) at room
@@ -80,36 +171,32 @@ FOLLOW_DETECTOR_DEFAULT: str = os.environ.get("YALP_FOLLOW_DETECTOR", "face")
 # gitignored); they are downloaded once on first use and cached under
 # FOLLOW_MODEL_CACHE_DIR. All values are env-overridable so the operator can pin
 # a mirror or pre-seed the cache. See person_tracker.DnnPersonDetector.
-FOLLOW_MODEL_CACHE_DIR: str = os.environ.get(
+FOLLOW_MODEL_CACHE_DIR: str = _env_str(
     "YALP_MODEL_CACHE_DIR", os.path.expanduser("~/.cache/yalp/models")
 )
 # Pascal-VOC class index for "person" in the MobileNet-SSD output.
-FOLLOW_DNN_PERSON_CLASS_ID: int = int(
-    os.environ.get("YALP_DNN_PERSON_CLASS_ID", "15")
-)
+FOLLOW_DNN_PERSON_CLASS_ID: int = _env_int("YALP_DNN_PERSON_CLASS_ID", 15)
 # Square network input edge (MobileNet-SSD expects 300x300).
-FOLLOW_DNN_INPUT_SIZE: int = int(os.environ.get("YALP_DNN_INPUT_SIZE", "300"))
+FOLLOW_DNN_INPUT_SIZE: int = _env_int("YALP_DNN_INPUT_SIZE", 300)
 # Minimum detection confidence (0..1) to accept a person box.
-FOLLOW_DNN_CONFIDENCE: float = float(
-    os.environ.get("YALP_DNN_CONFIDENCE", "0.5")
-)
+FOLLOW_DNN_CONFIDENCE: float = _env_float("YALP_DNN_CONFIDENCE", 0.5)
 # Cached model filenames (what to drop into FOLLOW_MODEL_CACHE_DIR by hand if the
 # automatic download is blocked / offline).
-FOLLOW_DNN_PROTOTXT_NAME: str = os.environ.get(
+FOLLOW_DNN_PROTOTXT_NAME: str = _env_str(
     "YALP_DNN_PROTOTXT_NAME", "MobileNetSSD_deploy.prototxt"
 )
-FOLLOW_DNN_CAFFEMODEL_NAME: str = os.environ.get(
+FOLLOW_DNN_CAFFEMODEL_NAME: str = _env_str(
     "YALP_DNN_CAFFEMODEL_NAME", "MobileNetSSD_deploy.caffemodel"
 )
 # Stable, reputable download sources for the MobileNet-SSD deploy files (prototxt
 # + caffemodel from the same repo, so the layer names match). Env-overridable so
 # the operator can point at an internal mirror.
-FOLLOW_DNN_PROTOTXT_URL: str = os.environ.get(
+FOLLOW_DNN_PROTOTXT_URL: str = _env_str(
     "YALP_DNN_PROTOTXT_URL",
     "https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/"
     "MobileNetSSD_deploy.prototxt",
 )
-FOLLOW_DNN_CAFFEMODEL_URL: str = os.environ.get(
+FOLLOW_DNN_CAFFEMODEL_URL: str = _env_str(
     "YALP_DNN_CAFFEMODEL_URL",
     "https://github.com/djmv/MobilNet_SSD_opencv/raw/master/"
     "MobileNetSSD_deploy.caffemodel",
@@ -215,28 +302,28 @@ WATCHDOG_TIMEOUT_MS: int = 100
 # **stops issuing model calls** and falls back to IDLE/local behavior (exactly
 # the §5 outage path) rather than retrying forever. This is a ceiling the
 # operator sets here, separate from any per-call ``max_tokens``. Env-overridable.
-BUDGET_MAX_CALLS: int = int(os.environ.get("YALP_BUDGET_MAX_CALLS", "40"))
-BUDGET_MAX_TOKENS: int = int(os.environ.get("YALP_BUDGET_MAX_TOKENS", "200000"))
+BUDGET_MAX_CALLS: int = _env_int("YALP_BUDGET_MAX_CALLS", 40)
+BUDGET_MAX_TOKENS: int = _env_int("YALP_BUDGET_MAX_TOKENS", 200000)
 
 # --- Voice input / Speech-to-Text (STT) configuration -----------------------
 # Audio source: 'microphone' for live capture, 'file' for a WAV path, or
 # 'synthetic' for tests / offline pipelines that inject audio without hardware.
-VOICE_SOURCE: str = os.environ.get("YALP_VOICE_SOURCE", "microphone")  # 'microphone' | 'file' | 'synthetic'
+VOICE_SOURCE: str = _env_str("YALP_VOICE_SOURCE", "microphone")  # 'microphone' | 'file' | 'synthetic'
 # PCM audio parameters used when capturing from a microphone or decoding a WAV.
 # Sample rate (Hz); 16000 is recommended for Whisper.
-VOICE_SAMPLE_RATE: int = int(os.environ.get("YALP_VOICE_SAMPLE_RATE", "16000"))
+VOICE_SAMPLE_RATE: int = _env_int("YALP_VOICE_SAMPLE_RATE", 16000)
 # Number of audio channels (1 = mono, 2 = stereo); Whisper expects mono.
-VOICE_CHANNELS: int = int(os.environ.get("YALP_VOICE_CHANNELS", "1"))
+VOICE_CHANNELS: int = _env_int("YALP_VOICE_CHANNELS", 1)
 # How many seconds of audio to capture per utterance (microphone mode only).
-VOICE_RECORD_SECONDS: float = float(os.environ.get("YALP_VOICE_RECORD_SECONDS", "5"))
+VOICE_RECORD_SECONDS: float = _env_float("YALP_VOICE_RECORD_SECONDS", 5.0)
 # Path to the WAV file used when VOICE_SOURCE='file'. Empty string means unset.
-VOICE_AUDIO_FILE: str = os.environ.get("YALP_VOICE_AUDIO_FILE", "")  # WAV path when VOICE_SOURCE='file'
+VOICE_AUDIO_FILE: str = _env_str("YALP_VOICE_AUDIO_FILE", "")  # WAV path when VOICE_SOURCE='file'
 # Speech-to-text backend: 'faster-whisper' for local on-device inference, or
 # 'fake' for deterministic unit tests that return canned text.
-STT_BACKEND: str = os.environ.get("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whisper' | 'fake'
+STT_BACKEND: str = _env_str("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whisper' | 'fake'
 # Whisper model size when STT_BACKEND='faster-whisper'. 'tiny' and 'base' run
 # comfortably on laptop-class CPUs (trade speed vs accuracy).
-STT_MODEL: str = os.environ.get("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whisper
+STT_MODEL: str = _env_str("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whisper
 
 
 # --- Reactive hardware GPIO pin map (BCM numbering; hardware.md) ---
@@ -250,25 +337,30 @@ STT_MODEL: str = os.environ.get("YALP_STT_MODEL", "tiny")  # tiny|base for faste
 #   STBY      = TB6612FNG standby active-LOW; DRV8833 ties nSLEEP HIGH so unused.
 # Ultrasonic: HC-SR04 (5 V tolerant level-shifter in series with ECHO line).
 
-MOTOR_LEFT_PWM_PIN: int = int(os.environ.get("YALP_MOTOR_LEFT_PWM_PIN", "12"))   # hardware PWM0, left speed / AIN1
-MOTOR_LEFT_DIR_PIN: int = int(os.environ.get("YALP_MOTOR_LEFT_DIR_PIN", "17"))   # plain GPIO, left dir / AIN2
-MOTOR_RIGHT_PWM_PIN: int = int(os.environ.get("YALP_MOTOR_RIGHT_PWM_PIN", "13")) # hardware PWM1, right speed / BIN1
-MOTOR_RIGHT_DIR_PIN: int = int(os.environ.get("YALP_MOTOR_RIGHT_DIR_PIN", "22")) # plain GPIO, right dir / BIN2
+MOTOR_LEFT_PWM_PIN: int = _env_int("YALP_MOTOR_LEFT_PWM_PIN", 12)   # hardware PWM0, left speed / AIN1
+MOTOR_LEFT_DIR_PIN: int = _env_int("YALP_MOTOR_LEFT_DIR_PIN", 17)   # plain GPIO, left dir / AIN2
+MOTOR_RIGHT_PWM_PIN: int = _env_int("YALP_MOTOR_RIGHT_PWM_PIN", 13) # hardware PWM1, right speed / BIN1
+MOTOR_RIGHT_DIR_PIN: int = _env_int("YALP_MOTOR_RIGHT_DIR_PIN", 22) # plain GPIO, right dir / BIN2
 # TB6612FNG STBY pin (active-LOW). DRV8833 ties nSLEEP high permanently, so for
 # that driver this pin is unused (None). The hardware layer checks MOTOR_DRIVER_KIND
-# before driving this pin.
-_stby_raw: str = os.environ.get("YALP_MOTOR_STBY_PIN", "24")
-MOTOR_STBY_PIN: int | None = None if _stby_raw.strip().lower() in ("none", "") else int(_stby_raw)
+# before driving this pin. The literal "none"/"" spellings select None; any other
+# value is parsed as an int pin number (fail-soft to the default 24 via _env_int).
+_stby_raw: str = _env_str("YALP_MOTOR_STBY_PIN", "24")
+MOTOR_STBY_PIN: int | None = (
+    None
+    if _stby_raw.strip().lower() in ("none", "")
+    else _env_int("YALP_MOTOR_STBY_PIN", 24)
+)
 
-ULTRASONIC_TRIG_PIN: int = int(os.environ.get("YALP_ULTRASONIC_TRIG_PIN", "5"))
-ULTRASONIC_ECHO_PIN: int = int(os.environ.get("YALP_ULTRASONIC_ECHO_PIN", "6"))
+ULTRASONIC_TRIG_PIN: int = _env_int("YALP_ULTRASONIC_TRIG_PIN", 5)
+ULTRASONIC_ECHO_PIN: int = _env_int("YALP_ULTRASONIC_ECHO_PIN", 6)
 
 # Motor driver kind: 'drv8833' (default, nSLEEP tied HIGH) or 'tb6612fng' (STBY used).
-MOTOR_DRIVER_KIND: str = os.environ.get("YALP_MOTOR_DRIVER", "drv8833")
+MOTOR_DRIVER_KIND: str = _env_str("YALP_MOTOR_DRIVER", "drv8833")
 
 # PWM carrier frequency for the motor speed inputs (Hz). 1 kHz is a good default
 # for most DC gear-motors; go higher (e.g. 20 kHz) to eliminate audible whine.
-MOTOR_PWM_FREQUENCY_HZ: int = int(os.environ.get("YALP_MOTOR_PWM_HZ", "1000"))
+MOTOR_PWM_FREQUENCY_HZ: int = _env_int("YALP_MOTOR_PWM_HZ", 1000)
 
 # HC-SR04 ultrasonic sensor timing constants.
 ULTRASONIC_MAX_POLL_HZ: float = 15.0      # max safe polling rate; HC-SR04 needs ≥60 ms between pings
@@ -279,8 +371,8 @@ SPEED_OF_SOUND_MPS: float = 343.0         # m/s at ~20 °C; distance = (echo_tim
 # Per-channel direction invert flags. Set True if a motor is wired in reverse
 # (turns the "wrong" way for a given PWM/dir signal). Env values are truthy strings
 # ("1", "true", "yes") — anything else is False.
-MOTOR_LEFT_INVERT: bool = os.environ.get("YALP_MOTOR_LEFT_INVERT", "").strip().lower() in ("1", "true", "yes")
-MOTOR_RIGHT_INVERT: bool = os.environ.get("YALP_MOTOR_RIGHT_INVERT", "").strip().lower() in ("1", "true", "yes")
+MOTOR_LEFT_INVERT: bool = _env_bool("YALP_MOTOR_LEFT_INVERT", False)
+MOTOR_RIGHT_INVERT: bool = _env_bool("YALP_MOTOR_RIGHT_INVERT", False)
 
 
 @dataclass(frozen=True)
