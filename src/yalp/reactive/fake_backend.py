@@ -83,7 +83,16 @@ class FakeReactiveBackend(ReactiveTickCore):
         tick_hz: float = config.REACTIVE_TICK_HZ,
         tracker: Optional[object] = None,
         follow_controller: Optional[FollowController] = None,
+        observer: Optional[object] = None,
+        close_observer: bool = False,
     ) -> None:
+        # Observer seam (telemetry / any recorder). Injected so tests and library
+        # users can pass their own or leave it None. ``close_observer`` = this
+        # backend OWNS the observer's lifecycle and closes it on ``stop()`` (set
+        # when a run loop auto-creates the recorder); an injected, caller-owned
+        # observer is never closed by the backend.
+        self._observer = observer
+        self._close_observer = bool(close_observer)
         self.mailbox = mailbox or IntentMailbox()
         self.safe_stop_threshold_m = safe_stop_threshold_m
         self.max_speed_mps = max(1e-3, max_speed_mps)
@@ -148,6 +157,7 @@ class FakeReactiveBackend(ReactiveTickCore):
         if self._camera_started:
             self._camera.stop()
             self._camera_started = False
+        self._close_owned_observer()
 
     # -- obstacle simulation (test / demo hooks) -----------------------------
     def set_sensor(self, distance_m: float, known: bool = True) -> None:

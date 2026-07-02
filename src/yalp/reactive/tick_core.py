@@ -118,15 +118,48 @@ class ReactiveTickCore(ReactiveBackend):
     def stop_motors(self) -> None:
         """Halt the wheels. Default: a no-op (pure simulation)."""
 
-    # -- observer seam (no-op defaults; exceptions never break a tick) -------
+    # -- observer seam -------------------------------------------------------
+    # The default hooks forward to an INJECTED observer (``self._observer``, set by
+    # the subclass ``__init__``; ``None`` = no observer). Injection — not
+    # subclassing — is the extension point, so tests and library users can pass
+    # their own recorder or disable it (the telemetry-logging task's consumer). All
+    # three are invoked through :meth:`_safe_notify`, so an observer that raises can
+    # NEVER break the safety tick.
     def on_intent_adopted(self, intent: Intent) -> None:
-        """Called after a fresh intent is adopted (preempting the current mode)."""
+        """Forward a freshly-adopted intent to the injected observer (if any)."""
+        observer = getattr(self, "_observer", None)
+        if observer is not None:
+            observer.on_intent_adopted(intent)
 
     def on_motor_command(self, left: float, right: float) -> None:
-        """Called with every motor command issued this tick (``(0, 0)`` on a halt)."""
+        """Forward every motor command (``(0, 0)`` on a halt) to the observer."""
+        observer = getattr(self, "_observer", None)
+        if observer is not None:
+            observer.on_motor_command(left, right)
 
     def on_tick_complete(self, state: RobotState) -> None:
-        """Called with the published snapshot at the end of every tick."""
+        """Forward the published end-of-tick snapshot to the observer."""
+        observer = getattr(self, "_observer", None)
+        if observer is not None:
+            observer.on_tick_complete(state)
+
+    def _close_owned_observer(self) -> None:
+        """Close the observer IFF this backend owns its lifecycle (best-effort).
+
+        A run loop that auto-creates the recorder sets ``close_observer=True`` so
+        teardown flushes it; an injected, caller-owned observer is left untouched.
+        Never raises during teardown.
+        """
+        if not getattr(self, "_close_observer", False):
+            return
+        observer = getattr(self, "_observer", None)
+        close = getattr(observer, "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception:  # pragma: no cover - teardown must not raise
+            pass
 
     @staticmethod
     def _safe_notify(callback, *args) -> None:

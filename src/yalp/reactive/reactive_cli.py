@@ -82,6 +82,7 @@ def run(args) -> int:
     """Handler for ``yalp reactive``. Returns a process exit code."""
     from .. import config
     from ..contract.ipc import ReactiveServer
+    from ..telemetry import create_logger_from_env
     from .follow_runner import build_follow_tracker
 
     host = getattr(args, "host", config.IPC_HOST)
@@ -100,6 +101,12 @@ def run(args) -> int:
     # cv2 is imported lazily inside the detector constructors, never at module load.
     tracker = build_follow_tracker(detector)
 
+    # Flight recorder (yalp.telemetry): record what the robot saw + did as JSONL
+    # so future mapping/memory work has a corpus from day one. Injected into the
+    # backend (so it drives the tick-core observer hooks + the watchdog trip edge);
+    # None when YALP_TELEMETRY=0. We own its lifecycle and close it in finally.
+    telemetry = create_logger_from_env()
+
     # Build the chosen backend — gpiozero is only imported here, when 'real' is
     # explicitly requested, so importing this module never touches gpiozero/lgpio.
     if backend_kind == "real":
@@ -109,6 +116,7 @@ def run(args) -> int:
             camera_source=camera_source,
             tick_hz=hz,
             tracker=tracker,
+            observer=telemetry,
         )
     else:
         from .fake_backend import FakeReactiveBackend
@@ -117,6 +125,7 @@ def run(args) -> int:
             camera_source=camera_source,
             tick_hz=hz,
             tracker=tracker,
+            observer=telemetry,
         )
 
     # Share the backend's mailbox with the server so Intent lines land directly
@@ -142,6 +151,10 @@ def run(args) -> int:
         stop_event.set()
         backend.stop()
         server.stop()
+        # Flush + join the telemetry writer AFTER the loop/teardown so late events
+        # are captured (idempotent; a no-op when telemetry is disabled).
+        if telemetry is not None:
+            telemetry.close()
 
     return 0
 

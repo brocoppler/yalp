@@ -314,6 +314,42 @@ FOLLOW_LOST_GRACE_TICKS: int = lost_grace_ticks(REACTIVE_TICK_HZ)
 # tick's heartbeat is older than this (software-spec.md §2.6).
 WATCHDOG_TIMEOUT_MS: int = 100
 
+# --- Telemetry / flight recorder (mapping & memory de-risk) -----------------
+# The reactive layer records what the robot SAW and DID as JSONL "flight recorder"
+# events (yalp.telemetry) so future SLAM / memory work has a stable, replayable
+# corpus from day one. Enabled by default; ``YALP_TELEMETRY=0`` disables it wholly
+# (no writer thread, no files). All knobs are env-overridable via the fail-soft
+# accessors so a bad value degrades to the default rather than breaking a run.
+#
+# Storage follows the XDG Base Directory spec: events land under
+# ``$XDG_STATE_HOME/yalp/telemetry`` (falling back to ``~/.local/state/...``),
+# size-capped and rotated (default 10 MB × 5 backups). The queue is BOUNDED — the
+# tick only ever enqueues; on overflow events are DROPPED (and counted) rather
+# than ever blocking the safety loop.
+def _default_telemetry_dir() -> str:
+    """Default telemetry directory, honoring ``$XDG_STATE_HOME`` (XDG spec).
+
+    Per the XDG Base Directory spec, ``$XDG_STATE_HOME`` (when set and non-empty)
+    is the base for persistent user *state*; otherwise it defaults to
+    ``~/.local/state``. Telemetry lands in ``<base>/yalp/telemetry``. Read at
+    call time so tests can point it at a tmp dir via the environment.
+    """
+    xdg = os.environ.get("XDG_STATE_HOME")
+    base = xdg if xdg else os.path.expanduser("~/.local/state")
+    return os.path.join(base, "yalp", "telemetry")
+
+
+TELEMETRY_ENABLED: bool = _env_bool("YALP_TELEMETRY", True)
+TELEMETRY_DIR: str = _env_str("YALP_TELEMETRY_DIR", _default_telemetry_dir())
+TELEMETRY_MAX_BYTES: int = _env_int("YALP_TELEMETRY_MAX_BYTES", 10 * 1024 * 1024)
+TELEMETRY_BACKUP_COUNT: int = _env_int("YALP_TELEMETRY_BACKUP_COUNT", 5)
+# Rate cap (Hz) for the periodic full state_sample events. state_transition and
+# watchdog_trip events are ALWAYS logged regardless of this cap.
+TELEMETRY_SAMPLE_HZ: float = _env_float("YALP_TELEMETRY_SAMPLE_HZ", 2.0)
+# Bounded in-memory queue depth between the tick (producer) and the writer thread
+# (consumer). Overflow drops events (counted + summarized), never blocks the tick.
+TELEMETRY_QUEUE_MAX: int = _env_int("YALP_TELEMETRY_QUEUE_MAX", 10000)
+
 # Hard per-session deliberative budget (software-spec.md §3). A WiFi retry-storm
 # or a runaway model escalation must not silently run up cost: the agent tracks
 # cumulative model calls and tokens for a session and, once either cap is hit,
@@ -444,6 +480,12 @@ class Config:
     safe_stop_threshold_m: float = SAFE_STOP_THRESHOLD_M
     reactive_tick_hz: float = REACTIVE_TICK_HZ
     watchdog_timeout_ms: int = WATCHDOG_TIMEOUT_MS
+    telemetry_enabled: bool = TELEMETRY_ENABLED
+    telemetry_dir: str = TELEMETRY_DIR
+    telemetry_max_bytes: int = TELEMETRY_MAX_BYTES
+    telemetry_backup_count: int = TELEMETRY_BACKUP_COUNT
+    telemetry_sample_hz: float = TELEMETRY_SAMPLE_HZ
+    telemetry_queue_max: int = TELEMETRY_QUEUE_MAX
     budget_max_calls: int = BUDGET_MAX_CALLS
     budget_max_tokens: int = BUDGET_MAX_TOKENS
     voice_source: str = VOICE_SOURCE
@@ -534,6 +576,12 @@ __all__ = [
     "SAFE_STOP_THRESHOLD_M",
     "REACTIVE_TICK_HZ",
     "WATCHDOG_TIMEOUT_MS",
+    "TELEMETRY_ENABLED",
+    "TELEMETRY_DIR",
+    "TELEMETRY_MAX_BYTES",
+    "TELEMETRY_BACKUP_COUNT",
+    "TELEMETRY_SAMPLE_HZ",
+    "TELEMETRY_QUEUE_MAX",
     "BUDGET_MAX_CALLS",
     "BUDGET_MAX_TOKENS",
     "VOICE_SOURCE",

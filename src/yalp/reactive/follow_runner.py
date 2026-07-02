@@ -48,7 +48,13 @@ def build_follow_tracker(detector: str):
         return None
 
 
-def build_follow_backend(*, source: str, detector: str, hz: float):
+# Sentinel for ``build_follow_backend(observer=...)``: distinguishes "caller did
+# not pass one -> auto-create the default flight recorder" from an explicit
+# ``observer=None`` (telemetry off for this run).
+_CREATE_DEFAULT_OBSERVER = object()
+
+
+def build_follow_backend(*, source: str, detector: str, hz: float, observer=_CREATE_DEFAULT_OBSERVER):
     """Build + start a FakeReactiveBackend already in FOLLOW mode.
 
     Constructs the tracker for ``detector``, builds the backend on ``source`` at
@@ -56,12 +62,32 @@ def build_follow_backend(*, source: str, detector: str, hz: float):
     {"target": "nearest_person"})`` that ``enter_follow_mode`` / "follow me" does.
     The caller owns ``stop()`` (so the backend can be reused / torn down on its
     own schedule).
+
+    Telemetry (the flight recorder): by default this auto-creates one from the
+    environment (:func:`yalp.telemetry.create_logger_from_env` — ``None`` when
+    ``YALP_TELEMETRY=0``) and hands the backend OWNERSHIP of it, so ``stop()``
+    flushes and closes it. Pass an explicit ``observer=`` (including ``None``) to
+    inject your own recorder / disable it — tests and library users stay in
+    control and nothing is written unless they opt in.
     """
     from ..contract.messages import Intent, Mode
     from .fake_backend import FakeReactiveBackend
 
+    owns_observer = False
+    if observer is _CREATE_DEFAULT_OBSERVER:
+        from ..telemetry import create_logger_from_env
+
+        observer = create_logger_from_env()
+        owns_observer = observer is not None
+
     tracker = build_follow_tracker(detector)
-    backend = FakeReactiveBackend(camera_source=source, tick_hz=hz, tracker=tracker)
+    backend = FakeReactiveBackend(
+        camera_source=source,
+        tick_hz=hz,
+        tracker=tracker,
+        observer=observer,
+        close_observer=owns_observer,
+    )
     backend.start()
     # Enter FOLLOW (this is exactly what `enter_follow_mode` / "follow me" does).
     backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=1))

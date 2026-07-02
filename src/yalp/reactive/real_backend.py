@@ -113,7 +113,16 @@ class RealReactiveBackend(ReactiveTickCore):
         calibration: Optional[MotorCalibration] = None,
         calibration_path: Optional[object] = None,
         watchdog: Optional[MotorWatchdog] = None,
+        observer: Optional[object] = None,
+        close_observer: bool = False,
     ) -> None:
+        # Observer seam (telemetry / any recorder). Injected so tests and library
+        # users can pass their own or leave it None. ``close_observer`` = this
+        # backend OWNS the observer and closes it on teardown; an injected,
+        # caller-owned observer is never closed by the backend. The observer is
+        # also wired to the watchdog's trip edge in ``run()``.
+        self._observer = observer
+        self._close_observer = bool(close_observer)
         self.mailbox = mailbox or IntentMailbox()
         self.safe_stop_threshold_m = safe_stop_threshold_m
 
@@ -261,6 +270,22 @@ class RealReactiveBackend(ReactiveTickCore):
         # (The independent watchdog is the backend-owned ``self._watchdog``, armed
         # by start() above and heartbeated from inside tick() — no local one here.)
         self.start_perception()
+        # Record watchdog trips in telemetry (if an observer is wired). The
+        # callback fires once per trip EDGE on the (backend-owned) watchdog thread
+        # and only enqueues, so it can never stall the safety net; the watchdog
+        # also guards it against exceptions. It targets ``self._watchdog`` — the
+        # backend-owned safety net armed by start() above and heartbeated from
+        # inside tick() — so there is no second, loop-local watchdog to keep in
+        # sync.
+        observer = getattr(self, "_observer", None)
+        if observer is not None and hasattr(observer, "on_watchdog_trip"):
+            def _on_watchdog_trip() -> None:
+                observer.on_watchdog_trip(
+                    timeout_ms=self._watchdog.timeout_s * 1000.0,
+                    trip_count=self._watchdog.trip_count,
+                )
+
+            self._watchdog.on_trip = _on_watchdog_trip
         try:
             while stop_event is None or not stop_event.is_set():
                 t0 = time.monotonic()
@@ -356,6 +381,10 @@ class RealReactiveBackend(ReactiveTickCore):
                 action()
             except Exception:  # pragma: no cover - best effort during teardown
                 pass
+        # 4. Flush + close the telemetry recorder IFF we own it (injected,
+        #    caller-owned observers are left alone). Last, so late teardown events
+        #    are captured before the writer thread is joined.
+        self._close_owned_observer()
 
 
 __all__ = ["RealReactiveBackend"]

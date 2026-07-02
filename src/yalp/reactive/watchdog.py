@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from .. import config
 
@@ -71,8 +71,14 @@ class MotorWatchdog:
         self,
         motor_driver: "MotorDriver",
         timeout_ms: int = config.WATCHDOG_TIMEOUT_MS,
+        on_trip: Optional[Callable[[], None]] = None,
     ) -> None:
         self._motor_driver = motor_driver
+        #: Optional callback fired ONCE per trip edge (for telemetry). It runs on
+        #: the watchdog thread after the motors are zeroed; it must be cheap and
+        #: non-blocking (a bounded-queue enqueue) — it is guarded so a raising
+        #: callback can never break the safety net. Settable after construction.
+        self.on_trip = on_trip
         # Guard against a nonsensical timeout (a zero/negative timeout would trip
         # instantly and continuously); keep it at least 1ms.
         self.timeout_s = max(1e-3, float(timeout_ms) / 1000.0)
@@ -194,6 +200,14 @@ class MotorWatchdog:
                 "motor watchdog TRIPPED: heartbeat stale > %.0fms; motors zeroed",
                 self.timeout_s * 1000.0,
             )
+            # Notify the trip observer (telemetry) once per edge, guarded so a bad
+            # callback can never break the safety net.
+            cb = self.on_trip
+            if cb is not None:
+                try:
+                    cb()
+                except Exception:  # pragma: no cover - safety path must not raise
+                    logger.exception("motor watchdog: on_trip callback raised")
 
 
 __all__ = ["MotorWatchdog"]
