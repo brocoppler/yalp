@@ -137,16 +137,70 @@ def test_run_follow_loop_synthetic_source_owns_ticking():
 # --------------------------------------------------------------------------- #
 # Headless safety
 # --------------------------------------------------------------------------- #
-def test_gui_available_is_boolean_and_never_raises():
-    # On headless CI this is False; the only contract we need is "never raises".
-    assert isinstance(gui_available(), bool)
+class _RecordingCv2:
+    """A fake ``cv2`` that RECORDS any window-probe call instead of making it.
+
+    On headless Linux, real full ``opencv-python`` would ``qFatal → abort()``
+    (a native C++ SIGABRT) inside ``namedWindow`` — uncatchable by Python. The
+    only safe behavior is to never call it, so we assert ``calls`` stays empty.
+    Recording lets us prove "never invoked" WITHOUT simulating an actual
+    (uncatchable) abort. See docs/technical/pi-validation-2026-07.md §9 issue #1.
+    """
+
+    WINDOW_NORMAL = 0
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def namedWindow(self, *args, **kwargs):
+        self.calls.append("namedWindow")
+
+    def destroyWindow(self, *args, **kwargs):
+        self.calls.append("destroyWindow")
 
 
-def test_preview_true_is_headless_safe():
-    """preview=True must not require a display: it falls back gracefully."""
+def _force_headless_linux(monkeypatch):
+    """Force the Linux 'no display' path and reset the memoized GUI result.
+
+    Installs and returns a recording fake ``cv2`` in ``sys.modules`` so ANY probe
+    attempt would be captured (we then assert it stayed empty).
+    """
+    import sys
+
+    from yalp.reactive import follow_runner
+
+    monkeypatch.setattr(follow_runner.platform, "system", lambda: "Linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    # Clear the memoized result so the display pre-check actually runs.
+    monkeypatch.setattr(follow_runner, "_GUI_AVAILABLE", None)
+    fake = _RecordingCv2()
+    monkeypatch.setitem(sys.modules, "cv2", fake)
+    return fake
+
+
+def test_gui_available_is_boolean_and_never_raises(monkeypatch):
+    """Headless Linux (no DISPLAY/WAYLAND_DISPLAY): gui_available() returns a bool,
+    never raises, is False, and NEVER touches a cv2 window function.
+
+    The pre-check must short-circuit BEFORE any probe, because the full-opencv Qt
+    ``abort()`` on a headless box is native and uncatchable (pi-validation §9 #1).
+    """
+    fake = _force_headless_linux(monkeypatch)
+    result = gui_available()
+    assert isinstance(result, bool)
+    assert result is False
+    assert fake.calls == []  # the uncatchable probe was never invoked
+
+
+def test_preview_true_is_headless_safe(monkeypatch):
+    """preview=True must not require a display: on headless Linux it falls back
+    gracefully AND never invokes the cv2 window probe (which would abort())."""
+    fake = _force_headless_linux(monkeypatch)
     stop = threading.Event()
     backend = _StubBackend(stop)
     rc = run_follow_loop(
         backend, preview=True, owns_ticking=True, stop_event=stop, hz=1000.0
     )
-    assert rc == 0  # no crash even though no GUI exists in CI
+    assert rc == 0  # no crash — falls back to printed status
+    assert fake.calls == []  # gui_available()'s pre-check kept us away from cv2

@@ -22,6 +22,8 @@ mic, or display.
 
 from __future__ import annotations
 
+import os
+import platform
 import threading
 import time
 from typing import Optional
@@ -196,25 +198,55 @@ def run_follow_loop(
 _GUI_AVAILABLE: Optional[bool] = None
 
 
+def _display_present() -> bool:
+    """True only when it is SAFE to probe cv2 for a GUI window.
+
+    This gate exists because full ``opencv-python`` bundles a Qt that ships only
+    the ``xcb`` plugin: on a headless Linux box (the robot) ``cv2.namedWindow()``
+    calls ``qFatal → abort()`` — a *native C++* ``abort()`` (SIGABRT). That is
+    uncatchable by Python's ``except Exception`` (and ``QT_QPA_PLATFORM=offscreen``
+    doesn't help — the bundled Qt has no offscreen plugin), so the ONLY safe move
+    is to never touch a cv2 window function unless a display exists. See
+    docs/technical/pi-validation-2026-07.md §9 issue #1.
+
+    On Linux, a usable display means ``DISPLAY`` (X11) or ``WAYLAND_DISPLAY``
+    (Wayland) is set and non-empty. On macOS ('Darwin') a GUI session is normally
+    present and there is no such env var, so we allow the (catchable) probe to run
+    and decide — preserving laptop preview behavior.
+    """
+    if platform.system() == "Linux":
+        return bool(
+            os.environ.get("DISPLAY", "").strip()
+            or os.environ.get("WAYLAND_DISPLAY", "").strip()
+        )
+    # macOS (and other desktop OSes): assume a GUI session; let the probe decide.
+    return True
+
+
 def gui_available() -> bool:
     """Best-effort check that a cv2 GUI backend is usable. Never raises.
 
     Returns ``False`` on headless builds (``opencv-python-headless``) / no display
-    so callers fall back to printed status. The probe creates and immediately
-    destroys a window once and the result is memoized.
+    so callers fall back to printed status. On Linux with no display we short-
+    circuit to ``False`` BEFORE touching any cv2 window function, because the
+    full-opencv Qt ``abort()`` there is native and uncatchable (see
+    :func:`_display_present`). Otherwise the probe creates and immediately destroys
+    a window once (catchable failures fall back to ``False``). The result is
+    memoized.
     """
     global _GUI_AVAILABLE
     if _GUI_AVAILABLE is not None:
         return _GUI_AVAILABLE
     ok = False
-    try:
-        import cv2
+    if _display_present():
+        try:
+            import cv2
 
-        cv2.namedWindow("__yalp_gui_probe__", cv2.WINDOW_NORMAL)
-        cv2.destroyWindow("__yalp_gui_probe__")
-        ok = True
-    except Exception:
-        ok = False
+            cv2.namedWindow("__yalp_gui_probe__", cv2.WINDOW_NORMAL)
+            cv2.destroyWindow("__yalp_gui_probe__")
+            ok = True
+        except Exception:
+            ok = False
     _GUI_AVAILABLE = ok
     return ok
 

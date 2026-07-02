@@ -17,11 +17,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MIN_PYTHON_MINOR=11
 
-echo "==> [1/7] Updating package lists and upgrading installed packages..."
+echo "==> [1/8] Updating package lists and upgrading installed packages..."
 sudo apt update
 sudo apt full-upgrade -y
 
-echo "==> [2/7] Installing system packages..."
+echo "==> [2/8] Installing system packages..."
 # python3-lgpio: the GPIO backend (used via --system-site-packages, NOT pip).
 # swig + python3-dev: fallback so a source build of lgpio could still succeed
 # if the apt package is ever unavailable.
@@ -39,7 +39,7 @@ sudo apt install -y \
     libgl1 \
     libglib2.0-0
 
-echo "==> [3/7] Checking Python version (>= 3.${MIN_PYTHON_MINOR} required)..."
+echo "==> [3/8] Checking Python version (>= 3.${MIN_PYTHON_MINOR} required)..."
 PYTHON_BIN="$(command -v python3)"
 PYTHON_MINOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.minor)')"
 PYTHON_MAJOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.major)')"
@@ -49,7 +49,7 @@ if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR"
 fi
 echo "    Python $("$PYTHON_BIN" --version) — OK"
 
-echo "==> [4/7] Creating virtual environment with system site-packages (if absent)..."
+echo "==> [4/8] Creating virtual environment with system site-packages (if absent)..."
 VENV_DIR="${REPO_ROOT}/.venv"
 PYVENV_CFG="${VENV_DIR}/pyvenv.cfg"
 if [ ! -d "${VENV_DIR}" ]; then
@@ -59,7 +59,7 @@ else
     echo "    ${VENV_DIR} already exists — skipping creation"
 fi
 
-echo "==> [5/7] Ensuring the venv can see system site-packages (for apt lgpio)..."
+echo "==> [5/8] Ensuring the venv can see system site-packages (for apt lgpio)..."
 # Repair an older/sealed venv in place rather than forcing a recreate.
 if [ -f "${PYVENV_CFG}" ]; then
     if grep -q '^include-system-site-packages = false' "${PYVENV_CFG}"; then
@@ -73,7 +73,7 @@ if [ -f "${PYVENV_CFG}" ]; then
     fi
 fi
 
-echo "==> [6/7] Activating venv and installing yalp with [pi] and [dev] extras..."
+echo "==> [6/8] Activating venv and installing yalp with [pi] and [dev] extras..."
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 echo "    Active Python: $(python --version)"
@@ -81,7 +81,27 @@ pip install --upgrade pip --quiet
 pip install -e "${REPO_ROOT}[pi]"
 pip install -e "${REPO_ROOT}[dev]"
 
-echo "==> [7/7] Verifying the GPIO stack imports..."
+echo "==> [7/8] Swapping OpenCV for the HEADLESS build (Qt-abort fix)..."
+# pyproject pins full `opencv-python`, whose bundled Qt ships ONLY the `xcb`
+# plugin. On a headless machine (the robot) `cv2.namedWindow()` hits
+# `qFatal -> abort()` — a NATIVE C++ abort (SIGABRT) that Python's
+# `except Exception` cannot catch, so it kills the whole process (it aborted the
+# test suite and would hard-crash `yalp follow --preview`). `opencv-python-headless`
+# has no GUI/Qt, so window calls raise a CATCHABLE exception instead and the
+# headless fallback works. (`QT_QPA_PLATFORM=offscreen` does NOT help — the
+# bundled Qt has no offscreen plugin.) The editable install above (re)pulls the
+# full wheel as a core dependency, so we swap it here every run. See
+# docs/technical/pi-validation-2026-07.md §9 issue #1.
+# Idempotent: skip cleanly when headless is already the only OpenCV installed.
+if pip show opencv-python-headless >/dev/null 2>&1 && ! pip show opencv-python >/dev/null 2>&1; then
+    echo "    opencv-python-headless already installed (full build absent) — skipping"
+else
+    pip uninstall -y opencv-python >/dev/null 2>&1 || true
+    pip install opencv-python-headless
+    echo "    Installed opencv-python-headless (removed full opencv-python if present)"
+fi
+
+echo "==> [8/8] Verifying the GPIO stack imports..."
 python - <<'PYEOF'
 import sys
 try:

@@ -45,6 +45,14 @@ hardware stack by hand with:
 pip install -e '.[pi]'
 ```
 
+> **OpenCV on the Pi is headless.** `pi_setup.sh` swaps the full `opencv-python`
+> (pinned in `pyproject.toml`) for **`opencv-python-headless`** after the editable
+> install, because the full build's bundled Qt aborts (native, uncatchable
+> `SIGABRT`) when it opens a window with no display. Preview windows
+> (`yalp follow --preview`) are therefore a **laptop feature**; on the headless
+> robot follow prints readable status lines instead. See
+> [pi-validation-2026-07.md](./pi-validation-2026-07.md) §9 issue #1.
+
 Then **prove the GPIO stack is correct** before touching motors:
 
 ```
