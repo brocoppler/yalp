@@ -12,10 +12,13 @@ Design rules
   platform by :func:`_tts_binary`, and either choice can be pointed at a
   different voice / rate, but the defaults are sane.
 * **Headless-safe / graceful degradation.** On a machine with no usable TTS
-  binary (a CI box, a Pi before ``espeak-ng`` is installed) :func:`speak`
-  becomes a no-op — it logs the missing capability ONCE and returns.
-  :func:`speak` NEVER raises; a broken voice must never wedge the agent loop or
-  crash a command.
+  binary (a CI box, a Pi before ``espeak-ng`` is installed, the assembled robot
+  before its speaker is bought) :func:`speak` becomes a no-op — it logs a
+  WARNING ONCE (so a dropped spoken answer leaves a trace at default log levels)
+  and returns. :func:`speak` NEVER raises; a broken voice must never wedge the
+  agent loop or crash a command. For a reply that must always land somewhere,
+  route through :class:`yalp.responder.ConsoleResponder` (text-first) with this
+  as an additive :class:`yalp.responder.TtsResponder` plug-in.
 * **Fire-and-forget.** The TTS binary is spawned with :func:`subprocess.Popen`
   and we do NOT wait for it to finish: a long sentence keeps the loop responsive
   instead of blocking it for the duration of the speech. (We accept that we
@@ -171,9 +174,13 @@ def speak(text: str, *, voice: Optional[str] = None, rate: Optional[int] = None)
 
     if not tts_available():
         if not _warned_unavailable:
-            logger.info(
+            # WARNING (not info): on the assembled, speakerless robot this is the
+            # ONLY trace that a spoken answer was dropped, so it must be visible at
+            # default log levels. Logged once per process to avoid spamming the loop.
+            logger.warning(
                 "TTS unavailable (no '%s' binary) — speech disabled; "
-                "yalp will stay silent.",
+                "yalp will stay silent. Route answers through a text channel "
+                "(yalp.responder.ConsoleResponder) so replies are never lost.",
                 _tts_binary(),
             )
             _warned_unavailable = True

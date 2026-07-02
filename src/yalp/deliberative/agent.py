@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from .. import config, llm
+from ..responder import ConsoleResponder, Responder
 from ..contract.abilities import (
     ABILITY_BY_NAME,
     ANTHROPIC_TOOLS,
@@ -120,15 +121,23 @@ class Agent:
         max_retries: int = 3,
         retry_backoff: float = 0.2,
         explore_legs: int = 2,
+        responder: Optional[Responder] = None,
         speak: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.client = client
         self.reactive = reactive
         self.describe_scene = describe_scene
-        # Optional spoken-OUTPUT callback (the robot's voice). Default OFF: when
-        # None, the ``speak`` ability only prints/records as before. The CLI
-        # threads in ``voice.speak`` when ``--speak`` is passed. This is additive
-        # — the printed transcript is unchanged whether or not speech is enabled.
+        # The output CHANNEL the robot's user-facing answers are delivered
+        # through (yalp.responder). Defaults to ConsoleResponder so a reply always
+        # lands SOMEWHERE greppable even on a speakerless robot; the CLI injects a
+        # CompositeResponder(Console, Tts) under --speak, and a future
+        # RemoteResponder drops in the same way. This is the seam that replaces
+        # the old ad-hoc ``voice.speak`` poke.
+        self.responder: Responder = responder if responder is not None else ConsoleResponder()
+        # Legacy spoken-OUTPUT callback (superseded by a TtsResponder). Kept for
+        # back-compat: when set it vocalizes model lines exactly as before; the
+        # CLI no longer wires it (speech now flows through the responder). Default
+        # OFF — additive, and the printed transcript is unchanged either way.
         self._speak = speak
         self.budget = budget if budget is not None else Budget()
         self.tools = tools if tools is not None else ANTHROPIC_TOOLS
@@ -147,8 +156,13 @@ class Agent:
         self._user_text = ""
         self._transcript: list[TranscriptEntry] = []
         # Texts already spoken this turn, so identical narration + speak-tool text
-        # (or a repeated line) is vocalized at most once (no double-speak).
+        # (or a repeated line) is vocalized at most once (no double-speak) via the
+        # legacy ``speak`` callback.
         self._spoken: set[str] = set()
+        # Answers already delivered through the responder this turn — same
+        # no-repeat guard for the answer CHANNEL, kept separate from ``_spoken``
+        # so the two output paths never entangle.
+        self._answered: set[str] = set()
 
     # -- public API ----------------------------------------------------------
     def run_turn(self, user_text: str) -> list[TranscriptEntry]:
@@ -162,6 +176,7 @@ class Agent:
         self._user_text = user_text or ""
         self._transcript = []
         self._spoken = set()
+        self._answered = set()
         messages: list[dict] = [self._build_user_turn(self._user_text)]
 
         for _step in range(self.max_steps):
@@ -453,17 +468,36 @@ class Agent:
     def _record(self, kind: str, text: str, **data: Any) -> TranscriptEntry:
         entry = TranscriptEntry(kind=kind, text=text, data=data)
         self._transcript.append(entry)
-        # Voice is additive and reliable: speak the model's OWN words/answers —
-        # the "model" lines shown in the transcript (narration, scene
-        # descriptions, the speak tool, the final report) — never routing "note"
-        # lines or raw tool calls. No-op unless --speak wired a callback; dedup
-        # guards against double-speak.
+        # User-facing OUTPUT is exactly the model's OWN words/answers — the
+        # "model" lines shown in the transcript (narration, scene descriptions,
+        # the speak tool, the final report) — never routing "note" lines or raw
+        # tool calls. Deliver those through the injected responder (always at
+        # least the console) so a reply can never vanish, and also feed the legacy
+        # speak callback for back-compat. Both dedup against repeats this turn.
         if kind == "model":
+            self._deliver_answer(text)
             self._vocalize(text)
         return entry
 
     def _note(self, text: str, **data: Any) -> TranscriptEntry:
         return self._record("note", text, **data)
+
+    def _deliver_answer(self, text: str) -> None:
+        """Deliver one user-facing answer through the injected responder.
+
+        Best-effort by design: an output channel must never wedge the loop, so
+        any responder failure is swallowed here (the ConsoleResponder default and
+        CompositeResponder already isolate their own failures — this is just a
+        final belt-and-braces). Identical text is delivered at most once per turn.
+        """
+        body = (text or "").strip()
+        if not body or body in self._answered:
+            return  # already delivered this turn — don't repeat the same answer.
+        self._answered.add(body)
+        try:
+            self.responder.respond(body, kind="answer")
+        except Exception:  # noqa: BLE001 - answer delivery is best-effort, never fatal
+            pass
 
     def _vocalize(self, text: str) -> None:
         """Speak ``text`` aloud via the injected callback (no-op when disabled).

@@ -82,10 +82,12 @@ def add_parser(subparsers) -> None:
         "--speak",
         action="store_true",
         help=(
-            "Let the robot SPEAK its words out loud — its narration, scene "
-            "descriptions, the 'speak' tool, and the final report (macOS 'say'; "
-            "silent no-op without it). The printed transcript is unchanged; voice "
-            "is additive. Default off so nothing makes surprise noise."
+            "ALSO speak the robot's words out loud — its narration, scene "
+            "descriptions, the 'speak' tool, and the final report — by adding a "
+            "TTS channel (macOS 'say' / 'espeak-ng') alongside the console. Voice "
+            "is additive: answers always print regardless, and without a TTS "
+            "binary the speech channel just warns once and falls through (nothing "
+            "is lost). Default off so nothing makes surprise noise."
         ),
     )
     parser.add_argument(
@@ -196,24 +198,27 @@ def run(args) -> int:
     server.wait_for_client(2.0)
 
     describe = _make_describe(backend)
-    # Spoken OUTPUT (default OFF): thread voice.speak into the agent only when
-    # --speak is passed, so the robot vocalizes its narration / scene
-    # descriptions / speak tool / final report (mirrors how `yalp see` wires
-    # voice). Headless-safe — voice.speak never raises and no-ops without a 'say'
-    # binary.
-    speak_enabled = bool(getattr(args, "speak", False))
-    speak_fn = None
-    if speak_enabled:
-        from .. import voice
+    # Answer delivery goes through a Responder (yalp.responder) so a reply always
+    # lands SOMEWHERE. Text-first: ConsoleResponder is the always-available
+    # default. --speak fans the same answers out to a TtsResponder as well —
+    # CompositeResponder(Console, Tts) — so the robot vocalizes its narration /
+    # scene descriptions / speak tool / final report ON TOP of the console copy.
+    # Headless-safe: if no 'say'/'espeak-ng' binary exists the TtsResponder warns
+    # ONCE and falls through, and the console copy is never lost.
+    from ..responder import CompositeResponder, ConsoleResponder, TtsResponder
 
-        speak_fn = voice.speak
+    speak_enabled = bool(getattr(args, "speak", False))
+    if speak_enabled:
+        responder = CompositeResponder(ConsoleResponder(), TtsResponder())
+    else:
+        responder = ConsoleResponder()
 
     agent = Agent(
         client=None,  # real LLM client built lazily by llm.call_with_tools
         reactive=client,
         describe_scene=describe,
         max_steps=args.steps,
-        speak=speak_fn,
+        responder=responder,
     )
 
     # Resolve the command: positional words take precedence over --command.

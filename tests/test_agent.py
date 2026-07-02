@@ -285,6 +285,76 @@ def test_agent_does_not_double_speak_identical_text(harness):
     assert speak.said.count("Mission complete.") == 1
 
 
+# --- answers flow through the injected Responder (yalp.responder) -------------
+class FakeResponder:
+    """A no-op answer channel that records every (text, kind) it delivers."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+
+    def respond(self, text, *, kind="answer"):
+        self.calls.append((text, kind))
+
+
+def test_agent_answers_flow_through_responder(harness):
+    # The model narrates, calls a tool, then gives a final answer with no tool.
+    client = ScriptedClient([
+        [_text("Driving forward now."), _tool("drive", distance_m=0.5, speed=1.0)],
+        [_text("I drove forward."), _tool("speak", text="All clear ahead.")],
+        [_text("Final report: the path is clear.")],
+    ])
+    responder = FakeResponder()
+    agent = Agent(client=client, reactive=harness.client,
+                  describe_scene=RecordingDescribe(), responder=responder)
+
+    agent.run_turn("drive forward and report")
+
+    # Every user-facing model line was delivered through the responder as an
+    # "answer" — narration, the speak-tool text, AND the final report.
+    answers = [text for (text, kind) in responder.calls if kind == "answer"]
+    assert "Driving forward now." in answers
+    assert "I drove forward." in answers
+    assert "All clear ahead." in answers
+    assert "Final report: the path is clear." in answers
+    # ONLY the model's words flow through — never routing notes or raw tool calls.
+    delivered = {text for (text, _kind) in responder.calls}
+    note_texts = {e.text for e in agent._transcript if e.kind == "note"}
+    tool_texts = {e.text for e in agent._transcript if e.kind == "tool"}
+    assert not (delivered & note_texts)
+    assert not (delivered & tool_texts)
+    # Every delivery is tagged with a valid kind (the answer channel contract).
+    assert all(kind == "answer" for (_text, kind) in responder.calls)
+
+
+def test_agent_defaults_to_console_responder(harness):
+    """With no responder injected, the agent still delivers answers (to console)."""
+    from yalp.responder import ConsoleResponder
+
+    client = ScriptedClient([[_text("Done.")]])
+    agent = Agent(client=client, reactive=harness.client,
+                  describe_scene=RecordingDescribe())
+
+    assert isinstance(agent.responder, ConsoleResponder)
+    # The default console channel prints the answer with its greppable prefix.
+    agent.run_turn("status?")
+
+
+def test_agent_does_not_double_deliver_identical_answer(harness):
+    # Same line narrated, spoken via tool, and repeated: delivered exactly once.
+    client = ScriptedClient([
+        [_text("Mission complete."), _tool("speak", text="Mission complete.")],
+        [_text("Mission complete.")],
+    ])
+    responder = FakeResponder()
+    agent = Agent(client=client, reactive=harness.client,
+                  describe_scene=RecordingDescribe(), responder=responder)
+
+    agent.run_turn("do the thing")
+
+    delivered = [t for (t, _k) in responder.calls]
+    assert delivered.count("Mission complete.") == 1
+
+
 # --- 5. collision / BLOCKED is surfaced; the agent does not reverse ----------
 def test_blocked_state_surfaced_and_no_blind_reverse():
     backend = FakeReactiveBackend(tick_hz=50.0, camera_source="synthetic")

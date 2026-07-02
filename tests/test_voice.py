@@ -91,6 +91,24 @@ def test_speak_is_noop_when_tts_unavailable(monkeypatch):
     voice.speak("anybody home?")
 
 
+def test_speak_warns_once_when_unavailable(monkeypatch, caplog):
+    import logging
+
+    _force_platform(monkeypatch, "Linux")
+    monkeypatch.setattr(voice.tts, "tts_available", lambda: False)
+    # Reset the once-per-process guard so this test is order-independent.
+    monkeypatch.setattr(voice.tts, "_warned_unavailable", False)
+
+    with caplog.at_level(logging.WARNING, logger="yalp.voice"):
+        voice.speak("first")
+        voice.speak("second")
+
+    # A dropped spoken answer leaves a WARNING trace — but only ONCE per process.
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "TTS unavailable" in warnings[0].message
+
+
 def test_speak_never_raises_on_spawn_failure(monkeypatch):
     monkeypatch.setattr(voice.tts, "tts_available", lambda: True)
 
