@@ -271,7 +271,11 @@ end to end on the laptop ("real eyes, fake wheels"), and **the full suite — 54
   no hardware required. Optional voice deps: `pip install -e ".[voice]"`; see
   [docs/technical/audio.md](docs/technical/audio.md).
 
-**Honest caveats:** `RealReactiveBackend` (real GPIO motors + HC-SR04) is **fully implemented and laptop-tested** — the tick loop, collision-stop, motor drive paths, and `MotorWatchdog` are all wired in; what remains is connecting the physical motors and confirming behavior on real hardware (motors not yet wired). On macOS a cosmetic objc "libavdevice
+**Honest caveats:** `RealReactiveBackend` (real GPIO motors + HC-SR04) is **fully
+implemented and laptop-tested** — the tick loop, collision-stop safety override, motor
+translation/drive paths, and `MotorWatchdog` integration are all wired in; what remains
+is physically wiring the motors and confirming behavior on real hardware, so it awaits
+on-hardware confirmation (motors not yet wired). On macOS a cosmetic objc "libavdevice
 implemented in both cv2 and av" warning may print (transcription unaffected). Interaction
 is fixed-duration push-to-talk; voice-activity-detection and a "hey Yalp" wake-word are
 future upgrades.
