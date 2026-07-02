@@ -1,5 +1,7 @@
-# Runtime dependencies for yalp. Mirrors [project.dependencies] in pyproject.toml.
-# For an editable dev install (preferred), use:  pip install -e ".[dev]"
+# Convenience mirror of [project.dependencies] in pyproject.toml — pyproject.toml is authoritative.
+# Optional extras ([pi], [voice], [dev], etc.) are intentionally not listed here; install via:
+#   pip install -e ".[voice]"   # voice input/output deps
+#   pip install -e ".[dev]"     # dev + test deps (preferred for local work)
 anthropic
 opencv-python
 pillow

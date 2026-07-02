@@ -50,7 +50,7 @@ cp .env.example .env
 
 # 4. Sanity-check the install
 yalp --help        # shows all available commands
-pytest             # 243 tests, all should pass
+pytest             # full suite (437 tests as of 2026-07) — all should pass
 ```
 
 ## Commands
@@ -255,7 +255,7 @@ Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
 *Annotated build overview — labels the deliberative-loop (cloud), the vision/follow reactive layer, and the 0.30 m collision-stop threshold.*
 
 **The laptop "brain" is COMPLETE** — the full voice → follow → voice-stop loop runs
-end to end on the laptop ("real eyes, fake wheels"), and **243 tests pass**:
+end to end on the laptop ("real eyes, fake wheels"), and **the full suite — 437 tests as of 2026-07 — runs hardware-free**:
 
 - `yalp see` — single-frame vision: webcam → Claude → spoken/typed scene description.
 - `yalp agent` — deliberative loop (Claude) driving abilities against the reactive
@@ -271,8 +271,7 @@ end to end on the laptop ("real eyes, fake wheels"), and **243 tests pass**:
   no hardware required. Optional voice deps: `pip install -e ".[voice]"`; see
   [docs/technical/audio.md](docs/technical/audio.md).
 
-**Honest caveats:** `RealReactiveBackend` (real GPIO motors + HC-SR04) is still a STUB —
-on-robot wheels/sensor are not implemented yet. On macOS a cosmetic objc "libavdevice
+**Honest caveats:** `RealReactiveBackend` (real GPIO motors + HC-SR04) is **fully implemented and laptop-tested** — the tick loop, collision-stop, motor drive paths, and `MotorWatchdog` are all wired in; what remains is connecting the physical motors and confirming behavior on real hardware (motors not yet wired). On macOS a cosmetic objc "libavdevice
 implemented in both cv2 and av" warning may print (transcription unaffected). Interaction
 is fixed-duration push-to-talk; voice-activity-detection and a "hey Yalp" wake-word are
 future upgrades.

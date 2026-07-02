@@ -134,4 +134,5 @@ YALP_STT_BACKEND=fake yalp agent --listen
 
 - Same faster-whisper backend as the laptop — **keep the model at `tiny`** on the 4 GB Pi 5 for memory headroom.
 - `sounddevice` ships ARM64 wheels; install the `libportaudio2` system package so it has a PortAudio runtime.
-- TTS on the Pi uses `espeak-ng` (`sudo apt-get install espeak-ng`); the same small USB speaker carries voice output once the body is built (see `hardware.md`).
+- TTS on the Pi uses `espeak-ng` (`sudo apt-get install espeak-ng`); a small USB speaker carries voice output once the body is built (see `hardware.md`).
+- **The Logitech C270 webcam has a built-in mono microphone.** Voice INPUT (`--listen`) can be trialled on the Pi with zero new hardware — no separate USB mic required. Buy only the speaker first; add a dedicated mic later if the C270's audio quality proves insufficient.

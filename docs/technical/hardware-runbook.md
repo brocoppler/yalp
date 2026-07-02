@@ -129,7 +129,7 @@ enabled at flash time).
    writing:
    - **Hostname:** `izzy` (so you reach it at `izzy.local`)
    - **Enable SSH** → *Use password authentication* (or paste a public key)
-   - **Username & password:** pick a username (this runbook uses `pi`) and a real
+   - **Username & password:** pick a username (this runbook uses `izzy`) and a real
      password — write it down
    - **Wireless LAN:** your **SSID + password**, and set the correct **Wi-Fi
      country** (required, or Wi-Fi stays disabled)
@@ -140,13 +140,13 @@ enabled at flash time).
 7. From your laptop terminal:
 
    ```bash
-   ssh pi@izzy.local
+   ssh izzy@izzy.local
    ```
 
    (Use the username you set. If `izzy.local` doesn't resolve, see the "can't SSH"
    entry in §11.)
 
-**DONE WHEN:** you get a shell prompt on the Pi over SSH — `pi@izzy:~ $` — with no
+**DONE WHEN:** you get a shell prompt on the Pi over SSH — `izzy@izzy:~ $` — with no
 monitor attached.
 
 ---
@@ -718,7 +718,7 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 
 ### Session checklist (the gates and milestones, in bench order)
 
-- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `pi@izzy.local`
+- [ ] **§1** OS flashed (Pi OS Lite 64-bit, headless), SSH works → `izzy@izzy.local`
 - [ ] **§2** Python + `gpiozero`/`lgpio` installed; lgpio factory confirmed, no
       `RPi.GPIO`; `pip install -e ".[dev]"` + `pytest` pass on the Pi
 - [ ] **§3** 🟢 **G — GPIO first light:** LED blinks via gpiozero+lgpio

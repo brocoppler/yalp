@@ -26,7 +26,7 @@ This is the whole bot, part by part. v1 is a build-and-learn project — cardboa
 | **Collision sensor** | HC-SR04 ultrasonic | ~$3 | Core, not optional — the collision-stop reflex. Cheapest insurance on the bot. |
 | Wiring | Jumper wires (M-M, M-F, F-F) + mini breadboard | ~$10 | Solderless prototyping; F-F wires for module headers, breadboard for the level divider. |
 | Chassis | Cardboard / hot glue / zip ties / foam tape | ~$19 | v1 — looks don't matter. Hot glue gun is the one tool worth buying. |
-| **Voice INPUT** *(deferred)* | USB mini mic (+ small USB speaker) | ~$15 | Only the **INPUT** half (mic + STT) needs hardware and is deferred. Voice **OUTPUT** (TTS) is **already shipped in software** (macOS `say`, opt-in `--speak`) and needs **no hardware** on the laptop; on the Pi it reuses this same small speaker once present. Get the rest of the loop working text-first. |
+| **Voice INPUT** *(trial with C270 first)* | small USB speaker (for spoken output) | ~$5 | The **Logitech C270 webcam has a built-in mono microphone** — voice INPUT (`--listen`) can be trialled with zero new hardware before buying anything extra. Voice **OUTPUT** (TTS) already ships in software (`say` / `espeak-ng`) and needs only a small USB speaker on the Pi. The Phase-3 deferred purchase is therefore just the **speaker** (mic is free via the C270). |
 
 > **DECISION —** Brain = Raspberry Pi 5 4GB via the CanaKit Starter Kit PRO. **Ordered.** Skip the AI HAT / NPU — local models on a Pi accelerator are a known hobbyist trap; CPU + cloud is the v1 move.
 
@@ -51,7 +51,7 @@ These are tempting but wrong for v1, and naming them keeps the budget honest:
 - **AI HAT / NPU accelerator** — the heavy AI runs in the cloud; on-device models on a Pi accelerator are a known hobbyist trap for build #1.
 - **Depth camera / LiDAR** — that's the post-v1 navigation upgrade, not a v1 part.
 - **Soldering iron** — *(the one exception to this list)* you **do** need a basic one (~$20) for the **DRV8833 header pins**, unless you buy that board pre-soldered. Every *other* module is bought pre-headered or with screw terminals, so it's a small must-have for one step, not a big rig — see the first-timer solder walkthrough in `hardware-runbook.md`.
-- **Mic/speaker for voice OUTPUT** — not needed: spoken **OUTPUT** (TTS) already ships as software (macOS `say`, opt-in `--speak`) with **zero hardware** — proof that the brain is cloud/software and the Pi is just I/O. Only voice **INPUT** (a USB mic + STT) is a real future buy, and it stays deferred until the text loop is solid (`software-spec.md` §7, `roadmap.md` milestone **O**).
+- **Mic/speaker for voice OUTPUT** — not needed: spoken **OUTPUT** (TTS) already ships as software (macOS `say`, opt-in `--speak`) with **zero hardware** — proof that the brain is cloud/software and the Pi is just I/O. Voice **INPUT** (`--listen`) can be trialled with the **C270's built-in mono microphone** before buying anything; the only deferred hardware buy is a small USB speaker for spoken output on the Pi (`software-spec.md` §7, `roadmap.md` milestone **O**).
 
 ---
 
@@ -268,7 +268,7 @@ flowchart LR
 |---|---|---|---|
 | **Phase 1 — Brain** | CanaKit Pi 5 4GB Starter Kit PRO (~$180) + Logitech C270 (~$22) | ✅ Ordered | ~$200 |
 | **Phase 2 — Body** | Card reader, PD power bank, TT motors, driver, ball caster, HC-SR04, AA power, wiring, glue/chassis | ✅ ORDERED 2026-06-20 (inbound) | ~$115 |
-| **Phase 3 — Voice INPUT** | USB mic (+ small speaker) — deferred. Voice **OUTPUT** (TTS) already ships in software, **$0 hardware** | 🛒 Later | ~$20 |
+| **Phase 3 — Voice** | Small USB speaker (for spoken output) — the C270's built-in mono mic covers voice INPUT with zero new hardware. Voice **OUTPUT** (TTS) software-ready, just needs a speaker on the Pi. | 🛒 Later | ~$5 |
 | | | **Total** | **~$335** |
 
 - **Spent so far (~$200):** the entire brain — Pi kit + webcam — is ordered.
