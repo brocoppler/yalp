@@ -15,9 +15,11 @@ you plug a jumper in.
 >
 > - **DONE & recorded:** HC-SR04 ultrasonic (1 kΩ / 1.5 kΩ divider on ECHO — §1),
 >   jumpers to the Pi, USB webcam (Logitech C270).
-> - **NEXT PHYSICAL STEP:** **solder the male header strips onto the DRV8833
->   breakout**, then wire it per **§3**.
-> - **NOT yet wired:** DRV8833 motor driver, 2× TT gear motors, 4×AA NiMH pack.
+> - **DONE & recorded:** DRV8833 drivetrain (§3) — headers soldered, wired,
+>   bench-tested, and **Gate E (power/brownout) passed 2026-07-03**.
+> - **NEXT PHYSICAL STEP:** chassis rebuild — remount motors **one per side** (not
+>   one per axle — see the "train chassis" WARNING in `hardware-runbook.md` §7),
+>   then run `yalp calibrate` to set direction polarity per the rebuilt body.
 >
 > The board is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py`
 > default). It has **no STBY pin**; TB6612FNG is a fallback only if the DRV8833
@@ -31,7 +33,7 @@ you plug a jumper in.
 | Camera (Logitech C270, USB) | ✅ working | `yalp hwtest --check camera` (grabs a 640×480 frame) |
 | Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
 | **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
-| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step (solder DRV8833 headers first)** | see the §3 as-built table below |
+| **Motors (DRV8833 + 2× TT + 4×AA)** | ✅ **wired & Gate E PASSED (2026-07-03)** | `yalp hwtest --check motors`; `vcgencmd get_throttled` (want 0x0) |
 
 ---
 
@@ -133,55 +135,81 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 
 ---
 
-## 3. Motors (DRV8833) — as-built fill-in table
+## 3. Motors (DRV8833) — as built (wired 2026-07-02/03, Gate E passed 2026-07-03)
 
-> **NOT YET WIRED — this is the next bench step.** First **solder the male header
-> strips onto the DRV8833 breakout**, then wire it per this table. **New to
-> soldering?** Follow the step-by-step **"Soldering the DRV8833 header pins
-> (first-timer guide)"** section in `hardware-runbook.md` — it's the prerequisite for
-> everything in this §3. The board is the
-> **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default) — it has **no
-> STBY pin**; TB6612FNG is a fallback only if the DRV8833 runs hot. **Do not wire
-> motor power until Gate E** (power/brownout, `roadmap.md` milestone **F**) **and GPIO
-> first light** (**G**, already green) are both satisfied per the runbook.
+**Module:** DRV8833 clone breakout (chip marking verified DRV8833; clone silkscreen
+calls nSLEEP **"STBY"**). Seated on the drivetrain breadboard straddling the trench.
+Module pin rows 1–8: **left pins in column C**, **right pins in column G**.
 
-The **Driver pin / Signal / To / Expected Pi pin** columns below are pre-filled from
-the canonical map in `config.py` (cited by constant — the numbers live there, not
-here). **Fill the _Wire color_ and _breadboard hole_ columns at the bench** as each
-jumper actually goes in, exactly as in §1. Expected Pi pins are shown *physical / BCM*;
-**verify each against the real header** before trusting it.
+**Silkscreen readout (as installed):**
 
-### 3.1 Logic / signal wiring (DRV8833 ↔ Pi)
+| Column C (left row) | Column G (right row) |
+|---|---|
+| C1 NC | G1 VM |
+| C2 AIN2 | G2 NC |
+| C3 AIN1 | G3 GND |
+| C4 STBY (= nSLEEP) | G4 AO1 |
+| C5 BIN1 | G5 AO2 |
+| C6 BIN2 | G6 BO2 |
+| C7 NC | G7 BO1 |
+| C8 GND | G8 GND (spare, unused) |
 
-| # | DRV8833 pin | Signal | To (Pi / rail) | Expected Pi pin (physical / BCM) — config constant | Wire color | Breadboard hole |
-|---|---|---|---|---|---|---|
-| 1 | **AIN1** | left speed / PWM (hardware PWM0) | Pi GPIO12 | Pin 32 / GPIO12 — `MOTOR_LEFT_PWM_PIN` | | |
-| 2 | **AIN2** | left direction | Pi GPIO17 | Pin 11 / GPIO17 — `MOTOR_LEFT_DIR_PIN` | | |
-| 3 | **BIN1** | right speed / PWM (hardware PWM1) | Pi GPIO13 | Pin 33 / GPIO13 — `MOTOR_RIGHT_PWM_PIN` | | |
-| 4 | **BIN2** | right direction | Pi GPIO22 | Pin 15 / GPIO22 — `MOTOR_RIGHT_DIR_PIN` | | |
-| 5 | **nSLEEP** | enable — **tie HIGH to Pi 3V3** (not GPIO-controlled) | Pi 3V3 | Pin 1 (or 17) / 3V3 | | |
-| — | ~~STBY~~ | **DRV8833 has no STBY** — `MOTOR_STBY_PIN` (GPIO24) is inert / **left unwired** here; only driven when `MOTOR_DRIVER_KIND=="tb6612fng"` | — | (GPIO24 unused) | — | — |
+> **Note:** the output row order is **BO2 (row 6) above BO1 (row 7)** on this board —
+> the reverse of the labeling order on many datasheets.
 
-### 3.2 Motor outputs (DRV8833 ↔ TT motors)
+### 3.1 Logic / signal wiring (DRV8833 ↔ Pi) — as built
 
-| # | DRV8833 pin | Signal | To | Wire color | Terminal |
+Jumpers are male-to-female (female end on the Pi header). The "breadboard hole"
+column is the A-row hole (opposite side of the trench from the C/G module pin).
+
+| # | Silkscreen label | Breadboard hole | Wire color | Pi physical pin / BCM | Signal |
 |---|---|---|---|---|---|
-| 6 | **AOUT1** | left motor drive | left TT motor terminal 1 | | |
-| 7 | **AOUT2** | left motor drive | left TT motor terminal 2 | | |
-| 8 | **BOUT1** | right motor drive | right TT motor terminal 1 | | |
-| 9 | **BOUT2** | right motor drive | right TT motor terminal 2 | | |
+| 1 | **AIN2** | A2 | yellow | **Pin 11 / GPIO17** | left direction (`MOTOR_LEFT_DIR_PIN`) |
+| 2 | **AIN1** | A3 | blue | **Pin 32 / GPIO12** | left speed / HW PWM0 (`MOTOR_LEFT_PWM_PIN`) |
+| 3 | **STBY** (= nSLEEP) | A4 | white | **Pin 1 / 3V3** | enable — tie-high to 3V3; **not GPIO-controlled** |
+| 4 | **BIN1** | A5 | orange | **Pin 33 / GPIO13** | right speed / HW PWM1 (`MOTOR_RIGHT_PWM_PIN`) |
+| 5 | **BIN2** | A6 | green | **Pin 15 / GPIO22** | right direction (`MOTOR_RIGHT_DIR_PIN`) |
+| 6 | **GND** | A8 | black | **Pin 9 / GND** | common ground, Pi side |
+| — | ~~GPIO24~~ | — | — | Pin 18 / GPIO24 — **left empty** | TB6612-only STBY; inert for DRV8833 per `config.py` |
 
-### 3.3 Power rail & decoupling (VM / GND)
+### 3.2 Motor outputs (DRV8833 ↔ TT motors) — as built
 
-| # | DRV8833 pin | Signal | To | Wire color | Hole |
-|---|---|---|---|---|---|
-| 10 | **VM** | motor supply + | 4×AA NiMH pack **(+)** | | |
-| 11 | **GND** | common ground | pack **(−)** *and* a Pi **GND** pin (both — required; logic inputs are referenced to Pi ground) | | |
-| 12 | across **VM ↔ GND** | bulk decoupling | **470–1000 µF electrolytic** (observe polarity) | | |
-| 13 | across **VM ↔ GND** | HF decoupling | **0.1 µF ceramic** | | |
+Motor lead polarity is intentionally arbitrary at this stage; forward/reverse
+direction polarity will be set via `yalp calibrate` after the chassis rebuild.
 
-> **Note —** the VM rail (4×AA) is **separate** from the Pi's USB-C supply; only the
-> **GND is common** (pack − ↔ DRV8833 GND ↔ Pi GND). Never run pack + into the Pi.
+| Channel | Breadboard holes | Motor |
+|---|---|---|
+| **Left** (A channel) | **H4** (AO1) + **H5** (AO2) | Left TT motor leads |
+| **Right** (B channel) | **H6** (BO2) + **H7** (BO1) | Right TT motor leads |
+
+> **Important for chassis mount:** the motor wired to channel A (AO1/AO2) must be
+> mounted on the robot's **LEFT** side. Identify it before mounting by pulsing the left
+> channel only (see the chassis WARNING in `hardware-runbook.md` §7).
+
+### 3.3 Motor power & decoupling — as built
+
+**Pack:** 4×AA NiMH WITH integral on/off switch (the switch is the bench master
+cutoff — "batteries out" now means switch off, not physically removing cells).
+Measured rail: **5.55 V** (~1.39 V/cell, freshly charged).
+
+| Connection | Breadboard hole | Detail |
+|---|---|---|
+| Pack red (+) | **J1** (VM) | Motor supply positive |
+| Pack black (−) | **J3** (GND, G3 net) | Motor supply negative |
+| Common ground | — | Achieved through the module's internal GND net: Pi GND is at the C8 net (A8), pack − is at the G3 net (J3); the module ties all GND pins internally |
+
+**Decoupling as built:**
+
+| Cap | Value | Placement |
+|---|---|---|
+| Bulk electrolytic | **1000 µF 16 V** | + leg **I1** (VM net), stripe/− leg **I3** (GND net) |
+| HF cap — **substitution** | **0.1 µF 50 V ELECTROLYTIC** (4×7 mm body) — **not** the specced ceramic | + leg **H1**, stripe/− leg **H3** |
+
+> **HF cap substitution note:** A 0.1 µF 50 V *electrolytic* (4×7 mm) was installed
+> in place of the specced 0.1 µF ceramic because the kit had no ceramic disc. It is
+> polarized (unlike a ceramic), is electrically safe at this DC rail voltage, and the
+> clone module carries its own onboard ceramic caps. A **"104" ceramic disc** remains
+> the recommended drop-in if noise gremlins ever appear.
 
 ---
 

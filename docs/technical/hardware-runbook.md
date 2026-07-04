@@ -526,6 +526,17 @@ milestone **F**). Run the power bring-up checklist in order; do not skip ahead.
    motors by briefly jumpering its inputs by hand. (This proves motors + driver +
    pack work on their own.)
 
+   > **How to hand-jumper a DRV8833 on a breadboard build (field-proven method):**
+   > Pack switch OFF to rig. Temporarily borrow the VM hole by pulling the small HF
+   > cap, then extend VM to an empty row with an M-M jumper to make a tap strip. Use
+   > the disconnected Pi-end FEMALE ends of the logic jumpers as per-input sockets —
+   > they dangle free with the Pi logic disconnected. Tie the STBY/nSLEEP female end
+   > to the VM tap to wake the chip. To spin a motor, briefly touch a VM "wand" jumper
+   > into a dangling input female end — the internal pulldowns mean untouched inputs
+   > are low (off); one input at a time = spin; two inputs on the same channel at once
+   > = brake. Restore the HF cap afterward. The DRV8833 inputs tolerate the ~5.5–6 V
+   > pack rail for brief hand tests.
+
 3. **Join common ground**, reconnect the logic GPIOs, and run a deliberately
    **hard, stall-heavy drive script** — rapid direction reversals with both motors
    stalled against your hand — while you **meter the motor rail** and re-check
@@ -573,6 +584,21 @@ watch -n 1 vcgencmd get_throttled
 ---
 
 ## 7. Hello motors — drive forward / turn / stop (milestone H)
+
+> ⚠️ **WARNING — the "train chassis" trap (proven by field data):** mounting **one
+> motor per axle** (front pair / rear pair, four wheels total) produces a robot that
+> can only drive straight — it will forward fine but **never turn**, and will shudder
+> or fight during turn commands as the two locked axles work against each other.
+> **Differential steering requires one motor per *side*** — a single driven wheel on
+> the left and a single driven wheel on the right, with a small ball caster as the
+> third contact point. The caster must be small; on a robot this light a large caster
+> adds enough drag to spoil the steering. If the robot exhibits "drives forward fine,
+> never turns, shudders during turn commands," the chassis layout is wrong, not the
+> code.
+>
+> **Before mounting:** identify which motor is channel A (AO1/AO2) by pulsing the
+> left channel only — that motor must end up on the robot's **LEFT** side. Do this
+> before bolting anything down.
 
 With Gate E (§6) and GPIO first light (§3) both green, drive the wheels from
 Python through the driver: forward, turn, stop.

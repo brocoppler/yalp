@@ -30,23 +30,25 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 > hardware bring-up is UNDERWAY on the real robot — see the next note.** The full §3 status
 > and the §1 ladder have the detail; this is the skim.
 
-> **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, and the
-> ultrasonic sensor are DONE on real hardware; motors are next.** The physical robot —
-> named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with Raspberry Pi OS
-> Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp installed
-> from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
+> **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, ultrasonic,
+> and now the drivetrain are DONE on real hardware; Gate E PASSED 2026-07-03.** The physical
+> robot — named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with Raspberry
+> Pi OS Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp
+> installed from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
 > `--system-site-packages` so the apt `python3-lgpio` is visible; swig + python3-dev
 > fallback; libgl1 + libglib2.0-0 so `import cv2` works on Lite — all committed). Green on
 > the real Pi: **GPIO stack verified** (gpiozero lgpio/native factory, no RPi.GPIO —
 > milestone **G**, `scripts/verify_gpio_stack.py` passes); **camera** (Logitech C270 USB —
 > `yalp hwtest --check camera` grabs a 640×480 frame, **B** Pi-confirmed); **vision** (`yalp
 > see` runs on Izzy — captures a frame and describes the scene via the Claude vision API,
-> key in `~/yalp/.env`, **C** Pi-confirmed); and the **HC-SR04 ultrasonic** (milestone **I**
-> — `yalp hwtest --check ultrasonic` returns real distances, a live 25-read stream tracked a
-> hand at ~22/25 good reads). The as-built divider is **1 kΩ + 1.5 kΩ → 3.0 V** (kit had no
-> 2 kΩ; pins/software unchanged) and the full as-built record is in `as-built-wiring.md`.
-> **NEXT: motors** — DRV8833 + 2× TT gear motors + 4×AA pack (Gate E **F** → Hello motors
-> **H**), not yet wired.
+> key in `~/yalp/.env`, **C** Pi-confirmed); the **HC-SR04 ultrasonic** (milestone **I** —
+> `yalp hwtest --check ultrasonic` returns real distances, a live 25-read stream tracked a
+> hand at ~22/25 good reads; as-built divider **1 kΩ + 1.5 kΩ → 3.0 V**); and now the
+> **DRV8833 drivetrain** — wired across two bench sessions (2026-07-02/03) and **Gate E
+> (power/brownout, milestone F) PASSED** — see the **F** rung for full pass record.
+> `yalp hwtest --check motors` passed on hardware (all phases, wheels spun, forward
+> confirmed). **NEXT: chassis rebuild** — current build has one motor per axle and can only
+> drive straight; rebuildfor one motor per side before milestone **H** sign-off.
 
 **DONE — the laptop phase (run any of these today):**
 
@@ -95,17 +97,17 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 8 of 16 green — the entire laptop phase plus the first two Pi-hardware
-> rungs are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and** INPUT
-> and the full follow brain — the whole voice → follow → voice-stop loop works end to end),
-> all laptop-tested (**597+ tests passing**); and on the **real Pi 5 ("Izzy")** the
-> power-off bring-up rungs are now green too — **GPIO first light (G)** and the **HC-SR04
-> divider + first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on
-> the actual hardware (`yalp hwtest --check camera`, `yalp see` both run on Izzy). The
-> remaining hardware rungs (**F, H, J–N**) need the 4×AA pack + motors wired. **Next
-> target: motors** — the motor-spinning rungs (Gate E **F**, Hello motors **H**, reflex
-> **J**, fps gates **K/L**) are next now that the no-battery Pi-side steps are done. Update
-> this line as each done-signal goes green.
+> **Progress: 9 of 16 green — the entire laptop phase, the first two Pi-hardware rungs,
+> and Gate E are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and**
+> INPUT and the full follow brain — the whole voice → follow → voice-stop loop works end to
+> end), all laptop-tested (**597+ tests passing**); and on the **real Pi 5 ("Izzy")** the
+> power-off bring-up rungs are green — **GPIO first light (G)** and the **HC-SR04 divider +
+> first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on Izzy. And
+> now **Gate E (F)** is green: the DRV8833 drivetrain is wired, bench-tested, and the
+> power/brownout gate passed 2026-07-03. Milestone **H** (Hello motors) is in progress —
+> `yalp hwtest --check motors` passed but sign-off is blocked on the chassis rebuild (one
+> motor per side, not per axle). **Next target: chassis rebuild → H sign-off → reflex J →
+> fps gates K/L.** Update this line as each done-signal goes green.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
 |---|---|---|---|---|
@@ -115,9 +117,9 @@ the Phase 1 hardware already in hand.
 | **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
 | **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (597+ passing). | Laptop | |
-| **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
+| **F** ✅ DONE *(Pi, 2026-07-03)* | 🚦 **Gate E — Power / brownout bring-up** | **PASSED 2026-07-03** via the §6 staged bring-up on the assembled robot ("Izzy"). Stage 1 (Pi alone): `get_throttled` 0x0. Stage 2 (motor rail alone, logic disconnected): rail 5.55 V; both motors spun both directions via hand-jumpered inputs. Stage 3 (joined, stall-heavy): **two runs of 24 full-duty reversal cycles** (`GpiozeroMotorDriver`, `drv8833` kind) with repeated thumb-stalls including both motors at once — zero Pi resets, SSH session survived, `get_throttled` 0x0 on every cycle, motors never stuttered. Criterion 3 (rail above driver logic VIH under stall) was **verified behaviorally, not metered** — probe access was blocked by the assembled body; the driver never faltered under full both-motor stall, which bounds the sag above the DRV8833's logic/UVLO thresholds. Static rail 5.55 V; 1000 µF bulk installed preemptively. As-built wiring in `as-built-wiring.md` §3. | Pi 5 + Phase 2 | |
 | **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
-| **H** | **Hello motors** *(NEXT)* | Drive the wheels from Python through the driver: forward, turn, stop. **Not yet wired** — DRV8833 + 2× TT motors + 4×AA pack is the next bench step (gated on Gate E **F**). | Pi 5 + Phase 2 + F + G | |
+| **H** 🔄 *in progress* | **Hello motors** | Drive the wheels from Python through the driver: forward, turn, stop. `yalp hwtest --check motors` **passed on hardware** — all phases executed, wheels spun, forward confirmed correct on the assembled body. **Sign-off blocked on chassis rebuild:** the current build has one motor per axle (front pair / rear pair), which can only drive straight — differential steering requires one motor per *side*. Chassis must be rebuilt with single driven wheels left+right before milestone H can be called clean. See the "train chassis" WARNING in `hardware-runbook.md` §7. | Pi 5 + Phase 2 + F + G | |
 | **I** ✅ DONE *(Pi)* | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. **Green on Izzy:** wired with an as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider (kit had no 2 kΩ; pins/software unchanged); `yalp hwtest --check ultrasonic` returns real distances (~22/25 good reads tracking a hand). Full as-built wiring: `as-built-wiring.md`. | Pi 5 + HC-SR04 + resistors | |
 | **J** | **Safety reflex** (collision-stop) | A fast local loop overrides any drive command when something's too close: commanded forward drive halts within the threshold distance on the bench. In *before* any autonomous driving. | Pi 5 + Phase 2 | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
