@@ -3,8 +3,14 @@
 ``gpiozero``/``lgpio`` are **not** installed on the laptop/CI that runs these
 tests, so we exercise the driver against a *fake* ``gpiozero`` package injected
 into ``sys.modules``. The fake records every device created and every duty/
-direction written, letting us assert the phase/enable logic (clamping, invert,
-direction pin, PWM duty, STBY) without any hardware.
+direction written, letting us assert pin state without any hardware.
+
+**Assertions are written against the DRV8833's IN/IN truth table, not the
+driver's own convention.** This is the lesson of the 2026-07-06 field bug: the
+old suite asserted the code's phase/enable convention against the fake and so
+happily passed while the real chip drove an "idle" channel at full reverse. With
+PWM pin → xIN1 and DIR pin → xIN2, forward is xIN2 LOW + duty; reverse is xIN2
+HIGH + duty ``1 - abs(throttle)`` (slow decay); zero is xIN2 LOW + duty 0 (coast).
 
 Behaviors that genuinely need a real Pi (actual lgpio pin toggling, the Pi-5
 RPi.GPIO silent-failure) are noted inline and verified only at the *contract*
@@ -158,41 +164,47 @@ def test_init_satisfies_motordriver_protocol(fake_gpiozero):
 
 
 # --------------------------------------------------------------------------- #
-# 3. set_motors: direction pin + PWM duty.
+# 3. set_motors: DRV8833 IN/IN truth table (PWM->xIN1, DIR->xIN2).
+#    forward:  xIN2 LOW,  duty = throttle           (fast decay)
+#    reverse:  xIN2 HIGH, duty = 1 - abs(throttle)  (slow decay)
+#    zero:     xIN2 LOW,  duty = 0                   (true coast)
 # --------------------------------------------------------------------------- #
 def test_set_motors_forward(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver()
-    drv.set_motors(0.5, 0.75)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(0.6, 0.75)
 
-    assert drv._left_dir.value == 1  # forward
-    assert drv._right_dir.value == 1
-    assert drv._left_pwm.value == pytest.approx(0.5)
+    # Forward = xIN2 (dir pin) LOW, duty = throttle.
+    assert drv._left_dir.value == 0
+    assert drv._right_dir.value == 0
+    assert drv._left_pwm.value == pytest.approx(0.6)
     assert drv._right_pwm.value == pytest.approx(0.75)
 
 
 def test_set_motors_reverse(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver()
-    drv.set_motors(-0.4, -0.9)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(-0.6, -0.9)
 
-    assert drv._left_dir.value == 0  # reverse
-    assert drv._right_dir.value == 0
-    assert drv._left_pwm.value == pytest.approx(0.4)
-    assert drv._right_pwm.value == pytest.approx(0.9)
-
-
-def test_set_motors_zero_is_forward_direction_with_zero_duty(fake_gpiozero):
-    from yalp.reactive.hardware import GpiozeroMotorDriver
-
-    drv = GpiozeroMotorDriver()
-    drv.set_motors(0.0, 0.0)
-
-    # throttle >= 0 → direction HIGH, duty 0.
+    # Reverse = xIN2 (dir pin) HIGH, slow-decay duty = 1 - abs(throttle).
     assert drv._left_dir.value == 1
     assert drv._right_dir.value == 1
+    assert drv._left_pwm.value == pytest.approx(0.4)  # 1 - 0.6
+    assert drv._right_pwm.value == pytest.approx(0.1)  # 1 - 0.9
+
+
+def test_set_motors_zero_is_coast(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(0.0, 0.0)
+
+    # Zero throttle = true coast: xIN2 LOW + duty 0 (NOT dir HIGH + duty 0, which
+    # on a DRV8833 is IN1=0/IN2=1 = full-speed reverse — the 2026-07-06 bug).
+    assert drv._left_dir.value == 0
+    assert drv._right_dir.value == 0
     assert drv._left_pwm.value == 0.0
     assert drv._right_pwm.value == 0.0
 
@@ -203,41 +215,87 @@ def test_set_motors_zero_is_forward_direction_with_zero_duty(fake_gpiozero):
 def test_set_motors_clamps_out_of_range(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver()
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
     drv.set_motors(5.0, -5.0)
 
-    assert drv._left_dir.value == 1
+    # Left clamps to +1.0 (full forward): xIN2 LOW, duty 1.0.
+    assert drv._left_dir.value == 0
     assert drv._left_pwm.value == pytest.approx(1.0)
-    assert drv._right_dir.value == 0
-    assert drv._right_pwm.value == pytest.approx(1.0)
+    # Right clamps to -1.0 (full reverse): xIN2 HIGH, slow-decay duty 1 - 1 = 0.0
+    # (IN1=0/IN2=1 = full-speed reverse per the truth table).
+    assert drv._right_dir.value == 1
+    assert drv._right_pwm.value == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------- #
-# 5. Per-channel invert.
+# 5. Per-channel invert (sign flips BEFORE the IN/IN mapping).
 # --------------------------------------------------------------------------- #
 def test_set_motors_left_invert(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(left_invert=True, right_invert=False)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, right_invert=False)
     drv.set_motors(0.6, 0.6)
 
-    # Left inverted: a +0.6 command drives the dir pin LOW (reverse) at duty 0.6.
-    assert drv._left_dir.value == 0
-    assert drv._left_pwm.value == pytest.approx(0.6)
-    # Right not inverted: forward.
-    assert drv._right_dir.value == 1
+    # Left inverted: +0.6 -> -0.6 -> reverse: xIN2 HIGH, duty 1 - 0.6 = 0.4.
+    assert drv._left_dir.value == 1
+    assert drv._left_pwm.value == pytest.approx(0.4)
+    # Right not inverted: forward: xIN2 LOW, duty 0.6.
+    assert drv._right_dir.value == 0
     assert drv._right_pwm.value == pytest.approx(0.6)
 
 
 def test_set_motors_right_invert_reverse_command(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(right_invert=True)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", right_invert=True)
     drv.set_motors(0.0, -0.3)
 
-    # Right inverted: a -0.3 command flips to forward (dir HIGH) at duty 0.3.
-    assert drv._right_dir.value == 1
+    # Right inverted: -0.3 -> +0.3 -> forward: xIN2 LOW, duty 0.3.
+    assert drv._right_dir.value == 0
     assert drv._right_pwm.value == pytest.approx(0.3)
+    # Left commanded 0 stays coast: xIN2 LOW, duty 0.
+    assert drv._left_dir.value == 0
+    assert drv._left_pwm.value == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# 5b. Regression tests named for the 2026-07-06 field bug (PH/EN vs IN/IN).
+# --------------------------------------------------------------------------- #
+def test_idle_channel_never_energized(fake_gpiozero):
+    """An idle (zero) channel must coast, not run at full reverse.
+
+    The old PH/EN code produced dir HIGH + duty 0 for a zero throttle, which on a
+    DRV8833 is IN1=0/IN2=1 = full-speed reverse. Driving one wheel while the other
+    is commanded 0 must leave the idle wheel at xIN2 LOW + duty 0.
+    """
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(0.0, 0.6)
+
+    # Left (idle) channel: true coast, NOT full reverse.
+    assert drv._left_dir.value == 0
+    assert drv._left_pwm.value == 0.0
+    # Right (driven) channel: forward.
+    assert drv._right_dir.value == 0
+    assert drv._right_pwm.value == pytest.approx(0.6)
+
+
+def test_full_forward_is_full_duty(fake_gpiozero):
+    """Commanded full forward is full duty, not BRAKE.
+
+    The old code drove dir HIGH + duty 1.0 for a +1.0 command, which on a DRV8833
+    is IN1=1/IN2=1 = brake. Correct IN/IN forward is xIN2 LOW + duty 1.0.
+    """
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(1.0, 1.0)
+
+    assert drv._left_dir.value == 0
+    assert drv._right_dir.value == 0
+    assert drv._left_pwm.value == pytest.approx(1.0)
+    assert drv._right_pwm.value == pytest.approx(1.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -267,23 +325,74 @@ def test_drv8833_ignores_stby_pin(fake_gpiozero):
 
 
 # --------------------------------------------------------------------------- #
-# 7. stop() coasts: zero PWM, leave direction pins alone.
+# 7. stop() coasts: zero BOTH PWM duties AND drop BOTH direction pins LOW.
 # --------------------------------------------------------------------------- #
-def test_stop_zeros_pwm_only(fake_gpiozero):
+def test_stop_after_forward_is_coast(fake_gpiozero):
+    """stop() after a forward command must land in true coast, not full reverse.
+
+    On the DRV8833, zeroing only the PWM duty while the dir pin is latched HIGH is
+    IN1=0/IN2=1 = full-speed reverse. stop() (the dead-man's switch path) must
+    zero both duties AND drop both dir pins LOW.
+    """
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver()
-    drv.set_motors(-0.8, 0.8)
-    left_dir_before = drv._left_dir.value
-    right_dir_before = drv._right_dir.value
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(0.7, 0.7)
 
     drv.stop()
 
+    assert drv._left_dir.value == 0
+    assert drv._right_dir.value == 0
     assert drv._left_pwm.value == 0.0
     assert drv._right_pwm.value == 0.0
-    # Direction pins unchanged (coast, not reverse).
-    assert drv._left_dir.value == left_dir_before
-    assert drv._right_dir.value == right_dir_before
+
+
+def test_stop_after_reverse_is_coast(fake_gpiozero):
+    """stop() after a reverse command (dir pins already HIGH) also coasts."""
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(-0.8, -0.8)
+    assert drv._left_dir.value == 1  # reverse latched the dir pins HIGH
+
+    drv.stop()
+
+    assert drv._left_dir.value == 0
+    assert drv._right_dir.value == 0
+    assert drv._left_pwm.value == 0.0
+    assert drv._right_pwm.value == 0.0
+
+    # Idempotent: a second stop() must not raise and stays in coast.
+    drv.stop()
+    assert drv._left_dir.value == 0
+    assert drv._left_pwm.value == 0.0
+
+
+def test_watchdog_stop_is_safe(fake_gpiozero):
+    """A MotorWatchdog trip calls driver.stop(); that must leave the DRV8833 coasting.
+
+    Focused integration: drive forward, then run the real safety-stop callback the
+    watchdog invokes on a trip (``driver.stop``) and assert both channels are at
+    dir LOW + duty 0 — the dead-man's switch must never command full reverse.
+    """
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+    from yalp.reactive.watchdog import MotorWatchdog
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv.set_motors(0.9, 0.9)
+
+    # Build a watchdog around the real driver and invoke the exact stop path a
+    # trip uses (``_trip`` calls ``motor_driver.stop()``), without depending on
+    # wall-clock timing.
+    wd = MotorWatchdog(drv, timeout_ms=10)
+    wd._trip()  # what the watchdog thread runs when the heartbeat goes stale
+
+    assert wd.trip_count == 1
+
+    assert drv._left_dir.value == 0
+    assert drv._right_dir.value == 0
+    assert drv._left_pwm.value == 0.0
+    assert drv._right_pwm.value == 0.0
 
 
 # --------------------------------------------------------------------------- #

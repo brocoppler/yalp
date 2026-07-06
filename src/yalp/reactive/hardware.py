@@ -155,13 +155,28 @@ _PIN_FACTORY_DOCS = "docs/technical/hardware.md"
 class GpiozeroMotorDriver:
     """A real :class:`MotorDriver` backed by ``gpiozero`` on a Raspberry Pi 5.
 
-    **Phase/enable control, not 4-PWM.** The Pi 5 exposes only two hardware-PWM
-    lines (GPIO12 = PWM0, GPIO13 = PWM1), so each wheel channel is driven by one
-    PWM *speed* pin and one plain *direction* pin (rather than two PWM pins). This
-    matches both the TB6612FNG and DRV8833 dual H-bridges in PH/EN mode:
+    **Two GPIO lines per channel, but the meaning depends on the chip.** The Pi 5
+    exposes only two hardware-PWM lines (GPIO12 = PWM0, GPIO13 = PWM1), so each
+    wheel channel is driven by one hardware-PWM pin (xIN1) plus one plain digital
+    pin (xIN2). How those two lines map to motor behaviour is **driver-specific**
+    and was the source of a safety-critical field bug on 2026-07-06 (see below):
 
-    * speed pin → :class:`gpiozero.PWMOutputDevice` (duty = ``abs(throttle)``),
-    * direction pin → :class:`gpiozero.DigitalOutputDevice` (HIGH = forward).
+    * ``drv8833`` — an **IN/IN** dual H-bridge. Both inputs are logical; there is
+      no dedicated "phase" pin. Forward/reverse and speed are encoded jointly in
+      the two inputs (see the truth table on :meth:`_drive_channel`). This is the
+      wiring on the robot and the default (:data:`config.MOTOR_DRIVER_KIND`).
+    * ``tb6612fng`` — a phase/enable-style mapping (direction pin HIGH = forward,
+      duty = ``abs(throttle)``). **UNVERIFIED on hardware** with our single-DIR-
+      pin-per-channel layout — see the note on :meth:`_drive_channel`.
+
+    **DRV8833 is IN/IN, not PH/EN — history.** An earlier version of this driver
+    treated the DRV8833 as a phase/enable device (direction pin HIGH for
+    ``throttle >= 0``, duty = ``abs(throttle)``). On the real DRV8833 that dialect
+    is not merely mis-scaled, it is *dangerous*: an "idle" channel (duty 0, dir
+    HIGH) becomes IN1=0/IN2=1 = **full-speed reverse**, and ``stop()`` — the path
+    the :class:`~yalp.reactive.watchdog.MotorWatchdog` dead-man's switch calls —
+    latched the direction pins HIGH and commanded full reverse instead of coast.
+    The fix (this class) drives the DRV8833 by its actual IN/IN truth table.
 
     **Pi 5 needs the lgpio pin factory.** ``RPi.GPIO`` silently no-ops on the Pi
     5, so this driver forces ``gpiozero``'s pin factory to
@@ -283,17 +298,69 @@ class GpiozeroMotorDriver:
         invert: bool,
         trim: float = 1.0,
     ) -> None:
+        """Drive one wheel channel from a signed throttle.
+
+        Calibration is applied first and **in this order**: scale by ``trim``,
+        clamp to ``[-1, 1]``, then flip the sign if ``invert`` is set. The sign
+        flip happens *before* the direction/duty mapping below, so an inverted
+        wheel's forward/reverse and decay mode are chosen from the already-
+        corrected throttle (this is what makes ``left_invert``/``right_invert``
+        actually reverse a miswired wheel rather than just its duty).
+
+        **DRV8833 (IN/IN) — the wiring on the robot.** With PWM pin → xIN1 and
+        DIR pin → xIN2, the DRV8833 datasheet truth table (per H-bridge) is::
+
+            xIN1   xIN2   OUTx   function
+            ----   ----   ----   --------------------------------------------
+            PWM     0     fwd    forward at duty, FAST decay
+            PWM     1     rev    reverse at (1 - duty), SLOW decay
+             0      1     rev    full-speed reverse
+             1      0     fwd    full-speed forward
+             0      0     Z      coast (outputs high-Z)
+             1      1     brake  brake (both outputs low)
+
+        (DRV8833 datasheet, "H-bridge control" truth table.) Only xIN1
+        (GPIO12/13) is hardware-PWM-capable on the Pi 5, so we PWM xIN1 and hold
+        xIN2 as a plain digital line. That forces an intentional **fwd/rev decay
+        asymmetry**: forward is fast-decay PWM on xIN1 (xIN2 low), but reverse
+        cannot fast-decay (xIN2 is not PWM-capable) so it uses **slow decay with
+        inverted duty** — xIN2 held HIGH while xIN1 PWMs at ``1 - abs(throttle)``.
+        Consequences that matter: a *zero* throttle must set xIN2 LOW + duty 0
+        (true coast); it must NOT leave xIN2 latched HIGH, or an "idle" channel
+        becomes full-speed reverse (the 2026-07-06 field bug).
+
+        **TB6612FNG.** Kept as a phase/enable mapping (dir HIGH = forward, duty =
+        ``abs(throttle)``) for backwards compatibility, but this is **UNVERIFIED
+        on hardware**: the TB6612FNG is itself an IN/IN part (it wants PWMx plus
+        *two* IN pins per channel), which our single-DIR-pin-per-channel layout
+        does not fully wire. Flagged for a future hardware bring-up session; do
+        not trust this path until it has been checked on a real TB6612FNG.
+        """
         # Apply per-wheel trim scaling BEFORE clamping, so the trimmed magnitude
         # still lands in [-1, 1] (trim defaults to 1.0 = no-op).
         throttle = self._clamp(throttle * trim)
         if invert:
             throttle = -throttle
-        # Direction pin: HIGH for forward (>= 0), LOW for reverse.
+
+        if self._driver_kind == "drv8833":
+            # IN/IN decay-mode dialect (see truth table above).
+            if throttle > 0:
+                dir_dev.off()  # xIN2 = 0
+                pwm.value = throttle  # xIN1 = PWM  -> forward, fast decay
+            elif throttle < 0:
+                dir_dev.on()  # xIN2 = 1
+                pwm.value = 1.0 - abs(throttle)  # xIN1 = PWM -> reverse, slow decay
+            else:
+                dir_dev.off()  # xIN2 = 0
+                pwm.value = 0.0  # xIN1 = 0    -> true coast (both inputs low)
+            return
+
+        # TB6612FNG (and any other kind): legacy phase/enable mapping. UNVERIFIED
+        # on hardware — see docstring.
         if throttle >= 0:
             dir_dev.on()
         else:
             dir_dev.off()
-        # PWM duty cycle is the magnitude.
         pwm.value = abs(throttle)
 
     def set_motors(self, left: float, right: float) -> None:
@@ -312,12 +379,34 @@ class GpiozeroMotorDriver:
         )
 
     def stop(self) -> None:
-        """Coast both channels by zeroing the PWM duty (direction unchanged)."""
-        self._left_pwm.value = 0.0
-        self._right_pwm.value = 0.0
+        """Bring both channels to a **true coast** (both inputs LOW).
+
+        On the DRV8833 (IN/IN) coast is xIN1=0 **and** xIN2=0; zeroing only the
+        PWM duty is not enough, because after any forward/reverse command the
+        direction (xIN2) pin may be latched HIGH, and duty-0 + xIN2-HIGH is
+        IN1=0/IN2=1 = **full-speed reverse**, not coast. This method is what the
+        :class:`~yalp.reactive.watchdog.MotorWatchdog` dead-man's switch and the
+        collision-stop safety paths call, so it MUST land in coast: we zero BOTH
+        PWM duties AND drive BOTH direction pins LOW. Idempotent and never raises
+        (best-effort during a safety stop).
+        """
+        for pwm in (self._left_pwm, self._right_pwm):
+            try:
+                pwm.value = 0.0
+            except Exception:  # pragma: no cover - best effort during a safety stop
+                pass
+        for dir_dev in (self._left_dir, self._right_dir):
+            try:
+                dir_dev.off()
+            except Exception:  # pragma: no cover - best effort during a safety stop
+                pass
 
     def close(self) -> None:
-        """Zero PWM, close every gpiozero device, and release the pin factory.
+        """Coast the motors, close every gpiozero device, and release the factory.
+
+        Teardown ends in coast: :meth:`stop` runs first (zeroing both PWM duties
+        and dropping both direction pins to LOW) so the motors are truly coasting
+        before any pin is released — never latched into full reverse.
 
         The process-global pin factory is only torn down when no other device
         still holds pins on it (see :meth:`_factory_has_open_reservations`), so
@@ -326,13 +415,16 @@ class GpiozeroMotorDriver:
         """
         if self._closed:
             return
+        # Coast first (zero BOTH PWM duties AND drop BOTH direction pins), so the
+        # motors are in true coast before any pin is released — on the DRV8833
+        # zeroing PWM alone can leave a latched-HIGH direction pin driving full
+        # reverse (see :meth:`stop`). Do this while ``_closed`` is still False so
+        # stop()'s writes are not short-circuited by a closed guard.
+        try:
+            self.stop()
+        except Exception:  # pragma: no cover - best effort during teardown
+            pass
         self._closed = True
-        # Zero the speed pins first so the motors stop before pins are released.
-        for pwm in (self._left_pwm, self._right_pwm):
-            try:
-                pwm.value = 0.0
-            except Exception:  # pragma: no cover - best effort during teardown
-                pass
         for dev in self._devices:
             try:
                 dev.close()

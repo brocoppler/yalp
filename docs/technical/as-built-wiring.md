@@ -157,6 +157,12 @@ Module pin rows 1–8: **left pins in column C**, **right pins in column G**.
 > **Note:** the output row order is **BO2 (row 6) above BO1 (row 7)** on this board —
 > the reverse of the labeling order on many datasheets.
 
+> **2026-07-06 field session:** the DRV8833 is an **IN/IN** part, but the driver code
+> was treating it as **phase/enable** — a decay-mode dialect mismatch that drove an
+> "idle" channel (and `stop()`) at full reverse. **The wiring was and is correct;**
+> the bug was fixed in code (`GpiozeroMotorDriver._drive_channel`, DRV8833 IN/IN truth
+> table). No re-wiring required.
+
 ### 3.1 Logic / signal wiring (DRV8833 ↔ Pi) — as built
 
 Jumpers are male-to-female (female end on the Pi header). The "breadboard hole"

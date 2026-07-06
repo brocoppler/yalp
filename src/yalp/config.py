@@ -395,9 +395,13 @@ STT_MODEL: str = _env_str("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whis
 # and must be imported lazily inside hardware-specific modules only.
 #
 # Motor driver: TB6612FNG or DRV8833 dual H-bridge (see MOTOR_DRIVER_KIND below).
-#   AIN1/BIN1 = PWM speed inputs (hardware PWM channels PWM0/PWM1 on Pi 5)
-#   AIN2/BIN2 = direction inputs (plain GPIO, HIGH = forward per wiring)
-#   STBY      = TB6612FNG standby active-LOW; DRV8833 ties nSLEEP HIGH so unused.
+#   xIN1 (AIN1/BIN1) = hardware-PWM inputs (PWM0/PWM1 on Pi 5) — the "*_PWM_PIN"s.
+#   xIN2 (AIN2/BIN2) = the second bridge input on plain GPIO — the "*_DIR_PIN"s.
+#   STBY             = TB6612FNG standby active-LOW; DRV8833 ties nSLEEP HIGH so unused.
+# NOTE: the DRV8833 is an **IN/IN** part, not phase/enable — xIN2 is NOT a simple
+# "HIGH = forward" direction line. GpiozeroMotorDriver._drive_channel encodes the
+# actual DRV8833 IN/IN truth table (forward = xIN2 low + duty; reverse = xIN2 high +
+# inverted-duty slow decay; coast = both low). See hardware.py (fixed 2026-07-06).
 # Ultrasonic: HC-SR04 (5 V tolerant level-shifter in series with ECHO line).
 
 MOTOR_LEFT_PWM_PIN: int = _env_int("YALP_MOTOR_LEFT_PWM_PIN", 12)   # hardware PWM0, left speed / AIN1

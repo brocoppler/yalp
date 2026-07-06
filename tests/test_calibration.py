@@ -280,12 +280,13 @@ def fake_gpiozero(monkeypatch):
 def test_set_motors_applies_trim(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(left_trim=0.5, right_trim=0.8)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_trim=0.5, right_trim=0.8)
     drv.set_motors(0.8, 1.0)
+    # DRV8833 IN/IN forward = dir (xIN2) LOW, duty = trimmed throttle.
     # left: 0.8 * 0.5 = 0.4 duty, forward; right: 1.0 * 0.8 = 0.8 duty, forward.
-    assert drv._left_dir.value == 1
+    assert drv._left_dir.value == 0
     assert drv._left_pwm.value == pytest.approx(0.4)
-    assert drv._right_dir.value == 1
+    assert drv._right_dir.value == 0
     assert drv._right_pwm.value == pytest.approx(0.8)
 
 
@@ -301,21 +302,23 @@ def test_set_motors_trim_default_is_noop(fake_gpiozero):
 def test_set_motors_invert_flips_direction(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(left_invert=True, right_invert=False)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, right_invert=False)
     drv.set_motors(0.6, 0.6)
-    # Left inverted: +0.6 command -> dir LOW (reverse), duty 0.6.
-    assert drv._left_dir.value == 0
-    assert drv._left_pwm.value == pytest.approx(0.6)
-    # Right unchanged: forward.
-    assert drv._right_dir.value == 1
+    # Left inverted: +0.6 -> -0.6 -> DRV8833 reverse: dir (xIN2) HIGH, slow-decay
+    # duty = 1 - 0.6 = 0.4.
+    assert drv._left_dir.value == 1
+    assert drv._left_pwm.value == pytest.approx(0.4)
+    # Right unchanged: forward -> dir LOW, duty 0.6.
+    assert drv._right_dir.value == 0
     assert drv._right_pwm.value == pytest.approx(0.6)
 
 
 def test_set_motors_trim_and_invert_together(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(left_invert=True, left_trim=0.5)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, left_trim=0.5)
     drv.set_motors(1.0, 0.0)
-    # Left: 1.0 * 0.5 = 0.5 duty, inverted -> dir LOW (reverse).
-    assert drv._left_dir.value == 0
+    # Left: 1.0 * 0.5 = 0.5, inverted -> -0.5 -> DRV8833 reverse: dir (xIN2) HIGH,
+    # slow-decay duty = 1 - 0.5 = 0.5.
+    assert drv._left_dir.value == 1
     assert drv._left_pwm.value == pytest.approx(0.5)
