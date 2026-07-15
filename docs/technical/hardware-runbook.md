@@ -777,6 +777,20 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 | **Motor spins at full speed while "stopped" / an idle channel runs continuously** | **Driver decay-mode dialect mismatch** — the code was driving the DRV8833 (an **IN/IN** part) with phase/enable semantics, so a duty-0 channel with the direction pin latched HIGH became `IN1=0/IN2=1` = full-speed reverse (and `stop()` commanded full reverse). The wiring is correct; the fix is in software — see the **DRV8833 IN/IN truth table** in `src/yalp/reactive/hardware.py` (`GpiozeroMotorDriver._drive_channel`). **Fixed 2026-07-06.** |
 | **Sensor reads garbage / random distances** | Confirm the **divider tap meters ~3.3V** (§4) and ECHO is on GPIO6 *via the divider*, not direct. Check the HC-SR04 GND shares common ground. Don't poll faster than ~15 Hz (≥60 ms). A timed-out echo is **"unknown" → STOP**, not "clear" (§8). |
 | **Robot doesn't stop for obstacles** | Verify the reflex is in the tick (§8) and `SAFE_STOP_THRESHOLD_M` = 0.30 m; meter the divider; confirm the sensor faces forward and the obstacle is in its narrow ~15–30° cone (`hardware.md` §4 — side/low/glass objects are blind spots). |
+| **Pi powers on (green) but any OS boot overheats near the USB-C/PMIC area and drops to a single red LED within ~10 s — reproducible with multiple fresh cards + PSUs + boot media** | **Pi power-management IC (PMIC) hardware failure — not a card or software fault.** Confirmed by: bare board, two PSUs, two fresh microSD cards, both SD and USB boot all failing identically with the same overheat/drop pattern; critically the same Pi idles fine with NO boot media inserted (bare boot with no card shows no overheating). Rule out software and cards first (two brand-new clean flashes on two separate cards), then warranty-replace the board. Do not waste time re-flashing or swapping PSUs once the "fine with no boot media" test passes. |
+| **After a Pi board replacement, motors don't move and/or ultrasonic hangs with "no echo received"** | A new board means the 40-pin GPIO header is bare — **all GPIO jumpers must be re-seated onto the new board before any sensor or motor test.** Symptom if skipped: ultrasonic hangs with gpiozero `no echo received` (ECHO line not connected); motors are silent (all four motor-driver signal wires missing from the header). The camera still works because it is USB, not GPIO, and the GPIO-stack software check (`scripts/verify_gpio_stack.py`) still passes because it only verifies the gpiozero pin factory, not that physical wires are plugged in. Re-seat every motor-driver jumper (§3.1 in `as-built-wiring.md`) and all ultrasonic jumpers using the documented pin map and wire colors; the breadboard side can stay untouched. |
+
+> **SD card longevity — handling notes (field lessons):**
+> - **Power down before inserting or removing the microSD card.** Hot-swapping while the Pi
+>   is powered can corrupt the card's filesystem or wear the contacts.
+> - **Cards can be damaged by board flex, pressure, or ESD** during chassis work — if the Pi
+>   is mounted on a cardboard/plywood chassis, tighten-then-bend sessions or jostling can
+>   crack the card's controller. If the card dies and you don't know why, a session with the
+>   mounted board under stress is a plausible culprit.
+> - **Keep the 3V3 and 5V wires dressed apart on the 40-pin header.** Pin 1 is 3V3 and
+>   Pin 2 is 5V — adjacent pins. A slipped jumper can bridge 5V onto the 3V3 rail, which
+>   will kill GPIO peripherals and possibly the Pi's own 3V3 regulator. Use distinct wire
+>   colors for 3V3 vs. 5V and route them away from each other after seating.
 
 > **OPEN —** Coverage of a single front HC-SR04 is thin (narrow cone; no side/rear;
 > blind to glass and drop-offs — `hardware.md` §4). v1 brings up one front sensor to
