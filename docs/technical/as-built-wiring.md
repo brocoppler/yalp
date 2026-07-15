@@ -16,10 +16,14 @@ you plug a jumper in.
 > - **DONE & recorded:** HC-SR04 ultrasonic (1 kΩ / 1.5 kΩ divider on ECHO — §1),
 >   jumpers to the Pi, USB webcam (Logitech C270).
 > - **DONE & recorded:** DRV8833 drivetrain (§3) — headers soldered, wired,
->   bench-tested, and **Gate E (power/brownout) passed 2026-07-03**.
-> - **NEXT PHYSICAL STEP:** chassis rebuild — remount motors **one per side** (not
->   one per axle — see the "train chassis" WARNING in `hardware-runbook.md` §7),
->   then run `yalp calibrate` to set direction polarity per the rebuilt body.
+>   bench-tested, **Gate E (power/brownout) passed 2026-07-03**, and **milestone H
+>   (Hello Motors) PASSED 2026-07-15** on the replacement Pi 5 — both wheels forward,
+>   in-place LEFT/RIGHT turns confirmed.
+> - **DONE & recorded (§3.4):** motor direction calibration — both wheels wired
+>   reversed (mirror-mount, symmetric); corrected in software (`left_invert=True`,
+>   `right_invert=True`), persisted to `~/.config/yalp/calibration.json` on the Pi.
+> - **NEXT PHYSICAL STEP:** collision-stop reflex (J) — bring the reactive safety loop
+>   up on the real body with live HC-SR04 reads and the drivetrain.
 >
 > The board is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py`
 > default). It has **no STBY pin**; TB6612FNG is a fallback only if the DRV8833
@@ -33,7 +37,7 @@ you plug a jumper in.
 | Camera (Logitech C270, USB) | ✅ working | `yalp hwtest --check camera` (grabs a 640×480 frame) |
 | Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
 | **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
-| **Motors (DRV8833 + 2× TT + 4×AA)** | ✅ **wired & Gate E PASSED (2026-07-03)** | `yalp hwtest --check motors`; `vcgencmd get_throttled` (want 0x0) |
+| **Motors (DRV8833 + 2× TT + 4×AA)** | ✅ **wired & Gate E PASSED (2026-07-03); milestone H PASSED (2026-07-15)** | `yalp hwtest --check motors`; `vcgencmd get_throttled` (want 0x0) |
 
 ---
 
@@ -216,6 +220,47 @@ Measured rail: **5.55 V** (~1.39 V/cell, freshly charged).
 > polarized (unlike a ceramic), is electrically safe at this DC rail voltage, and the
 > clone module carries its own onboard ceramic caps. A **"104" ceramic disc** remains
 > the recommended drop-in if noise gremlins ever appear.
+
+### 3.4 Motor direction calibration — as built (2026-07-15)
+
+> **As-built finding:** both drive wheels were wired with **reversed polarity** relative to
+> the DRV8833 channel's forward convention — i.e., what the driver considers "forward" spun
+> each wheel backward. This is a **symmetric** consequence of mirror-mounting the two TT
+> motors on opposite sides of the chassis: the left motor's "correct" forward lead becomes
+> its natural reverse lead when flipped to face the other direction, and the same is true
+> of the right. No re-soldering was needed or performed.
+
+**Correction:** applied entirely in software using yalp's motor calibration layer:
+
+| Parameter | Value | Effect |
+|---|---|---|
+| `left_invert` | `True` | Swaps the logic sense of the left channel forward/reverse |
+| `right_invert` | `True` | Swaps the logic sense of the right channel forward/reverse |
+
+Persisted to **`~/.config/yalp/calibration.json` on the Pi** (machine-local, per-robot
+state under `~/.config` — **not committed to the repo**). This is exactly the use-case the
+calibration layer exists for: wiring polarity that is correct for one physical build but may
+differ on another.
+
+**Verified at milestone H (2026-07-15):** both wheels roll forward together when commanded
+forward; in-place LEFT turn (left wheel back, right wheel forward) and RIGHT turn (right
+wheel back, left wheel forward) confirmed, all via `GpiozeroMotorDriver` through the saved
+calibration.
+
+### 3.5 Pi 5 board replacement and header re-seat (2026-07-15)
+
+> **PMIC hardware failure:** the original Pi 5 suffered a power-management IC failure —
+> reproducible overheating near the USB-C/PMIC area with any OS boot media, on multiple
+> PSUs and fresh SD cards (see `hardware-runbook.md` §11 for the diagnostic pattern). The
+> board was replaced under warranty.
+
+**Re-seat procedure (2026-07-15):** the drivetrain header wiring (5 motor-driver jumpers:
+AIN2 → Pin 11, AIN1 → Pin 32, STBY → Pin 1, BIN1 → Pin 33, BIN2 → Pin 15, GND → Pin 9)
+was re-seated onto the **new Pi's 40-pin header using the documented pin map above (§3.1)
+and the same wire colors and holes**. The breadboard side was untouched throughout the swap.
+The ultrasonic jumpers (§1) were re-seated identically. The USB camera required no
+re-seating (USB). After re-seat, `yalp hwtest --check motors` and the full milestone H
+drive test were run to confirm correct operation on the new board.
 
 ---
 
