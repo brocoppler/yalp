@@ -28,7 +28,7 @@ those classes is what requires the libraries; merely importing them does not.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, runtime_checkable, Protocol
+from typing import Any, Callable, List, Optional, Tuple, runtime_checkable, Protocol
 
 from yalp import config
 
@@ -483,6 +483,25 @@ class GpiozeroUltrasonicSensor:
       monotonic clock: if called sooner than ``1 / max_poll_hz`` since the last
       *real* sample it returns the cached reading **without re-pulsing** the
       sensor, rather than firing a ping that would read garbage.
+    * **Bounded "coast last-known" grace (Pi 5 phantom-STOP fix).** On the Pi 5
+      the echo is timed in *software* (pigpio is unavailable), so isolated reads
+      spuriously time out — especially at longer range where the return echo is
+      weak — and, since a miss correctly biases to STOP, the robot phantom-stops
+      every second or two and cannot drive. To fix this WITHOUT weakening the
+      invariant, a single miss (or a brief burst) re-serves the last VALID
+      distance instead of instantly declaring blindness, bounded by BOTH
+      ``grace_ms`` (a wall-clock window since the last valid reading) AND
+      ``grace_max_misses`` (a consecutive-miss budget). Whichever bound trips
+      FIRST ends the grace; the read then reverts to ``(placeholder, False)``
+      exactly as before → STOP. A single valid read resets both bounds. The
+      grace only ever RE-SERVES the exact last measured distance — it never
+      fabricates a larger/clear value — so a near obstacle (last valid inside
+      ``safe_stop_threshold_m``) is coasted as an obstacle (still STOP), and
+      **sustained** sensor loss still STOPs. This is a bounded, deliberate risk:
+      the robot coasts on the last good reading for at most ~``grace_ms`` /
+      ``grace_max_misses`` misses (~0.15 m of travel at 1 m/s), well inside the
+      ``safe_stop_threshold_m`` stopping margin. It is independent of the motor
+      watchdog (a stalled tick loop still trips the dead-man's switch).
 
     **Prefer :class:`gpiozero.DistanceSensor`.** It owns the TRIG pulse / ECHO
     timing and exposes ``.distance`` as a fraction ``0..1`` of ``max_distance``;
@@ -527,15 +546,39 @@ class GpiozeroUltrasonicSensor:
         echo_timeout_s: float = config.ULTRASONIC_ECHO_TIMEOUT_S,
         max_poll_hz: float = config.ULTRASONIC_MAX_POLL_HZ,
         speed_of_sound: float = config.SPEED_OF_SOUND_MPS,
+        grace_ms: float = config.ULTRASONIC_GRACE_MS,
+        grace_max_misses: int = config.ULTRASONIC_GRACE_MAX_MISSES,
+        safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
+        monotonic: Optional[Callable[[], float]] = None,
     ) -> None:
         self._max_distance_m = float(max_distance_m)
         self._echo_timeout_s = float(echo_timeout_s)
         self._speed_of_sound = float(speed_of_sound)
         self._closed = False
 
+        # Injectable monotonic clock so the rate-cap AND grace logic are testable
+        # with a fake clock (no real sleeping). ``None`` => live ``time.monotonic``
+        # resolved at CALL time, which also honours a test that monkeypatches it.
+        self._clock: Optional[Callable[[], float]] = monotonic
+
         # Rate-cap: >= 1 / max_poll_hz between real samples (>= ~60 ms at 15 Hz).
         min_interval_s = (1.0 / max_poll_hz) if max_poll_hz and max_poll_hz > 0 else 0.0
         self._limiter = GpiozeroUltrasonicSensor._RateLimiter(min_interval_s)
+
+        # --- Bounded "coast last-known" grace (Pi 5 phantom-STOP fix) ---------
+        # A miss briefly re-serves the last VALID reading, bounded by BOTH a
+        # wall-clock window (grace_ms since the last valid read) AND a
+        # consecutive-miss budget (grace_max_misses). Whichever trips first ends
+        # the grace -> (placeholder, False) -> STOP. See the class docstring.
+        self._grace_s: float = max(0.0, float(grace_ms) / 1000.0)
+        self._grace_max_misses: int = int(grace_max_misses)
+        self._safe_stop_threshold_m: float = float(safe_stop_threshold_m)
+        # Last VALID (known=True) reading and when it was taken; ``None`` until we
+        # have ever measured one. Grace can ONLY coast off a real prior valid.
+        self._last_valid_distance_m: Optional[float] = None
+        self._last_valid_at: Optional[float] = None
+        # Consecutive misses currently being coasted (reset by any valid read).
+        self._grace_misses: int = 0
 
         # Cached last reading. Until we have a real one, bias to "unknown": the
         # distance placeholder is the max range but ``known`` is False, so the
@@ -577,32 +620,100 @@ class GpiozeroUltrasonicSensor:
         """
         return (float(seconds) * float(speed_of_sound)) / 2.0
 
+    def _now(self) -> float:
+        """Read the (possibly injected) monotonic clock.
+
+        Defaults to live ``time.monotonic`` resolved at CALL time so a test that
+        monkeypatches ``time.monotonic`` (or injects ``monotonic=`` at
+        construction) fully controls both the rate-cap and the grace timing.
+        """
+        if self._clock is not None:
+            return self._clock()
+        import time
+
+        return time.monotonic()
+
     def read_distance(self) -> Tuple[float, bool]:
         """Return ``(distance_m, known)``; ``known=False`` means STOP.
 
         Rate-capped: if called sooner than ``1 / max_poll_hz`` since the last
         real sample, the cached reading is returned **without** re-pulsing. On a
-        fresh successful echo returns ``(distance_m, True)``. On echo timeout /
-        no echo returns ``(last_or_max_distance, False)`` — the distance is a
-        placeholder that the caller must ignore because ``known`` is ``False``.
-        We never fabricate a clear reading from a miss.
+        fresh successful echo returns ``(distance_m, True)`` and RESETS the grace.
+        On an echo timeout / no echo, the bounded "coast last-known" grace may
+        briefly re-serve the last VALID ``(distance_m, True)`` (see
+        :meth:`_register_sample`); once the grace is exhausted (wall-clock window
+        OR miss budget) it returns ``(placeholder, False)`` — the distance is a
+        placeholder the caller must ignore because ``known`` is ``False``. We
+        never fabricate a clear reading from a miss.
         """
-        import time
-
         if self._closed:
             return (self._last_distance_m, False)
 
-        now = time.monotonic()
+        now = self._now()
         if not self._limiter.allow(now):
             # Too soon to ping again: serve the cached reading verbatim. We do
-            # NOT re-pulse and we do NOT change ``known`` — a recent miss stays a
-            # miss until a real sample replaces it.
+            # NOT re-pulse and we do NOT change ``known`` — during a grace coast
+            # the cache already holds (last_valid, True); otherwise a recent miss
+            # stays a miss until a real sample replaces it. Rate-capped reads
+            # therefore never consume the miss budget (only real re-pulses do).
             return (self._last_distance_m, self._last_known)
 
         distance_m, known = self._sample()
-        self._last_distance_m = distance_m
-        self._last_known = known
-        return (distance_m, known)
+        return self._register_sample(distance_m, known, now)
+
+    def _register_sample(self, distance_m: float, known: bool, now: float) -> Tuple[float, bool]:
+        """Fold one REAL sample into the grace state and return what to report.
+
+        * A **valid** reading (``known=True``) resets both grace bounds and is
+          returned verbatim as the new last-valid.
+        * A **miss** (``known=False``) is coasted as the last VALID reading while
+          BOTH bounds still hold (:meth:`_can_coast`); each coasted miss spends
+          one unit of the miss budget. Once either bound trips, the read reverts
+          to ``(placeholder, False)`` → STOP, exactly as before the grace.
+        """
+        if known:
+            # A fresh valid reading RESETS the grace entirely.
+            self._last_valid_distance_m = distance_m
+            self._last_valid_at = now
+            self._grace_misses = 0
+            self._last_distance_m = distance_m
+            self._last_known = True
+            return (distance_m, True)
+
+        # A real echo miss. Coast the last VALID reading iff BOTH bounds hold.
+        if self._can_coast(now):
+            self._grace_misses += 1
+            # Re-serve the EXACT last valid distance — never larger/clear. If that
+            # reading was already inside safe_stop_threshold_m it still reports an
+            # obstacle (< threshold → STOP); if it was clear we briefly coast.
+            self._last_distance_m = self._last_valid_distance_m  # type: ignore[assignment]
+            self._last_known = True
+            return (self._last_distance_m, True)
+
+        # Grace exhausted (window elapsed OR miss budget spent) — or we never had
+        # a valid reading to coast: behave exactly as before → (placeholder,
+        # False) so the caller SAFE_STOPs. We do NOT reset the last-valid: a later
+        # valid read is what clears the STOP.
+        self._last_known = False
+        return (self._last_distance_m, False)
+
+    def _can_coast(self, now: float) -> bool:
+        """True iff a miss may be coasted as the last VALID reading right now.
+
+        Requires a prior valid reading and BOTH bounds unspent: the miss budget
+        (``grace_max_misses``) AND the wall-clock window (``grace_ms`` since the
+        last valid read). A zero/negative bound disables the grace entirely, in
+        which case a miss immediately reverts to the pre-grace STOP behaviour.
+        """
+        if self._last_valid_distance_m is None or self._last_valid_at is None:
+            return False  # never measured a valid reading -> cannot coast, STOP
+        if self._grace_s <= 0.0 or self._grace_max_misses <= 0:
+            return False  # grace disabled -> immediate STOP (pre-grace behaviour)
+        if self._grace_misses >= self._grace_max_misses:
+            return False  # consecutive-miss budget spent
+        if (now - self._last_valid_at) > self._grace_s:
+            return False  # wall-clock window since the last valid read elapsed
+        return True
 
     def _sample(self) -> Tuple[float, bool]:
         """Take one real reading from ``gpiozero.DistanceSensor``.

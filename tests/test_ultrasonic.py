@@ -246,7 +246,12 @@ def test_first_read_after_60ms_resamples(fake_gpiozero, fake_clock):
 def test_timeout_yields_known_false_and_does_not_decay_to_clear(fake_gpiozero, fake_clock):
     from yalp.reactive.hardware import GpiozeroUltrasonicSensor
 
-    sensor = GpiozeroUltrasonicSensor(max_distance_m=4.0, max_poll_hz=15.0)
+    # Grace DISABLED here (grace_max_misses=0) so we assert the underlying, raw
+    # timeout contract: a miss is IMMEDIATELY unknown and never decayed to clear.
+    # The bounded-grace coasting behaviour is exercised in the grace tests below.
+    sensor = GpiozeroUltrasonicSensor(
+        max_distance_m=4.0, max_poll_hz=15.0, grace_max_misses=0
+    )
 
     # First, a real close obstacle.
     sensor._sensor.fraction = 0.05  # 0.2 m -> imminent collision
@@ -266,6 +271,200 @@ def test_timeout_yields_known_false_and_does_not_decay_to_clear(fake_gpiozero, f
     # last good reading, never an invented "all clear".
     assert d1 != pytest.approx(4.0)
     assert d1 == pytest.approx(0.2)
+
+
+# --------------------------------------------------------------------------- #
+# 3f. BOUNDED "coast last-known" grace (Pi 5 phantom-STOP fix).
+#
+# On the Pi 5 the echo is timed in software, so ISOLATED reads spuriously time
+# out; a bounded grace re-serves the last VALID reading for a short window / a
+# few misses so a single blip does not phantom-STOP the robot — while sustained
+# loss and near obstacles STILL stop it. We drive the clock via ``monotonic=``.
+# --------------------------------------------------------------------------- #
+def _grace_sensor(grace_ms, grace_max_misses, clock, *, max_distance_m=4.0):
+    """A GpiozeroUltrasonicSensor with an injected clock and no poll-rate cap.
+
+    ``max_poll_hz=0`` disables the rate limiter so every ``read_distance`` takes
+    a fresh real sample — the grace bounds (not the poll cap) are what we test.
+    """
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    return GpiozeroUltrasonicSensor(
+        max_distance_m=max_distance_m,
+        max_poll_hz=0.0,  # no rate cap: every read re-pulses
+        grace_ms=grace_ms,
+        grace_max_misses=grace_max_misses,
+        monotonic=lambda: clock["now"],
+    )
+
+
+def test_isolated_single_timeout_coasts_last_valid_no_stop(fake_gpiozero):
+    """An isolated single miss between valid reads coasts (last_valid, True)."""
+    clock = {"now": 100.0}
+    sensor = _grace_sensor(150, 3, clock)
+
+    sensor._sensor.fraction = 0.5  # 2.0 m clear
+    d0, k0 = sensor.read_distance()
+    assert (d0, k0) == (pytest.approx(2.0), True)
+
+    # One isolated timeout 40 ms later (inside the 150 ms window, 1st miss).
+    clock["now"] += 0.040
+    sensor._sensor.fraction = 1.0  # echo timeout
+    d1, k1 = sensor.read_distance()
+    assert k1 is True  # coasted -> NO stop
+    assert d1 == pytest.approx(2.0)  # re-serves the EXACT last valid distance
+
+    # A valid read again restores normal operation.
+    clock["now"] += 0.040
+    sensor._sensor.fraction = 0.5
+    d2, k2 = sensor.read_distance()
+    assert (d2, k2) == (pytest.approx(2.0), True)
+
+
+def test_grace_miss_budget_bound_trips_stop_within_window(fake_gpiozero):
+    """Miss-count bound: within a generous window, the (N+1)-th miss STOPs."""
+    clock = {"now": 200.0}
+    # Big window (5 s) so the MISS budget (2) is what trips first.
+    sensor = _grace_sensor(5000, 2, clock)
+
+    sensor._sensor.fraction = 0.5  # 2.0 m clear
+    assert sensor.read_distance() == (pytest.approx(2.0), True)
+
+    sensor._sensor.fraction = 1.0  # timeouts from here on
+    # Miss 1 and 2 coast (budget = 2); each read advances 5 ms (well inside 5 s).
+    clock["now"] += 0.005
+    assert sensor.read_distance() == (pytest.approx(2.0), True)  # miss 1
+    clock["now"] += 0.005
+    assert sensor.read_distance() == (pytest.approx(2.0), True)  # miss 2
+    # Miss 3 exceeds the budget -> STOP (placeholder, False).
+    clock["now"] += 0.005
+    d, known = sensor.read_distance()
+    assert known is False
+    assert d != pytest.approx(4.0)  # never an invented clear path
+
+
+def test_grace_time_window_bound_trips_stop_with_few_misses(fake_gpiozero):
+    """Wall-clock bound: a slow clock trips the window before the miss budget."""
+    clock = {"now": 300.0}
+    # Big miss budget (10) so the TIME window (150 ms) is what trips first.
+    sensor = _grace_sensor(150, 10, clock)
+
+    sensor._sensor.fraction = 0.5  # 2.0 m clear at t0
+    assert sensor.read_distance() == (pytest.approx(2.0), True)
+
+    sensor._sensor.fraction = 1.0  # timeouts from here on
+    # A miss 100 ms later is inside the 150 ms window -> coast (only miss #1).
+    clock["now"] += 0.100
+    assert sensor.read_distance() == (pytest.approx(2.0), True)
+    # The next miss lands at +200 ms total (> 150 ms window) -> STOP, even though
+    # only 2 misses have occurred (budget of 10 is nowhere near spent).
+    clock["now"] += 0.100
+    d, known = sensor.read_distance()
+    assert known is False
+    assert d != pytest.approx(4.0)
+
+
+def test_valid_read_resets_grace_so_next_isolated_miss_coasts_again(fake_gpiozero):
+    """A single valid read resets BOTH bounds (window + miss count)."""
+    clock = {"now": 400.0}
+    sensor = _grace_sensor(150, 2, clock)
+
+    sensor._sensor.fraction = 0.5  # 2.0 m
+    assert sensor.read_distance() == (pytest.approx(2.0), True)
+
+    # Spend the whole miss budget coasting.
+    sensor._sensor.fraction = 1.0
+    clock["now"] += 0.010
+    assert sensor.read_distance() == (pytest.approx(2.0), True)  # miss 1
+    clock["now"] += 0.010
+    assert sensor.read_distance() == (pytest.approx(2.0), True)  # miss 2
+    clock["now"] += 0.010
+    assert sensor.read_distance()[1] is False  # budget spent -> STOP
+
+    # A fresh VALID reading resets everything...
+    clock["now"] += 0.010
+    sensor._sensor.fraction = 0.375  # 1.5 m clear
+    assert sensor.read_distance() == (pytest.approx(1.5), True)
+
+    # ...so the NEXT isolated miss coasts again (proving the reset).
+    clock["now"] += 0.010
+    sensor._sensor.fraction = 1.0
+    d, known = sensor.read_distance()
+    assert known is True
+    assert d == pytest.approx(1.5)  # coasts the NEW last-valid, not the stale one
+
+
+def test_near_obstacle_never_coasted_into_clear(fake_gpiozero):
+    """Safety: a near obstacle (< SAFE_STOP_THRESHOLD_M) is coasted as an obstacle.
+
+    The grace only ever re-serves the EXACT last valid distance, so a near
+    reading keeps reporting the (small) obstacle distance — never a larger/clear
+    value — and after the grace exhausts it STOPs. Either way: STOP, never clear.
+    """
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+    from yalp import config
+
+    clock = {"now": 500.0}
+    sensor = _grace_sensor(150, 2, clock)
+
+    # Last VALID reading is a near obstacle well inside the stop threshold.
+    near = config.SAFE_STOP_THRESHOLD_M / 2.0
+    sensor._sensor.fraction = near / 4.0  # fraction of 4.0 m -> `near` metres
+    d0, k0 = sensor.read_distance()
+    assert k0 is True
+    assert d0 == pytest.approx(near)
+    assert d0 < config.SAFE_STOP_THRESHOLD_M
+
+    # Timeouts: while coasting it re-serves the SAME near distance (obstacle),
+    # never a larger/clear one.
+    sensor._sensor.fraction = 1.0
+    clock["now"] += 0.010
+    d1, k1 = sensor.read_distance()
+    assert d1 == pytest.approx(near)  # still the obstacle, not clear
+    assert d1 < config.SAFE_STOP_THRESHOLD_M
+    clock["now"] += 0.010
+    d2, k2 = sensor.read_distance()
+    assert d2 == pytest.approx(near)
+    assert d2 < config.SAFE_STOP_THRESHOLD_M
+
+    # And once the grace exhausts it STOPs outright (known=False).
+    clock["now"] += 0.010
+    d3, k3 = sensor.read_distance()
+    assert k3 is False
+    assert d3 != pytest.approx(4.0)  # never fabricates a clear path
+
+
+def test_sustained_blindness_still_stops(fake_gpiozero):
+    """The invariant: sustained loss beyond BOTH bounds latches known=False."""
+    clock = {"now": 600.0}
+    sensor = _grace_sensor(150, 2, clock)
+
+    sensor._sensor.fraction = 0.5  # 2.0 m clear
+    assert sensor.read_distance() == (pytest.approx(2.0), True)
+
+    # Hammer timeouts far past both the window and the miss budget.
+    sensor._sensor.fraction = 1.0
+    saw_stop = False
+    for _ in range(20):
+        clock["now"] += 0.050  # 50 ms per read -> quickly exceeds 150 ms window
+        _, known = sensor.read_distance()
+        if not known:
+            saw_stop = True
+    assert saw_stop is True
+    # And it STAYS stopped (last read was a miss well past both bounds).
+    clock["now"] += 0.050
+    assert sensor.read_distance()[1] is False
+
+
+def test_never_valid_then_timeout_stops_no_coast(fake_gpiozero):
+    """A sensor that has NEVER read valid cannot coast — a miss is STOP."""
+    clock = {"now": 700.0}
+    sensor = _grace_sensor(150, 3, clock)
+
+    sensor._sensor.fraction = 1.0  # times out from the very first read
+    d, known = sensor.read_distance()
+    assert known is False  # no prior valid to coast -> STOP immediately
+    assert d == pytest.approx(4.0)  # placeholder only; ignored because unknown
 
 
 def test_never_yet_read_sensor_is_unknown_when_cache_served(fake_gpiozero, fake_clock):

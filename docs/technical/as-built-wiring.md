@@ -136,6 +136,32 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 > "clear" (see `hardware.md` §4 and `pi-bringup.md`). So a stray timeout in the read
 > stream is normal, not a wiring fault — only a *sustained* timeout pattern (as in
 > the loose-connection case above) is a problem.
+>
+> **MITIGATION (bounded "coast last-known" grace) —** the software echo timing
+> above produces *isolated* timeouts often enough — **especially at longer range
+> (~2–4 m open room, where the return echo is weak)** — that, because every miss
+> correctly biases to `SAFE_STOP`, the robot would **phantom-STOP every second or
+> two during a `DRIVE_GOAL`** and never actually drive. `GpiozeroUltrasonicSensor`
+> (`src/yalp/reactive/hardware.py`) therefore applies a **bounded grace**: when a
+> read times out but a *recent VALID* reading exists, it briefly **re-serves that
+> last good distance** (coasts) instead of instantly declaring blindness. It is
+> bounded by **BOTH**:
+>
+> - `ULTRASONIC_GRACE_MS` (default **150 ms** — wall-clock window since the last
+>   valid read), and
+> - `ULTRASONIC_GRACE_MAX_MISSES` (default **2** — consecutive echo misses).
+>
+> Whichever bound trips **first** ends the grace, and the read reverts to
+> `known=False` → `SAFE_STOP` exactly as before; a single valid read resets both
+> bounds. **Tradeoff, stated plainly:** the grace coasts on the *last good* reading
+> for at most ~150 ms / 2 misses — a **bounded, deliberate risk** taken to stop the
+> phantom `SAFE_STOP`s. At ~1 m/s that is ≤ ~0.15 m of blind travel, well inside the
+> `SAFE_STOP_THRESHOLD_M` = 0.30 m margin. The grace **only ever re-serves the exact
+> last measured distance** — it never fabricates a larger/clear value — so a **near
+> obstacle is coasted as an obstacle (still STOP)** and **sustained sensor loss still
+> STOPs**. Both knobs are env-overridable (`YALP_ULTRASONIC_GRACE_MS`,
+> `YALP_ULTRASONIC_GRACE_MAX_MISSES`); set the miss budget to `0` to disable the
+> grace and get the pre-mitigation "any miss = instant STOP" behaviour.
 
 ---
 

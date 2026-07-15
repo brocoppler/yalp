@@ -435,6 +435,34 @@ ULTRASONIC_ECHO_TIMEOUT_S: float = 0.06   # treat echo as missed if not received
 ULTRASONIC_MAX_DISTANCE_M: float = 4.0    # discard readings beyond the sensor's reliable range
 SPEED_OF_SOUND_MPS: float = 343.0         # m/s at ~20 °C; distance = (echo_time * v) / 2
 
+# --- Bounded "coast last-known" grace for the ultrasonic (Pi 5 phantom-STOP fix)
+# On the Pi 5 gpiozero times the HC-SR04 echo in SOFTWARE (pigpio is unavailable),
+# so single reads spuriously "time out" (known=False) — especially at longer range
+# (~2-4 m open room, weak return echo). Because a missed echo correctly biases to
+# SAFE_STOP, these ISOLATED misses phantom-stop the robot every second or two and
+# it cannot actually drive (see docs/technical/as-built-wiring.md, Pi5 software
+# echo timing). The mitigation lives in GpiozeroUltrasonicSensor: when a read
+# misses but a RECENT VALID reading exists, briefly re-serve that last-valid
+# distance (coast) instead of instantly declaring blindness. It is bounded by BOTH
+# a wall-clock window AND a consecutive-miss budget; whichever trips first ends the
+# grace and the read reverts to (placeholder, known=False) -> SAFE_STOP. A single
+# valid read resets both bounds. The grace only ever RE-SERVES the last measured
+# distance — it never fabricates a larger/clear value — so a near obstacle is
+# coasted as an obstacle (still STOP) and sustained sensor loss still STOPs.
+#
+# Default window justification (150 ms): at the default REACTIVE_TICK_HZ=20 Hz a
+# tick is 50 ms, so 150 ms ≈ 3 ticks and (at the 15 Hz poll cap, ~66.7 ms/ping)
+# ≈ 2 real re-pulses — i.e. the two bounds are deliberately matched. It is short
+# enough that at a ~1 m/s drive the robot coasts at most ~0.15 m blind, comfortably
+# inside SAFE_STOP_THRESHOLD_M=0.30 m of stopping margin. NOTE it is INDEPENDENT of
+# WATCHDOG_TIMEOUT_MS=100 (a different failure mode: that watchdog zeroes the
+# motors if the whole reactive TICK LOOP stalls, not on a sensor miss — a stalled
+# loop still trips the dead-man's switch regardless of this grace).
+ULTRASONIC_GRACE_MS: int = _env_int("YALP_ULTRASONIC_GRACE_MS", 150)
+# Consecutive echo-miss budget before the grace gives up and STOPs. Conservative
+# (2) so a mere burst is tolerated but sustained loss latches SAFE_STOP fast.
+ULTRASONIC_GRACE_MAX_MISSES: int = _env_int("YALP_ULTRASONIC_GRACE_MAX_MISSES", 2)
+
 # Per-channel direction invert flags. Set True if a motor is wired in reverse
 # (turns the "wrong" way for a given PWM/dir signal). Env values are truthy strings
 # ("1", "true", "yes") — anything else is False.
@@ -513,6 +541,8 @@ class Config:
     ultrasonic_max_poll_hz: float = ULTRASONIC_MAX_POLL_HZ
     ultrasonic_echo_timeout_s: float = ULTRASONIC_ECHO_TIMEOUT_S
     ultrasonic_max_distance_m: float = ULTRASONIC_MAX_DISTANCE_M
+    ultrasonic_grace_ms: int = ULTRASONIC_GRACE_MS
+    ultrasonic_grace_max_misses: int = ULTRASONIC_GRACE_MAX_MISSES
     speed_of_sound_mps: float = SPEED_OF_SOUND_MPS
     motor_left_invert: bool = MOTOR_LEFT_INVERT
     motor_right_invert: bool = MOTOR_RIGHT_INVERT
@@ -608,6 +638,8 @@ __all__ = [
     "ULTRASONIC_MAX_POLL_HZ",
     "ULTRASONIC_ECHO_TIMEOUT_S",
     "ULTRASONIC_MAX_DISTANCE_M",
+    "ULTRASONIC_GRACE_MS",
+    "ULTRASONIC_GRACE_MAX_MISSES",
     "SPEED_OF_SOUND_MPS",
     "MOTOR_LEFT_INVERT",
     "MOTOR_RIGHT_INVERT",

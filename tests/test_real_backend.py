@@ -508,3 +508,145 @@ def test_direct_tick_caller_is_covered_by_the_watchdog():
         assert motor.last == (0.0, 0.0)
     finally:
         backend.close()
+
+
+# --------------------------------------------------------------------------- #
+# (vi) END-TO-END grace: a SINGLE spurious echo-timeout during a DRIVE_GOAL no
+#      longer forces SAFE_STOP (the real GpiozeroUltrasonicSensor coasts on its
+#      last VALID reading), while SUSTAINED timeouts still latch SAFE_STOP/BLOCKED.
+#
+# Unlike the FakeRangeSensor tests above, this wires the REAL grace-aware sensor
+# (against a fake gpiozero + injected clock) into the backend, proving the
+# emergent behaviour: the reactive override still simply trusts (distance, known),
+# and the bounded grace lives entirely in the sensor wrapper.
+# --------------------------------------------------------------------------- #
+def _install_fake_gpiozero(monkeypatch):
+    """Inject a minimal fake ``gpiozero`` package with a controllable sensor."""
+    import sys
+    import types
+
+    class _FakeDistanceSensor:
+        def __init__(self, echo=None, trigger=None, max_distance=1.0, queue_len=1):
+            self.max_distance = max_distance
+            self.fraction = 1.0  # default full-scale == no echo == timeout
+            self.closed = False
+
+        @property
+        def distance(self):
+            return self.fraction
+
+        def close(self):
+            self.closed = True
+
+    class _FakeLGPIOFactory:
+        def close(self):
+            pass
+
+    gpiozero = types.ModuleType("gpiozero")
+
+    class _Device:
+        pin_factory = None
+
+    gpiozero.Device = _Device
+    gpiozero.DistanceSensor = _FakeDistanceSensor
+    pins = types.ModuleType("gpiozero.pins")
+    lgpio_mod = types.ModuleType("gpiozero.pins.lgpio")
+    lgpio_mod.LGPIOFactory = _FakeLGPIOFactory
+    pins.lgpio = lgpio_mod
+    gpiozero.pins = pins
+
+    monkeypatch.setitem(sys.modules, "gpiozero", gpiozero)
+    monkeypatch.setitem(sys.modules, "gpiozero.pins", pins)
+    monkeypatch.setitem(sys.modules, "gpiozero.pins.lgpio", lgpio_mod)
+    return gpiozero
+
+
+def _make_backend_with_real_sensor(monkeypatch, clock):
+    """RealReactiveBackend wired to the REAL GpiozeroUltrasonicSensor (grace-aware).
+
+    The sensor uses ``max_poll_hz=0`` (no rate cap: every tick re-pulses) and an
+    injected clock so the grace window/miss budget are driven deterministically.
+    """
+    _install_fake_gpiozero(monkeypatch)
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    sensor = GpiozeroUltrasonicSensor(
+        max_distance_m=4.0,
+        max_poll_hz=0.0,
+        grace_ms=150,
+        grace_max_misses=2,
+        monotonic=lambda: clock["now"],
+    )
+    motor = FakeMotorDriver()
+    backend = RealReactiveBackend(
+        motor_driver=motor,
+        range_sensor=sensor,
+        camera=Camera(source="synthetic"),
+        max_speed_mps=1.0,
+        tick_hz=50.0,
+        tracker=None,
+    )
+    return backend, motor, sensor
+
+
+def test_single_spurious_timeout_during_drive_does_not_safe_stop(monkeypatch):
+    clock = {"now": 1000.0}
+    backend, motor, sensor = _make_backend_with_real_sensor(monkeypatch, clock)
+
+    # Path is CLEAR (1.0 m). Start driving forward.
+    sensor._sensor.fraction = 0.25  # 25% of 4.0 m -> 1.0 m clear
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 100.0, "speed": 0.5}, seq=1)
+    )
+    st = backend.tick()
+    assert st.mode == Mode.DRIVE_GOAL
+    assert st.goal_status == GoalStatus.RUNNING
+    assert st.distance_known is True
+    assert motor.last == (0.5, 0.5)  # actually driving forward
+
+    # A SINGLE spurious echo-timeout, a hair later (inside the grace window and
+    # miss budget). WITHOUT the grace this would instantly SAFE_STOP; with it the
+    # sensor coasts the last VALID 1.0 m clear reading, so the drive CONTINUES.
+    sensor._sensor.fraction = 1.0  # echo timeout
+    clock["now"] += 0.020
+    st = backend.tick()
+    assert st.mode == Mode.DRIVE_GOAL  # NOT phantom-stopped
+    assert st.goal_status == GoalStatus.RUNNING
+    assert st.distance_known is True  # coasted -> looks like a valid clear read
+    assert motor.last == (0.5, 0.5)  # still driving forward
+
+    # A single VALID read again -> business as usual.
+    sensor._sensor.fraction = 0.25
+    clock["now"] += 0.020
+    st = backend.tick()
+    assert st.mode == Mode.DRIVE_GOAL
+    assert st.distance_known is True
+
+
+def test_sustained_timeout_during_drive_still_latches_safe_stop(monkeypatch):
+    clock = {"now": 2000.0}
+    backend, motor, sensor = _make_backend_with_real_sensor(monkeypatch, clock)
+
+    sensor._sensor.fraction = 0.25  # 1.0 m clear
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 100.0, "speed": 0.5}, seq=1)
+    )
+    assert backend.tick().mode == Mode.DRIVE_GOAL
+
+    # SUSTAINED loss of sensing: hammer timeouts past BOTH grace bounds. The grace
+    # coasts a couple, then gives up and the invariant re-asserts -> SAFE_STOP.
+    sensor._sensor.fraction = 1.0
+    saw_safe_stop = False
+    final = None
+    for _ in range(10):
+        clock["now"] += 0.050  # 50 ms/read -> quickly exceeds the 150 ms window
+        final = backend.tick()
+        if final.mode == Mode.SAFE_STOP:
+            saw_safe_stop = True
+            break
+    assert saw_safe_stop is True
+    assert final.mode == Mode.SAFE_STOP
+    assert final.goal_status == GoalStatus.BLOCKED
+    assert final.distance_known is False
+    assert final.goal["reason"] == "echo_timeout"
+    assert motor.last == (0.0, 0.0)  # motors stopped on sustained blindness
