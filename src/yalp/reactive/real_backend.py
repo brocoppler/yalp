@@ -204,6 +204,27 @@ class RealReactiveBackend(ReactiveTickCore):
         """
         return self._range_sensor.read_distance()
 
+    def read_range_stats(self) -> Optional[dict]:
+        """Forward the range sensor's cumulative counters into the state snapshot.
+
+        The real :class:`~yalp.reactive.hardware.GpiozeroUltrasonicSensor` (and the
+        injected :class:`~yalp.reactive.hardware.FakeRangeSensor`) expose a
+        ``stats()`` dict of monotonic read counters — crucially ``raw_misses`` /
+        ``coasted_reads``, which reveal the grace-coasted misses that ``distance_known``
+        hides. Surfaced under ``RobotState.ultrasonic`` so a state poll / telemetry
+        record shows the TRUE miss rate.
+
+        Defensive by design: a sensor without ``stats()`` (or one that raises)
+        yields ``None`` so the observability read can never break the safety tick.
+        """
+        stats = getattr(self._range_sensor, "stats", None)
+        if not callable(stats):
+            return None
+        try:
+            return stats()
+        except Exception:  # pragma: no cover - observability must never break a tick
+            return None
+
     def command_motors(self, left: float, right: float) -> None:
         """Write signed ``(left, right)`` throttles to the real motor driver."""
         self._motor_driver.set_motors(left, right)

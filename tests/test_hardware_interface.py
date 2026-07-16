@@ -100,3 +100,31 @@ def test_range_sensor_close():
     assert s.closed is False
     s.close()
     assert s.closed is True
+
+
+def test_range_sensor_stats_mirror_read_outcomes():
+    # The fake mirrors GpiozeroUltrasonicSensor.stats() so it is a faithful
+    # stand-in when injected into RealReactiveBackend (a laptop state poll carries
+    # the same 'ultrasonic' sub-map as the Pi). It has no coast grace, so every
+    # miss is served straight through and coasted_reads stays 0.
+    s = FakeRangeSensor()
+    assert s.stats() == {
+        "total_reads": 0,
+        "valid_reads": 0,
+        "raw_misses": 0,
+        "coasted_reads": 0,
+        "unknown_served": 0,
+    }
+
+    s.read_distance()  # default: 4.0 m, known -> a valid read
+    s.set_distance(2.0, known=False)  # echo timeout
+    s.read_distance()
+    s.read_distance()
+
+    assert s.stats() == {
+        "total_reads": 3,
+        "valid_reads": 1,
+        "raw_misses": 2,
+        "coasted_reads": 0,
+        "unknown_served": 2,
+    }

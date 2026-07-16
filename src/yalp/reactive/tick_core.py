@@ -108,6 +108,22 @@ class ReactiveTickCore(ReactiveBackend):
         obstacle upstream — bias to STOP, never decay a miss into "clear".
         """
 
+    def read_range_stats(self) -> Optional[dict]:
+        """Return cumulative range-sensor observability counters, or ``None``.
+
+        A small read-only sub-map of ints (``total_reads`` / ``valid_reads`` /
+        ``raw_misses`` / ``coasted_reads`` / ``unknown_served``) published into the
+        :class:`~yalp.contract.messages.RobotState` snapshot under ``ultrasonic`` so
+        a state poll / telemetry record shows the TRUE miss rate — including the
+        grace-coasted misses that ``distance_known`` alone hides.
+
+        Default: ``None`` (pure simulation / a sensor with no counters). The real
+        backend forwards its ultrasonic sensor's ``stats()`` when available. Read on
+        the tick right after :meth:`read_range`, so the counters are fresh for this
+        tick; it must be cheap and must never raise (biased to ``None`` on error).
+        """
+        return None
+
     def command_motors(self, left: float, right: float) -> None:
         """Command signed ``(left, right)`` wheel throttles.
 
@@ -295,6 +311,10 @@ class ReactiveTickCore(ReactiveBackend):
             s.obstacle = (not s.distance_known) or (
                 s.distance_m < self.safe_stop_threshold_m
             )
+            # Fresh cumulative range-sensor counters for observability (grace-coast
+            # / raw-miss tallies invisible to ``distance_known``). Captured right
+            # after the read so the sub-map reflects THIS tick's sample.
+            s.ultrasonic = self.read_range_stats()
 
             # Refresh the latest-frame handle (a stale frame is fine).
             frame = self._latest_frame()
@@ -640,6 +660,7 @@ class ReactiveTickCore(ReactiveBackend):
             ticks_since_last_detector_confirmation=s.ticks_since_last_detector_confirmation,
             last_frame_id=s.last_frame_id,
             speed_limit=s.speed_limit,
+            ultrasonic=dict(s.ultrasonic) if s.ultrasonic is not None else None,
             ts=s.ts,
         )
 

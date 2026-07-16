@@ -29,7 +29,7 @@ those classes is what requires the libraries; merely importing them does not.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, List, Optional, Tuple, runtime_checkable, Protocol
+from typing import Any, Callable, Dict, List, Optional, Tuple, runtime_checkable, Protocol
 
 from yalp import config
 
@@ -130,6 +130,14 @@ class FakeRangeSensor:
         self.closed = False
         #: Number of times :meth:`read_distance` was called.
         self.read_count = 0
+        # Observability counters mirroring GpiozeroUltrasonicSensor.stats() so the
+        # fake is a faithful stand-in when injected into RealReactiveBackend: a
+        # state poll / telemetry record carries the same 'ultrasonic' sub-map on a
+        # laptop as on the Pi. The fake has no coast grace, so ``coasted_reads`` is
+        # always 0 and every miss is served straight through (unknown).
+        self._valid_reads = 0
+        self._raw_misses = 0
+        self._unknown_served = 0
 
     def set_distance(self, d: float, known: bool = True) -> None:
         """Set the reading returned by :meth:`read_distance`."""
@@ -146,7 +154,22 @@ class FakeRangeSensor:
 
     def read_distance(self) -> Tuple[float, bool]:
         self.read_count += 1
+        if self.known:
+            self._valid_reads += 1
+        else:
+            self._raw_misses += 1
+            self._unknown_served += 1
         return (self.distance_m, self.known)
+
+    def stats(self) -> Dict[str, int]:
+        """Cumulative read counters (mirrors :meth:`GpiozeroUltrasonicSensor.stats`)."""
+        return {
+            "total_reads": self.read_count,
+            "valid_reads": self._valid_reads,
+            "raw_misses": self._raw_misses,
+            "coasted_reads": 0,  # the fake has no coast grace
+            "unknown_served": self._unknown_served,
+        }
 
     def close(self) -> None:
         self.closed = True
@@ -506,6 +529,19 @@ class GpiozeroUltrasonicSensor:
       ``safe_stop_threshold_m`` stopping margin. It is independent of the motor
       watchdog (a stalled tick loop still trips the dead-man's switch).
 
+    * **Observability counters (true miss rate).** The coast grace re-serves a
+      missed echo as ``known=True``, so an absorbed miss is INDISTINGUISHABLE over
+      IPC/state from a genuine valid echo — an external observer's ``known=False``
+      rate is therefore only a LOWER BOUND on the real miss rate (2026-07-16 field
+      finding). To make the real numbers visible, cheap monotonic counters —
+      ``total_reads`` (every :meth:`read_distance` call), ``valid_reads`` (fresh
+      valid echoes), ``raw_misses`` (real echo timeouts, the TRUE miss count before
+      any grace), ``coasted_reads`` (raw misses the grace absorbed) and
+      ``unknown_served`` (reads that surfaced ``known=False`` to the caller) — are
+      incremented on the hot path (integer bumps only) and exposed read-only via
+      :meth:`stats`. They are threaded into the reactive state snapshot / telemetry
+      so a field session can see the true miss rate, not just the absorbed remainder.
+
     **Prefer :class:`gpiozero.DistanceSensor`.** It owns the TRIG pulse / ECHO
     timing and exposes ``.distance`` as a fraction ``0..1`` of ``max_distance``;
     a value at (or above) the ceiling with no real echo is treated as a timeout.
@@ -618,6 +654,20 @@ class GpiozeroUltrasonicSensor:
         self._last_distance_m: float = self._max_distance_m
         self._last_known: bool = False
 
+        # --- Observability counters (see the class docstring) -----------------
+        # Cheap monotonic tallies, bumped on the hot path (integer increments
+        # only) and exposed read-only via stats(). ``raw_misses`` is the TRUE
+        # miss count (every real echo timeout), of which ``coasted_reads`` is the
+        # subset the grace absorbed and re-served as known=True — the difference an
+        # external observer could never see before, because a coasted miss looks
+        # exactly like a valid echo. ``unknown_served`` is what an external
+        # observer DOES count (reads that returned known=False).
+        self._total_reads: int = 0
+        self._valid_reads: int = 0
+        self._raw_misses: int = 0
+        self._coasted_reads: int = 0
+        self._unknown_served: int = 0
+
         # --- Lazy hardware imports (keep the module laptop-importable) --------
         try:
             import gpiozero  # noqa: F401
@@ -678,7 +728,13 @@ class GpiozeroUltrasonicSensor:
         placeholder the caller must ignore because ``known`` is ``False``. We
         never fabricate a clear reading from a miss.
         """
+        # Count EVERY served read (including closed / rate-capped cache serves),
+        # so ``unknown_served / total_reads`` is exactly the miss fraction an
+        # external observer sees per served reading.
+        self._total_reads += 1
+
         if self._closed:
+            self._unknown_served += 1
             return (self._last_distance_m, False)
 
         now = self._now()
@@ -687,11 +743,39 @@ class GpiozeroUltrasonicSensor:
             # NOT re-pulse and we do NOT change ``known`` — during a grace coast
             # the cache already holds (last_valid, True); otherwise a recent miss
             # stays a miss until a real sample replaces it. Rate-capped reads
-            # therefore never consume the miss budget (only real re-pulses do).
+            # therefore never consume the miss budget (only real re-pulses do), but
+            # a cache-served miss is still an unknown SURFACED to the caller.
+            if not self._last_known:
+                self._unknown_served += 1
             return (self._last_distance_m, self._last_known)
 
         distance_m, known = self._sample()
         return self._register_sample(distance_m, known, now)
+
+    def stats(self) -> Dict[str, int]:
+        """Read-only snapshot of the cumulative observability counters.
+
+        Returns a fresh dict (a copy, safe to serialize/mutate) of the monotonic
+        tallies described on the class docstring::
+
+            total_reads     every read_distance() call (incl. cache serves)
+            valid_reads     fresh valid echoes (known=True from a new sample)
+            raw_misses      real echo timeouts — the TRUE miss count, before grace
+            coasted_reads   raw misses the grace absorbed (re-served known=True)
+            unknown_served  reads that surfaced known=False to the caller
+
+        Invariants (useful for readers): ``raw_misses >= coasted_reads`` and the
+        real-sample count is ``valid_reads + raw_misses``. ``coasted_reads`` is the
+        externally-invisible slice; comparing it to ``unknown_served`` recovers the
+        true miss rate an IPC/state observer could otherwise only lower-bound.
+        """
+        return {
+            "total_reads": self._total_reads,
+            "valid_reads": self._valid_reads,
+            "raw_misses": self._raw_misses,
+            "coasted_reads": self._coasted_reads,
+            "unknown_served": self._unknown_served,
+        }
 
     def _register_sample(self, distance_m: float, known: bool, now: float) -> Tuple[float, bool]:
         """Fold one REAL sample into the grace state and return what to report.
@@ -705,6 +789,7 @@ class GpiozeroUltrasonicSensor:
         """
         if known:
             # A fresh valid reading RESETS the grace entirely.
+            self._valid_reads += 1
             self._last_valid_distance_m = distance_m
             self._last_valid_at = now
             self._grace_misses = 0
@@ -712,9 +797,17 @@ class GpiozeroUltrasonicSensor:
             self._last_known = True
             return (distance_m, True)
 
-        # A real echo miss. Coast the last VALID reading iff BOTH bounds hold.
+        # A real echo miss — the TRUE miss count, independent of whether the grace
+        # goes on to absorb it.
+        self._raw_misses += 1
+
+        # Coast the last VALID reading iff BOTH bounds hold.
         if self._can_coast(now):
             self._grace_misses += 1
+            # This raw miss is being ABSORBED by the grace: it is re-served as
+            # known=True and so is invisible to any external observer — the very
+            # gap this counter exists to expose.
+            self._coasted_reads += 1
             # Re-serve the EXACT last valid distance — never larger/clear. If that
             # reading was already inside safe_stop_threshold_m it still reports an
             # obstacle (< threshold → STOP); if it was clear we briefly coast.
@@ -726,6 +819,7 @@ class GpiozeroUltrasonicSensor:
         # a valid reading to coast: behave exactly as before → (placeholder,
         # False) so the caller SAFE_STOPs. We do NOT reset the last-valid: a later
         # valid read is what clears the STOP.
+        self._unknown_served += 1
         self._last_known = False
         return (self._last_distance_m, False)
 

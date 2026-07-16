@@ -196,6 +196,15 @@ class RobotState:
     ticks_since_last_detector_confirmation: int = 0
     last_frame_id: Optional[str] = None
     speed_limit: float = 1.0
+    #: Optional cumulative range-sensor counters for observability (a sub-map of
+    #: ints: ``total_reads`` / ``valid_reads`` / ``raw_misses`` / ``coasted_reads``
+    #: / ``unknown_served``), or ``None`` when the backend has no counter-bearing
+    #: sensor (e.g. the pure simulation). ADDITIVE, backward-compatible: an old
+    #: consumer that never reads this key is unaffected, and an old wire message
+    #: without it decodes to ``None``. The grace-coasted miss count that this
+    #: exposes is invisible to a plain ``distance_known`` observer, so this is the
+    #: only place a state poll / telemetry record can show the TRUE miss rate.
+    ultrasonic: Optional[dict] = None
     ts: float = field(default_factory=time.monotonic)
 
     def __post_init__(self) -> None:
@@ -235,6 +244,7 @@ class RobotState:
             "ticks_since_last_detector_confirmation": self.ticks_since_last_detector_confirmation,
             "last_frame_id": self.last_frame_id,
             "speed_limit": self.speed_limit,
+            "ultrasonic": self.ultrasonic,
             "ts": self.ts,
         }
 
@@ -261,6 +271,7 @@ class RobotState:
             ),
             last_frame_id=d.get("last_frame_id"),
             speed_limit=float(d.get("speed_limit", 1.0)),
+            ultrasonic=d.get("ultrasonic"),
             ts=float(d.get("ts", 0.0)),
         )
 

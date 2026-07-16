@@ -716,3 +716,70 @@ def test_env_poll_cap_reaches_backend_built_sensor(monkeypatch):
             "env override never reaches the field's GpiozeroUltrasonicSensor()."
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# (viii) END-TO-END observability: the range sensor's cumulative miss/coast
+#        counters are threaded into the RobotState snapshot the IPC server serves
+#        (under an additive 'ultrasonic' sub-map) AND survive the JSON round-trip.
+#        This is what lets a field session read the TRUE miss rate over IPC/state
+#        instead of only the grace-absorbed remainder (2026-07-16 field finding).
+# --------------------------------------------------------------------------- #
+def test_state_snapshot_carries_ultrasonic_counters():
+    from yalp.contract.messages import RobotState
+
+    backend, motor, sensor = _make_backend()  # injected FakeRangeSensor (clear)
+    st = backend.tick()
+
+    assert st.ultrasonic is not None
+    assert set(st.ultrasonic) == {
+        "total_reads",
+        "valid_reads",
+        "raw_misses",
+        "coasted_reads",
+        "unknown_served",
+    }
+    # One tick -> one clear (valid) read.
+    assert st.ultrasonic["total_reads"] == 1
+    assert st.ultrasonic["valid_reads"] == 1
+    assert st.ultrasonic["raw_misses"] == 0
+
+    # get_state() (an on-demand poll, no fresh tick) surfaces the same sub-map.
+    assert backend.get_state().ultrasonic == st.ultrasonic
+
+    # ADDITIVE + backward-compatible: the counters ride the existing 'state' wire
+    # message and round-trip through JSON unchanged.
+    d = st.to_dict()
+    assert d["ultrasonic"] == st.ultrasonic
+    assert RobotState.from_json(st.to_json()).ultrasonic == st.ultrasonic
+
+
+def test_state_snapshot_reveals_coasted_misses_hidden_by_distance_known(monkeypatch):
+    """The coast-absorbed miss count is invisible to ``distance_known`` but VISIBLE
+    in the state's ultrasonic sub-map — the whole point of the counters."""
+    clock = {"now": 3000.0}
+    backend, motor, sensor = _make_backend_with_real_sensor(monkeypatch, clock)
+
+    # A clear valid read, then a single spurious timeout the grace COASTS.
+    sensor._sensor.fraction = 0.25  # 1.0 m clear
+    backend.apply_intent(
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 100.0, "speed": 0.5}, seq=1)
+    )
+    st = backend.tick()
+    assert st.distance_known is True
+    assert st.ultrasonic["valid_reads"] == 1
+    assert st.ultrasonic["raw_misses"] == 0
+    assert st.ultrasonic["coasted_reads"] == 0
+
+    sensor._sensor.fraction = 1.0  # echo timeout
+    clock["now"] += 0.020
+    st = backend.tick()
+
+    # distance_known STILL True (the grace coasted the miss) — indistinguishable
+    # from a valid echo to any plain observer...
+    assert st.distance_known is True
+    # ...but the state snapshot now records the raw miss AND that it was coasted,
+    # so the true miss rate is recoverable over IPC/state.
+    assert st.ultrasonic["raw_misses"] == 1
+    assert st.ultrasonic["coasted_reads"] == 1
+    assert st.ultrasonic["unknown_served"] == 0  # nothing surfaced as known=False

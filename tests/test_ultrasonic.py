@@ -588,3 +588,132 @@ def test_close_releases_device_and_is_idempotent(fake_gpiozero, fake_clock):
     # After close, read_distance is safe and reports unknown (STOP).
     d, known = sensor.read_distance()
     assert known is False
+
+
+# --------------------------------------------------------------------------- #
+# 3h. Observability counters: stats() exposes the TRUE miss rate.
+#
+# The grace re-serves a missed echo as known=True, so an absorbed miss is
+# indistinguishable over IPC/state from a valid echo — an external observer's
+# known=False rate is only a LOWER BOUND on the raw miss rate (2026-07-16 field
+# finding). stats() surfaces the real numbers: raw_misses (every real timeout) vs
+# coasted_reads (the grace-absorbed subset) vs unknown_served (what an observer
+# sees). We drive them through valid/coast/miss sequences with the fake gpiozero.
+# --------------------------------------------------------------------------- #
+def test_stats_start_at_zero(fake_gpiozero, fake_clock):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    sensor = GpiozeroUltrasonicSensor(max_distance_m=4.0)
+    assert sensor.stats() == {
+        "total_reads": 0,
+        "valid_reads": 0,
+        "raw_misses": 0,
+        "coasted_reads": 0,
+        "unknown_served": 0,
+    }
+
+
+def test_stats_valid_then_coasts_then_hard_miss(fake_gpiozero):
+    """A valid read, two coasted misses, then a budget-exhausted hard miss.
+
+    raw_misses counts EVERY real timeout (3); coasted_reads counts only the grace-
+    absorbed subset (2); unknown_served counts what the caller actually saw as
+    known=False (1). This is exactly the gap the counters exist to expose.
+    """
+    clock = {"now": 100.0}
+    sensor = _grace_sensor(150, 2, clock)  # window 150 ms, miss budget 2
+
+    # 1) A valid reading (2.0 m clear).
+    sensor._sensor.fraction = 0.5
+    assert sensor.read_distance() == (pytest.approx(2.0), True)
+
+    # 2) Two misses inside the window/budget -> both COASTED (served known=True).
+    sensor._sensor.fraction = 1.0
+    clock["now"] += 0.040
+    assert sensor.read_distance()[1] is True  # coast #1
+    clock["now"] += 0.040
+    assert sensor.read_distance()[1] is True  # coast #2
+
+    # 3) The next miss exceeds the budget -> a HARD miss, served known=False.
+    clock["now"] += 0.040
+    assert sensor.read_distance()[1] is False
+
+    assert sensor.stats() == {
+        "total_reads": 4,
+        "valid_reads": 1,
+        "raw_misses": 3,      # every real timeout, before any grace absorption
+        "coasted_reads": 2,   # ...of which 2 were absorbed (invisible to observers)
+        "unknown_served": 1,  # ...and only 1 surfaced as known=False
+    }
+    # Invariants a reader can rely on.
+    st = sensor.stats()
+    assert st["raw_misses"] >= st["coasted_reads"]
+    assert st["valid_reads"] + st["raw_misses"] == st["total_reads"]  # no cache serves
+
+
+def test_stats_never_valid_miss_is_hard_and_counted(fake_gpiozero):
+    """A sensor that never read valid cannot coast: the miss is raw AND unknown."""
+    clock = {"now": 700.0}
+    sensor = _grace_sensor(150, 3, clock)
+
+    sensor._sensor.fraction = 1.0  # times out from the very first read
+    assert sensor.read_distance()[1] is False
+    assert sensor.stats() == {
+        "total_reads": 1,
+        "valid_reads": 0,
+        "raw_misses": 1,
+        "coasted_reads": 0,   # nothing to coast (no prior valid)
+        "unknown_served": 1,
+    }
+
+
+def test_stats_cache_serves_count_total_and_unknown_not_raw(fake_gpiozero, fake_clock):
+    """Rate-capped cache serves bump total_reads (and unknown_served if the cache
+    holds a miss) but NEVER raw_misses — only a real re-pulse can be a raw miss."""
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    # Grace OFF so a miss is a clean hard miss (isolates the cache accounting).
+    sensor = GpiozeroUltrasonicSensor(
+        max_distance_m=4.0, max_poll_hz=15.0, grace_max_misses=0
+    )
+
+    sensor._sensor.fraction = 0.25  # 1.0 m valid
+    assert sensor.read_distance()[1] is True          # real sample
+    assert sensor.read_distance()[1] is True          # cache serve (known=True)
+
+    fake_clock["now"] += 0.070  # past the 60 ms cap -> a fresh real sample
+    sensor._sensor.fraction = 1.0
+    assert sensor.read_distance()[1] is False         # real HARD miss
+    assert sensor.read_distance()[1] is False         # cache serve (known=False)
+
+    assert sensor.stats() == {
+        "total_reads": 4,     # every call, including the two cache serves
+        "valid_reads": 1,     # only ONE real valid sample
+        "raw_misses": 1,      # only ONE real miss (the cache serve is not a re-pulse)
+        "coasted_reads": 0,   # grace disabled
+        "unknown_served": 2,  # the real miss AND the cache-served miss
+    }
+
+
+def test_stats_closed_read_counts_as_unknown_served(fake_gpiozero, fake_clock):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    sensor = GpiozeroUltrasonicSensor(max_distance_m=4.0)
+    sensor.close()
+    assert sensor.read_distance()[1] is False
+    st = sensor.stats()
+    assert st["total_reads"] == 1
+    assert st["unknown_served"] == 1
+    assert st["raw_misses"] == 0  # a closed read never re-pulses
+
+
+def test_stats_returns_a_fresh_copy(fake_gpiozero, fake_clock):
+    """stats() hands back a copy — mutating it can't corrupt the live counters."""
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    sensor = GpiozeroUltrasonicSensor(max_distance_m=4.0)
+    sensor._sensor.fraction = 0.25
+    sensor.read_distance()
+    snap = sensor.stats()
+    snap["total_reads"] = 999
+    assert sensor.stats()["total_reads"] == 1

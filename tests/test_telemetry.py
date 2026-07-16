@@ -86,6 +86,33 @@ def test_events_written_and_read_back(tmp_path):
     assert by_type["state_sample"]["payload"]["mode"] == "DRIVE_GOAL"
 
 
+def test_state_sample_carries_ultrasonic_counters(tmp_path):
+    # The ultrasonic miss/coast counters ride the EXISTING periodic state event
+    # (no new event type invented) because they are a field of RobotState.to_dict().
+    log = TelemetryLogger(directory=tmp_path, sample_hz=0.0)  # sample every tick
+    counters = {
+        "total_reads": 12,
+        "valid_reads": 4,
+        "raw_misses": 8,
+        "coasted_reads": 5,
+        "unknown_served": 3,
+    }
+    state = RobotState(
+        mode=Mode.DRIVE_GOAL, goal_status=GoalStatus.RUNNING, ultrasonic=counters
+    )
+    log.on_tick_complete(state)
+    log.close()
+
+    by_type = {e["type"]: e for e in _read(log.path)}
+    assert by_type["state_sample"]["payload"]["ultrasonic"] == counters
+    # A backend with no counter-bearing sensor logs ``ultrasonic: null`` (additive).
+    log2 = TelemetryLogger(directory=tmp_path / "b", sample_hz=0.0)
+    log2.on_tick_complete(RobotState(mode=Mode.IDLE, goal_status=GoalStatus.NONE))
+    log2.close()
+    by_type2 = {e["type"]: e for e in _read(log2.path)}
+    assert by_type2["state_sample"]["payload"]["ultrasonic"] is None
+
+
 def test_close_is_idempotent(tmp_path):
     log = TelemetryLogger(directory=tmp_path)
     log.on_motor_command(0.0, 0.0)
