@@ -26,6 +26,7 @@ and FOLLOW steering maps to motor throttles (clean stop when lost).
 
 from __future__ import annotations
 
+import threading
 import time
 
 import numpy as np
@@ -395,14 +396,17 @@ def test_close_zeroes_motors_and_releases_hardware():
     backend.close()
 
 
-def test_close_order_watchdog_first_then_sensor_before_motor():
-    """Teardown order (instrumented fakes): watchdog retired first, range sensor
-    closed BEFORE the motor driver, motors stopped before any pins are released.
+def test_close_order_motors_first_then_watchdog_then_sensor_before_motor():
+    """Teardown order (instrumented fakes): motors zeroed FIRST, then the watchdog
+    retired, then the range sensor closed BEFORE the motor driver.
 
-    The motor driver's close() tears down the process-global gpiozero pin
-    factory; releasing the range sensor first keeps that from yanking the factory
-    out from under an open sensor. Retiring the watchdog first means teardown
-    never looks like a wedged tick.
+    Motors-first is the 2026-07-16 regression fix: the wheels are commanded to zero
+    before ANY potentially-slow watchdog/perception/camera/sensor cleanup, so they
+    are guaranteed idle the instant shutdown begins no matter what blocks next.
+    The watchdog is still retired before the (potentially blocking) perception join
+    so teardown never looks like a wedged tick, and the range sensor is still closed
+    before the motor driver — whose close() tears down the process-global gpiozero
+    pin factory — so the factory is never yanked out from under an open sensor.
     """
     log: list[str] = []
 
@@ -451,11 +455,13 @@ def test_close_order_watchdog_first_then_sensor_before_motor():
     backend.close()
 
     assert wd.stopped is True
-    # 1) The watchdog is retired before any hardware is touched.
-    assert log[0] == "watchdog.stop"
-    # 2) Motors are stopped before any pins are released.
+    # 1) Motors are zeroed FIRST, before anything else in teardown.
+    assert log[0] == "motor.stop"
+    # 2) The watchdog is retired before the range sensor / motor driver are closed.
+    assert log.index("watchdog.stop") < log.index("sensor.close")
+    # 3) Motors are stopped before any pins are released.
     assert log.index("motor.stop") < log.index("sensor.close")
-    # 3) The range sensor is closed BEFORE the motor driver (pin-factory teardown).
+    # 4) The range sensor is closed BEFORE the motor driver (pin-factory teardown).
     assert log.index("sensor.close") < log.index("motor.close")
 
 
@@ -783,3 +789,148 @@ def test_state_snapshot_reveals_coasted_misses_hidden_by_distance_known(monkeypa
     assert st.ultrasonic["raw_misses"] == 1
     assert st.ultrasonic["coasted_reads"] == 1
     assert st.ultrasonic["unknown_served"] == 0  # nothing surfaced as known=False
+
+
+# --------------------------------------------------------------------------- #
+# (ix) SIGINT-shutdown regression (2026-07-16): teardown MUST stay bounded and
+#      zero the motors first even while the ultrasonic sensor is storming echo
+#      timeouts — the field failure where the stack survived two SIGINTs and
+#      only died to SIGTERM because a gpiozero close() wedged mid software-timed
+#      echo wait. These reproduce the storm with fake/mocked hardware (no
+#      gpiozero) and assert the backend/loop shuts down within a bounded time.
+# --------------------------------------------------------------------------- #
+class _BlockingCloseSensor(FakeRangeSensor):
+    """A range sensor whose ``close()`` BLOCKS until explicitly released.
+
+    Models a gpiozero ``DistanceSensor.close()`` wedged joining its internal
+    sampling thread while that thread is stuck in a software-timed echo wait during
+    a timeout storm — the unbounded blocking call that made shutdown hang.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.close_entered = threading.Event()
+        self.close_returned = threading.Event()
+        self.release = threading.Event()
+
+    def close(self) -> None:  # type: ignore[override]
+        self.close_entered.set()
+        # Block like a wedged gpiozero close() until the test releases us (bounded
+        # by a generous ceiling so a forgotten release can never hang the suite).
+        self.release.wait(30.0)
+        super().close()
+        self.close_returned.set()
+
+
+class _StormingSensor(FakeRangeSensor):
+    """A sensor that STORMS echo timeouts: every read blocks briefly (a Pi-5
+    software-timed echo wait) then reports UNKNOWN (bias to STOP), and whose
+    ``close()`` blocks like a gpiozero close() wedged mid-storm.
+    """
+
+    def __init__(self, read_block_s: float = 0.02) -> None:
+        super().__init__(distance_m=4.0, known=False)
+        self._read_block_s = float(read_block_s)
+        self.close_entered = threading.Event()
+        self.release = threading.Event()
+
+    def read_distance(self):  # type: ignore[override]
+        # Simulate the software-timed echo wait that dominates the read path during
+        # a storm; bounded (like the real echo_timeout) so the loop still turns over.
+        time.sleep(self._read_block_s)
+        self.read_count += 1
+        return (self.distance_m, False)  # UNKNOWN -> STOP every tick
+
+    def close(self) -> None:  # type: ignore[override]
+        self.close_entered.set()
+        self.release.wait(30.0)
+        super().close()
+
+
+def test_close_is_bounded_and_zeroes_motors_when_sensor_close_blocks(monkeypatch):
+    """close() must return within a bounded time — and have zeroed the motors —
+    even though the range sensor's close() is wedged (the storm failure mode).
+    """
+    from yalp.reactive import real_backend
+
+    # Shrink the per-step teardown ceiling so the bounded guard trips fast in-test.
+    monkeypatch.setattr(real_backend, "TEARDOWN_STEP_TIMEOUT_S", 0.2)
+
+    motor = FakeMotorDriver()
+    sensor = _BlockingCloseSensor()
+    backend = RealReactiveBackend(
+        motor_driver=motor,
+        range_sensor=sensor,
+        camera=Camera(source="synthetic"),
+        tick_hz=50.0,
+        tracker=None,
+    )
+    try:
+        t0 = time.monotonic()
+        backend.close()
+        elapsed = time.monotonic() - t0
+
+        # Teardown stayed BOUNDED despite the wedged sensor close.
+        assert elapsed < 5.0, f"close() hung for {elapsed:.2f}s during a sensor storm"
+        # The blocking close WAS attempted (teardown reached step 4)...
+        assert sensor.close_entered.is_set()
+        # ...but has NOT returned (still blocked) — proving close() did not wait it out.
+        assert not sensor.close_returned.is_set()
+        # Motors were zeroed FIRST regardless of the wedged sensor cleanup.
+        assert motor.stop_count >= 1
+        assert motor.last == (0.0, 0.0)
+        # And teardown PROCEEDED past the wedged sensor close to release the driver.
+        assert motor.closed is True
+    finally:
+        sensor.release.set()  # let the daemon close thread finish (no leak)
+
+
+def test_run_loop_shuts_down_promptly_during_timeout_storm(monkeypatch):
+    """run() must exit and fully tear down within a bounded window when the sensor
+    is storming timeouts (slow, UNKNOWN reads) AND its close() is wedged — zeroing
+    the motors — reproducing the 2026-07-16 unkillable-by-SIGINT field failure.
+    """
+    from yalp.reactive import real_backend
+
+    monkeypatch.setattr(real_backend, "TEARDOWN_STEP_TIMEOUT_S", 0.2)
+
+    motor = FakeMotorDriver()
+    sensor = _StormingSensor(read_block_s=0.02)
+    backend = RealReactiveBackend(
+        motor_driver=motor,
+        range_sensor=sensor,
+        camera=Camera(source="synthetic"),
+        tick_hz=50.0,
+        tracker=None,
+    )
+    stop_event = threading.Event()
+
+    runner = threading.Thread(
+        target=lambda: backend.run(stop_event=stop_event),
+        name="storm-run",
+        daemon=True,
+    )
+    try:
+        runner.start()
+        # Let the storm run for a bit: several blind reads -> SAFE_STOP each tick.
+        time.sleep(0.2)
+        assert sensor.read_count >= 1, "run() loop never ticked/read the sensor"
+
+        # Request shutdown. The loop must exit and the (bounded) teardown must
+        # complete within a bounded window despite storming reads + a wedged close.
+        t0 = time.monotonic()
+        stop_event.set()
+        runner.join(timeout=5.0)
+        elapsed = time.monotonic() - t0
+
+        assert not runner.is_alive(), "run() did not return during the sensor storm"
+        assert elapsed < 5.0, f"shutdown took {elapsed:.2f}s during a sensor storm"
+        # Motors were zeroed (blind reads latch SAFE_STOP; teardown zeroes first).
+        assert motor.stop_count >= 1
+        assert motor.last == (0.0, 0.0)
+        # Teardown reached the (blocking) sensor close but was not hung by it.
+        assert sensor.close_entered.is_set()
+    finally:
+        sensor.release.set()
+        stop_event.set()
+        runner.join(timeout=5.0)

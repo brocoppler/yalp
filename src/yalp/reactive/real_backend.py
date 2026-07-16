@@ -41,9 +41,10 @@ here.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Optional, Tuple
 
 from .. import config
 from ..camera import Camera
@@ -56,6 +57,19 @@ from .watchdog import MotorWatchdog
 
 if TYPE_CHECKING:  # typing-only: hardware.py's Protocols are laptop-safe to name
     from .hardware import MotorDriver, RangeSensor
+
+logger = logging.getLogger(__name__)
+
+# Per-step ceiling for the potentially-blocking gpiozero hardware ``close()`` calls
+# in teardown. On the Pi 5 the ultrasonic echo is timed in *software* (pigpio is
+# unavailable), and gpiozero ``DistanceSensor.close()`` joins its internal sampling
+# thread — which, during a sustained echo-timeout storm, can be wedged mid software-
+# timed echo wait, so that ``close()`` can block for seconds (or, against an in-flight
+# read, effectively hang). We offload each such close onto a throwaway daemon thread
+# and wait at most this long (see :meth:`RealReactiveBackend._close_hardware_bounded`)
+# so a wedged sensor/driver can never hang the whole shutdown. This is the crux of the
+# 2026-07-16 SIGINT-shutdown regression: teardown must stay bounded even while blind.
+TEARDOWN_STEP_TIMEOUT_S = 2.0
 
 
 class RealReactiveBackend(ReactiveTickCore):
@@ -319,20 +333,21 @@ class RealReactiveBackend(ReactiveTickCore):
         finally:
             # Shutdown ordering (async-perception task + independent watchdog).
             # The loop has exited, so tick() will no longer heartbeat the watchdog.
-            # Delegate to close()/stop(), which retires the backend-owned watchdog
-            # FIRST — before the (potentially blocking) perception-worker join and
-            # any hardware release — so teardown never looks like a wedged tick.
-            #   * its stop() issues a final independent motor stop, so the wheels are
-            #     guaranteed zeroed BEFORE any driver release and never run free
-            #     during teardown (the worker never commands motors, so nothing
-            #     re-spins them — they stay zeroed through the rest of teardown); and
-            #   * retiring it before the perception-worker join keeps that join
-            #     HONEST: stop_perception() can block for up to one in-flight
-            #     tracker.update() (a whole detector frame, ~100–500 ms on a Pi), and
-            #     with the watchdog still armed that heartbeat-less window would look
-            #     exactly like a wedged tick — tripping the watchdog and logging a
-            #     scary "TRIPPED" alarm on EVERY normal FOLLOW shutdown. That cry-wolf
-            #     would train operators to ignore real trips, so we avoid it.
+            # Delegate to close()/stop(), which:
+            #   * zeroes the wheels FIRST — directly, before any watchdog join,
+            #     perception join, or hardware release — so nothing runs free during
+            #     teardown no matter what blocks afterward (the worker never commands
+            #     motors, so nothing re-spins them: they stay zeroed throughout);
+            #   * then retires the backend-owned watchdog before the (potentially
+            #     blocking) perception-worker join, so that join stays HONEST:
+            #     stop_perception() can block for up to one in-flight tracker.update()
+            #     (a whole detector frame, ~100–500 ms on a Pi), and with the watchdog
+            #     still armed that heartbeat-less window would look exactly like a
+            #     wedged tick — tripping the watchdog and logging a scary "TRIPPED"
+            #     alarm on EVERY normal FOLLOW shutdown (a cry-wolf we avoid); and
+            #   * BOUNDS the gpiozero hardware closes, so a sensor wedged mid software-
+            #     timed echo during a timeout storm can never hang the shutdown (the
+            #     2026-07-16 SIGINT regression). Teardown is fully time-bounded.
             self.stop()
 
     # -- teardown ------------------------------------------------------------
@@ -345,42 +360,69 @@ class RealReactiveBackend(ReactiveTickCore):
         self.close()
 
     def close(self) -> None:
-        """Release everything in safe order: watchdog -> worker -> camera -> motors-safe.
+        """Release everything in safe, BOUNDED order: motors-zero -> watchdog ->
+        worker -> camera -> hardware-release.
 
-        Idempotent. Ordering (async-perception task + independent watchdog):
-        (1) retire the watchdog FIRST — it joins its own thread and issues a final
-        independent motor stop, and (unlike the steps below) can never look like a
-        wedged tick, so retiring it before the potentially blocking perception join
-        avoids a cry-wolf "TRIPPED" alarm on every normal FOLLOW shutdown; (2) stop
-        the perception worker so it no longer reads the camera or drives motion;
-        (3) stop the camera; (4) leave the motors SAFE — zero the wheels, release
-        the RANGE SENSOR before the motor driver, and only then close the motor
-        driver. Each step is best-effort so teardown never raises. (When reached via
-        ``run()`` the watchdog has already issued a final motor stop, so the wheels
-        are stopped before we get here.)
+        Idempotent, and — the crux of the 2026-07-16 SIGINT-shutdown regression —
+        every step is time-bounded so teardown can NEVER hang, even while the
+        ultrasonic sensor is in a sustained echo-timeout storm (the failure mode
+        that made the stack survive two SIGINTs and only die to SIGTERM). Ordering:
+
+        (0) **Zero the motors FIRST**, directly, before ANY potentially-slow
+            watchdog/perception/camera/sensor cleanup — so the wheels are guaranteed
+            idle the instant shutdown begins, no matter what blocks afterward. (This
+            supersedes the old "watchdog first" ordering: the watchdog's own join,
+            and every later step, comes AFTER the wheels are already zeroed.)
+        (1) retire the watchdog — it joins its own (bounded) thread and issues a
+            final independent motor stop, and (unlike the steps below) can never look
+            like a wedged tick, so retiring it before the potentially blocking
+            perception join avoids a cry-wolf "TRIPPED" alarm on every normal FOLLOW
+            shutdown;
+        (2) stop the perception worker (bounded join) so it no longer reads the
+            camera or drives motion;
+        (3) stop the camera (bounded join);
+        (4) release the gpiozero hardware — close the RANGE SENSOR before the motor
+            driver (the driver's close() tears down the process-global gpiozero pin
+            factory, which would break an ultrasonic sensor still holding pins), each
+            wrapped in a bounded off-thread guard (:meth:`_close_hardware_bounded`)
+            because a gpiozero ``close()`` can wedge for seconds against an in-flight
+            software-timed echo during a storm.
+
+        Each step is best-effort so teardown never raises.
         """
         if self._closed:
             return
         self._closed = True
-        # 1. Retire the watchdog FIRST. It joins its own thread and issues a final
-        #    independent motor stop, and — unlike the perception join and hardware
-        #    release below — it can never look like a wedged tick. Retiring it
-        #    before the (potentially blocking) perception join is what keeps the
+        # 0. MOTORS TO ZERO FIRST — directly and immediately, before any of the
+        #    (potentially slow) teardown below. This is the single most important
+        #    safety guarantee of shutdown: whatever wedges later, the wheels are
+        #    already commanded to zero. stop() is idempotent, so the watchdog's own
+        #    final stop and the hardware-release stop below are harmless repeats.
+        try:
+            self._motor_driver.stop()
+        except Exception:  # pragma: no cover - best effort during teardown
+            pass
+        # 1. Retire the watchdog. It joins its own thread (bounded) and issues a
+        #    final independent motor stop, and — unlike the perception join and
+        #    hardware release below — it can never look like a wedged tick. Retiring
+        #    it before the (potentially blocking) perception join is what keeps the
         #    watchdog from crying wolf: stop_perception() can block for a whole
         #    in-flight tracker.update() (~100–500 ms on a Pi), a heartbeat-less
         #    window that would otherwise look exactly like a wedged tick and trip
-        #    the alarm. It never re-enables motors, so the wheels stay stopped
-        #    through the rest of teardown.
+        #    the alarm. It never re-enables motors, so the wheels stay stopped.
         try:
             self._watchdog.stop()
         except Exception:  # pragma: no cover - best effort during teardown
             pass
-        # 2. Perception worker (stops reading the camera / feeding motion).
+        # 2. Perception worker (stops reading the camera / feeding motion). Its
+        #    stop() joins with its own internal timeout, so it is already bounded.
         try:
             self.stop_perception()
         except Exception:  # pragma: no cover - best effort during teardown
             pass
-        # 3. Camera.
+        # 3. Camera. Its stop() joins the capture thread with its own timeout, so it
+        #    is already bounded (a stuck cv2 read leaves a daemon thread the OS
+        #    reclaims at process exit).
         if self._camera_started:
             try:
                 self._camera.stop()
@@ -388,24 +430,63 @@ class RealReactiveBackend(ReactiveTickCore):
                 pass
             finally:
                 self._camera_started = False
-        # 4. Motors safe: zero the wheels, close the RANGE SENSOR before the motor
-        #    driver, and only then close the motor driver. The motor driver's
-        #    close() tears down the process-global gpiozero pin factory, which would
-        #    break an ultrasonic sensor still holding pins — so the sensor must be
-        #    released first (motors are already stopped, so nothing is driving).
-        for action in (
-            self._motor_driver.stop,
-            self._range_sensor.close,
-            self._motor_driver.close,
-        ):
+        # 4. Release the gpiozero hardware, close the RANGE SENSOR before the motor
+        #    driver (pin-factory ordering; motors are already stopped, so nothing is
+        #    driving). BOTH closes are wrapped in a bounded off-thread guard: a
+        #    gpiozero close() can block for seconds — or hang against an in-flight
+        #    read — during a software-timed echo-timeout storm on the Pi 5, and that
+        #    is exactly what made the stack unkillable-by-SIGINT on 2026-07-16.
+        self._close_hardware_bounded(self._range_sensor.close, "range-sensor")
+        self._close_hardware_bounded(self._motor_driver.close, "motor-driver")
+        # 5. Flush + close the telemetry recorder IFF we own it (injected,
+        #    caller-owned observers are left alone). Last, so late teardown events
+        #    are captured before the writer thread is joined.
+        self._close_owned_observer()
+
+    @staticmethod
+    def _close_hardware_bounded(
+        action: Callable[[], None],
+        name: str,
+        timeout: Optional[float] = None,
+    ) -> None:
+        """Run a potentially-blocking hardware ``close()`` bounded by ``timeout``.
+
+        A gpiozero ``close()`` (ultrasonic or motor driver) can wedge for seconds
+        against an in-flight *software-timed* echo wait during a sensor timeout storm
+        on the Pi 5 — there is no portable way to interrupt that blocking C call from
+        this thread. So we run it on a throwaway daemon thread and wait at most
+        ``timeout`` for it to finish. If it does NOT finish in time we log once and
+        move on: the wheels are already zeroed (step 0 of :meth:`close`), the daemon
+        thread is harmless, and the OS reclaims the GPIO at process exit. This is
+        what keeps a single SIGINT reliably tearing the stack down even while blind.
+        Best-effort: the worker swallows any exception the action raises.
+
+        ``timeout`` defaults to the module-level :data:`TEARDOWN_STEP_TIMEOUT_S`,
+        resolved at CALL time so it stays overridable (tests monkeypatch it).
+        """
+        if timeout is None:
+            timeout = TEARDOWN_STEP_TIMEOUT_S
+        done = threading.Event()
+
+        def _target() -> None:
             try:
                 action()
             except Exception:  # pragma: no cover - best effort during teardown
                 pass
-        # 4. Flush + close the telemetry recorder IFF we own it (injected,
-        #    caller-owned observers are left alone). Last, so late teardown events
-        #    are captured before the writer thread is joined.
-        self._close_owned_observer()
+            finally:
+                done.set()
+
+        threading.Thread(
+            target=_target, name=f"yalp-teardown-{name}", daemon=True
+        ).start()
+        if not done.wait(timeout):
+            logger.warning(
+                "teardown: %s close() did not finish within %.1fs during shutdown; "
+                "continuing anyway (wheels already zeroed; the GPIO is reclaimed at "
+                "process exit). This is the sensor-timeout-storm guard.",
+                name,
+                timeout,
+            )
 
 
 __all__ = ["RealReactiveBackend"]
