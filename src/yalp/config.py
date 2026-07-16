@@ -430,7 +430,10 @@ MOTOR_DRIVER_KIND: str = _env_str("YALP_MOTOR_DRIVER", "drv8833")
 MOTOR_PWM_FREQUENCY_HZ: int = _env_int("YALP_MOTOR_PWM_HZ", 1000)
 
 # HC-SR04 ultrasonic sensor timing constants.
-ULTRASONIC_MAX_POLL_HZ: float = 15.0      # max safe polling rate; HC-SR04 needs ≥60 ms between pings
+# Max safe polling rate (Hz); the HC-SR04 needs ≥60 ms between pings (echoes from
+# a previous ping must die down). Env-overridable like the grace tunables below —
+# lowering it below ~6.7 Hz makes the coast grace inert (see the note there).
+ULTRASONIC_MAX_POLL_HZ: float = _env_float("YALP_ULTRASONIC_MAX_POLL_HZ", 15.0)
 ULTRASONIC_ECHO_TIMEOUT_S: float = 0.06   # treat echo as missed if not received within 60 ms
 ULTRASONIC_MAX_DISTANCE_M: float = 4.0    # discard readings beyond the sensor's reliable range
 SPEED_OF_SOUND_MPS: float = 343.0         # m/s at ~20 °C; distance = (echo_time * v) / 2
@@ -450,11 +453,23 @@ SPEED_OF_SOUND_MPS: float = 343.0         # m/s at ~20 °C; distance = (echo_tim
 # distance — it never fabricates a larger/clear value — so a near obstacle is
 # coasted as an obstacle (still STOP) and sustained sensor loss still STOPs.
 #
-# Default window justification (150 ms): at the default REACTIVE_TICK_HZ=20 Hz a
-# tick is 50 ms, so 150 ms ≈ 3 ticks and (at the 15 Hz poll cap, ~66.7 ms/ping)
-# ≈ 2 real re-pulses — i.e. the two bounds are deliberately matched. It is short
-# enough that at a ~1 m/s drive the robot coasts at most ~0.15 m blind, comfortably
-# inside SAFE_STOP_THRESHOLD_M=0.30 m of stopping margin. NOTE it is INDEPENDENT of
+# Default window justification (150 ms) — POLL-RATE DEPENDENT. The grace can only
+# coast a miss while its wall-clock window has NOT yet elapsed, so that window MUST
+# exceed one re-pulse interval (1000 / effective poll Hz) or coasting is
+# mathematically impossible: below that, the very first miss always arrives AFTER
+# the window has already tripped, so 0 misses are absorbed — a silent no-op,
+# identical to grace-off. At the 15 Hz poll cap a re-pulse is ~66.7 ms, so 150 ms
+# covers ~2 real re-pulses (and, at REACTIVE_TICK_HZ=20 Hz where a tick is 50 ms,
+# ~3 ticks) — the two bounds are deliberately matched there. But the SAME 150 ms
+# is INERT below an effective poll rate of ~6.7 Hz (interval > 150 ms): the window
+# is then shorter than a single re-pulse (verified on hardware 2026-07-15 — at
+# 6 Hz the grace absorbed 0/10 misses, identical to grace-off; a relaxed
+# 400 ms/4-miss config absorbed 8/8). If you poll slower, raise
+# YALP_ULTRASONIC_GRACE_MS above one re-pulse interval (or raise the poll rate) —
+# GpiozeroUltrasonicSensor logs a one-time WARNING at construction whenever the
+# window is shorter than the interval. It is short enough that at a ~1 m/s drive
+# the robot coasts at most ~0.15 m blind, comfortably inside
+# SAFE_STOP_THRESHOLD_M=0.30 m of stopping margin. NOTE it is INDEPENDENT of
 # WATCHDOG_TIMEOUT_MS=100 (a different failure mode: that watchdog zeroes the
 # motors if the whole reactive TICK LOOP stalls, not on a sensor miss — a stalled
 # loop still trips the dead-man's switch regardless of this grace).

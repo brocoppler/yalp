@@ -17,6 +17,7 @@ be confirmed on hardware; here we verify the contract.
 
 from __future__ import annotations
 
+import logging
 import sys
 import types
 
@@ -486,6 +487,87 @@ def test_never_yet_read_sensor_is_unknown_when_cache_served(fake_gpiozero, fake_
     d, known = fresh.read_distance()
     assert known is False  # never decayed to clear
     assert d == pytest.approx(4.0)  # placeholder only; ignored because unknown
+
+
+# --------------------------------------------------------------------------- #
+# 3g. Construction-time "grace is INERT at this poll rate" warning.
+#
+# The coast grace can only re-serve a miss while its wall-clock window is still
+# OPEN, so that window must exceed ONE re-pulse interval (1 / max_poll_hz) or
+# coasting is mathematically impossible (0 misses absorbed — a silent no-op,
+# identical to grace-off). GpiozeroUltrasonicSensor logs a one-time WARNING at
+# construction when the grace is ENABLED but its window is shorter than the
+# interval, so the field no-op found on the Pi 5 (6 Hz / 150 ms -> 0/10 absorbed,
+# 2026-07-15) is not silent. These pass the bounds explicitly, so they exercise
+# the warning without depending on config's import-time defaults.
+# --------------------------------------------------------------------------- #
+def _inert_grace_warnings(caplog):
+    """The construction-time 'INERT' warnings captured on the hardware logger."""
+    return [
+        r
+        for r in caplog.records
+        if r.name == "yalp.reactive.hardware" and "INERT" in r.getMessage()
+    ]
+
+
+def test_warns_when_grace_window_shorter_than_repulse_interval(fake_gpiozero, caplog):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    # 6 Hz -> ~167 ms re-pulse interval; the 150 ms window is SHORTER, so the
+    # grace can never coast a miss (the field no-op found on the Pi 5).
+    with caplog.at_level(logging.WARNING, logger="yalp.reactive.hardware"):
+        GpiozeroUltrasonicSensor(grace_ms=150, grace_max_misses=2, max_poll_hz=6.0)
+
+    warnings = _inert_grace_warnings(caplog)
+    assert len(warnings) == 1
+    text = warnings[0].getMessage()
+    assert "150" in text  # names the grace window (ms)
+    assert "167" in text  # names the re-pulse interval (ms) it is shorter than
+    assert "YALP_ULTRASONIC_GRACE_MS" in text  # points at the knob to raise
+
+
+def test_no_warning_when_grace_window_covers_repulse_interval(fake_gpiozero, caplog):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    # 15 Hz -> ~66.7 ms interval; the 150 ms window covers ~2 re-pulses -> the
+    # grace is effective (the verified-good field config), so NO warning.
+    with caplog.at_level(logging.WARNING, logger="yalp.reactive.hardware"):
+        GpiozeroUltrasonicSensor(grace_ms=150, grace_max_misses=2, max_poll_hz=15.0)
+
+    assert _inert_grace_warnings(caplog) == []
+
+
+def test_no_warning_when_window_equals_repulse_interval(fake_gpiozero, caplog):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    # Boundary: window == interval (100 ms at 10 Hz) is NOT shorter -> no warning
+    # (the coast can still just cover one re-pulse).
+    with caplog.at_level(logging.WARNING, logger="yalp.reactive.hardware"):
+        GpiozeroUltrasonicSensor(grace_ms=100, grace_max_misses=2, max_poll_hz=10.0)
+
+    assert _inert_grace_warnings(caplog) == []
+
+
+def test_no_warning_when_grace_disabled_even_at_low_poll_rate(fake_gpiozero, caplog):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    # Grace OFF (miss budget 0) -> there is nothing to be inert; no warning even
+    # though 150 ms < the 6 Hz re-pulse interval.
+    with caplog.at_level(logging.WARNING, logger="yalp.reactive.hardware"):
+        GpiozeroUltrasonicSensor(grace_ms=150, grace_max_misses=0, max_poll_hz=6.0)
+
+    assert _inert_grace_warnings(caplog) == []
+
+
+def test_no_warning_when_poll_cap_disabled(fake_gpiozero, caplog):
+    from yalp.reactive.hardware import GpiozeroUltrasonicSensor
+
+    # max_poll_hz=0 disables the rate cap: every read re-pulses, so there is no
+    # re-pulse interval to outrun and the grace is NOT inert -> no warning.
+    with caplog.at_level(logging.WARNING, logger="yalp.reactive.hardware"):
+        GpiozeroUltrasonicSensor(grace_ms=150, grace_max_misses=2, max_poll_hz=0.0)
+
+    assert _inert_grace_warnings(caplog) == []
 
 
 # --------------------------------------------------------------------------- #

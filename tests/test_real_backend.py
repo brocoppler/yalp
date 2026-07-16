@@ -650,3 +650,69 @@ def test_sustained_timeout_during_drive_still_latches_safe_stop(monkeypatch):
     assert final.distance_known is False
     assert final.goal["reason"] == "echo_timeout"
     assert motor.last == (0.0, 0.0)  # motors stopped on sustained blindness
+
+
+# --------------------------------------------------------------------------- #
+# (vii) The env-configured poll cap (YALP_ULTRASONIC_MAX_POLL_HZ) actually reaches
+#       the sensor the real backend BUILDS ITSELF. RealReactiveBackend constructs
+#       GpiozeroUltrasonicSensor() with NO args, so the cap can only arrive via the
+#       config default — this proves that whole chain end-to-end in a *fresh
+#       interpreter* (env set at startup, exactly like the field), against a fake
+#       gpiozero so no hardware is needed. The parent's env is propagated to the
+#       child by the isolation helper, so monkeypatch.setenv here is inherited.
+# --------------------------------------------------------------------------- #
+def test_env_poll_cap_reaches_backend_built_sensor(monkeypatch):
+    monkeypatch.setenv("YALP_ULTRASONIC_MAX_POLL_HZ", "6")
+    program = (
+        "import sys, types\n"
+        # --- minimal fake gpiozero (only what the ultrasonic sensor touches) ---
+        "class _FakeDistanceSensor:\n"
+        "    def __init__(self, echo=None, trigger=None, max_distance=1.0, queue_len=1):\n"
+        "        self.max_distance = max_distance\n"
+        "        self.fraction = 1.0\n"
+        "        self.closed = False\n"
+        "    @property\n"
+        "    def distance(self):\n"
+        "        return self.fraction\n"
+        "    def close(self):\n"
+        "        self.closed = True\n"
+        "class _FakeLGPIOFactory:\n"
+        "    def close(self):\n"
+        "        pass\n"
+        "gpiozero = types.ModuleType('gpiozero')\n"
+        "class _Device:\n"
+        "    pin_factory = None\n"
+        "gpiozero.Device = _Device\n"
+        "gpiozero.DistanceSensor = _FakeDistanceSensor\n"
+        "pins = types.ModuleType('gpiozero.pins')\n"
+        "lgpio_mod = types.ModuleType('gpiozero.pins.lgpio')\n"
+        "lgpio_mod.LGPIOFactory = _FakeLGPIOFactory\n"
+        "pins.lgpio = lgpio_mod\n"
+        "gpiozero.pins = pins\n"
+        "sys.modules['gpiozero'] = gpiozero\n"
+        "sys.modules['gpiozero.pins'] = pins\n"
+        "sys.modules['gpiozero.pins.lgpio'] = lgpio_mod\n"
+        # --- build the backend via its DEFAULT (range_sensor=None) sensor path --
+        "from yalp.camera import Camera\n"
+        "from yalp.reactive.hardware import FakeMotorDriver\n"
+        "from yalp.reactive.real_backend import RealReactiveBackend\n"
+        "backend = RealReactiveBackend(\n"
+        "    motor_driver=FakeMotorDriver(),\n"
+        "    range_sensor=None,   # default path -> backend builds the REAL sensor\n"
+        "    camera=Camera(source='synthetic'),\n"
+        "    tick_hz=50.0,\n"
+        "    tracker=None,\n"
+        ")\n"
+        "got = backend._range_sensor._limiter.min_interval_s\n"
+        "expected = 1.0 / 6.0\n"
+        "sys.stderr.write('min_interval_s=%r expected=%r\\n' % (got, expected))\n"
+        "raise SystemExit(0 if abs(got - expected) < 1e-9 else 1)\n"
+    )
+    assert_isolated_program_succeeds(
+        program,
+        what=(
+            "YALP_ULTRASONIC_MAX_POLL_HZ=6 did not reach the sensor the real "
+            "backend builds itself (expected a 1/6 s rate-cap interval), so the "
+            "env override never reaches the field's GpiozeroUltrasonicSensor()."
+        ),
+    )

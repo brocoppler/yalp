@@ -28,9 +28,12 @@ those classes is what requires the libraries; merely importing them does not.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, List, Optional, Tuple, runtime_checkable, Protocol
 
 from yalp import config
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -579,6 +582,35 @@ class GpiozeroUltrasonicSensor:
         self._last_valid_at: Optional[float] = None
         # Consecutive misses currently being coasted (reset by any valid read).
         self._grace_misses: int = 0
+
+        # One-time sanity warning (Pi 5 field finding, 2026-07-15): the coast
+        # grace can only re-serve a miss while its wall-clock window is still
+        # OPEN, so that window MUST exceed one re-pulse interval (1 / max_poll_hz)
+        # or coasting is mathematically impossible — the first miss always arrives
+        # AFTER the window has already tripped, so 0 misses are absorbed (a silent
+        # no-op, identical to grace-off; measured 0/10 at 6 Hz / 150 ms on real
+        # hardware). Warn once, at construction, when the grace is ENABLED but
+        # inert at this poll rate so the operator can raise the window or the poll
+        # rate rather than run with a grace that silently does nothing.
+        # (max_poll_hz <= 0 disables the rate cap, so every read re-pulses and the
+        # grace is NOT inert — no warning in that case.)
+        grace_enabled = self._grace_s > 0.0 and self._grace_max_misses > 0
+        if grace_enabled and max_poll_hz and max_poll_hz > 0:
+            repulse_interval_s = 1.0 / max_poll_hz
+            if self._grace_s < repulse_interval_s:
+                logger.warning(
+                    "ultrasonic coast-grace is INERT at this poll rate: the grace "
+                    "window (%.0f ms) is shorter than one re-pulse interval "
+                    "(%.0f ms at max_poll_hz=%g Hz), so the wall-clock bound trips "
+                    "before the first missed echo can be coasted and the grace "
+                    "absorbs nothing (a silent no-op). Raise "
+                    "YALP_ULTRASONIC_GRACE_MS above %.0f ms, or raise the poll "
+                    "rate, to make coasting effective.",
+                    self._grace_s * 1000.0,
+                    repulse_interval_s * 1000.0,
+                    max_poll_hz,
+                    repulse_interval_s * 1000.0,
+                )
 
         # Cached last reading. Until we have a real one, bias to "unknown": the
         # distance placeholder is the max range but ``known`` is False, so the

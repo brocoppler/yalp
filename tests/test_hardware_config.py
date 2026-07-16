@@ -10,9 +10,37 @@ installed.  They verify:
 
 from __future__ import annotations
 
+import importlib
+import logging
+
 import pytest
 
 from tests._import_isolation import assert_import_leaves_module_unloaded
+
+
+@pytest.fixture
+def reload_config(monkeypatch):
+    """Reload ``yalp.config`` under a patched environment (see test_config_env).
+
+    Yields ``reload(**env)`` which sets/clears the given ``YALP_*`` vars and
+    returns the freshly-reloaded module. On teardown the env patches are undone
+    and the module is reloaded once more so its constants are rebuilt from the
+    clean environment — leaving pristine module state for later tests.
+    """
+    import yalp.config as cfg
+
+    def _reload(**env):
+        for name, value in env.items():
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
+        return importlib.reload(cfg)
+
+    yield _reload
+
+    monkeypatch.undo()
+    importlib.reload(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +120,29 @@ class TestMotorDefaults:
 # ---------------------------------------------------------------------------
 
 class TestUltrasonicConstants:
-    def test_max_poll_hz(self):
+    def test_max_poll_hz_default(self):
+        # Unchanged stock default: 15 Hz (no env override present).
         from yalp.config import ULTRASONIC_MAX_POLL_HZ
-        assert ULTRASONIC_MAX_POLL_HZ == 15.0
+        assert ULTRASONIC_MAX_POLL_HZ == pytest.approx(15.0)
+
+    def test_max_poll_hz_env_override_applies(self, reload_config, caplog):
+        # YALP_ULTRASONIC_MAX_POLL_HZ now flows through the _env_float accessor
+        # (previously a bare literal with no override) and into the Config mirror.
+        with caplog.at_level(logging.WARNING, logger="yalp.config"):
+            cfg = reload_config(YALP_ULTRASONIC_MAX_POLL_HZ="6")
+        assert cfg.ULTRASONIC_MAX_POLL_HZ == pytest.approx(6.0)
+        assert cfg.Config().ultrasonic_max_poll_hz == pytest.approx(6.0)
+        assert caplog.records == []  # a valid override never warns
+
+    def test_max_poll_hz_malformed_falls_back_and_warns(self, reload_config, caplog):
+        # Fail-soft like every other YALP_* float: garbage -> default + WARNING,
+        # never a raise during ``import yalp.config``.
+        with caplog.at_level(logging.WARNING, logger="yalp.config"):
+            cfg = reload_config(YALP_ULTRASONIC_MAX_POLL_HZ="fast")
+        assert cfg.ULTRASONIC_MAX_POLL_HZ == pytest.approx(15.0)
+        assert cfg.Config().ultrasonic_max_poll_hz == pytest.approx(15.0)
+        assert "YALP_ULTRASONIC_MAX_POLL_HZ" in caplog.text
+        assert "fast" in caplog.text
 
     def test_echo_timeout(self):
         from yalp.config import ULTRASONIC_ECHO_TIMEOUT_S
