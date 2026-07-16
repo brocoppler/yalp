@@ -1,117 +1,110 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-07-15, end of the evening on-hardware session on the Pi 5.
-**One-line status:** Milestone J (collision-stop) DONE — bench demo PASSED this
-evening on the Pi 5. Phantom-stop grace fix verified on hardware. Next: first
-floor drive.
+**Last updated:** 2026-07-16, end of the on-hardware session.
+**One-line status:** First supervised floor drive COMPLETED (timed goal, human
+backstop); collision-stop reflex on the floor still UNPROVEN — sonar discovered
+pointing ~90-140° CCW off the nose. Physical quarter-turn clockwise bracket fix
++ verification is THE next task, then the "victory lap" drive where she stops
+herself at the door.
 
 ---
 
 ## Where we are
 
-- **Milestone J — collision-stop reflex: DONE (2026-07-15 evening, bench/wheels-up).**
-  Bench demo passed on the Pi 5. `DRIVE_GOAL` straight 10 m @ 0.3 through
-  `RealReactiveBackend` (stock config); hand approach gave a clean decreasing
-  distance series; `SAFE_STOP` latched at 0.2815 m (< 0.30 m threshold, ~50 ms /
-  one 20 Hz tick). Motors zeroed within one tick, `BLOCKED` reported (reason
-  `'obstacle'`), zero reverse commands, latch held 15 s after the obstacle
-  cleared, clean `SIGINT` shutdown. Roadmap updated.
+- **2026-07-16 supervised floor drive: DONE.** 1.2 m on hardwood via
+  `DRIVE_GOAL` straight 1.5 @ 0.3 through `RealReactiveBackend`. Ran under a
+  relaxed-grace env config (`YALP_ULTRASONIC_GRACE_MS=20000`,
+  `MAX_MISSES=100000`) — supervised-only safety net, never a default. Completed
+  on the goal timer; motors ran clean; zero reverse commands. The
+  distance-based `SAFE_STOP` stayed armed the whole run but was never reached
+  because the sonar never saw the door (reason: it was pointing at the wrong
+  wall — see below).
 
-- **Phantom-stop grace fix (de48495) VERIFIED ON HARDWARE.** At 15 Hz stock
-  config, 18/18 induced open-room echo timeouts coasted cleanly — zero phantom
-  stops. The prior ~20-miss bursts did not recur (worst observed this session: 3
-  consecutive misses). The fix is solid.
+- **Sonar saga resolved: mount is ~90-140° CCW off the nose (viewed from
+  above).** After a hand "leveling" of the mount an autonomous camera+sonar
+  diagnosis (pivot sweeps cross-referenced with video frames) proved the
+  transducers point into the left-rear quadrant. The persistent 2.3-2.7 m
+  "background band" everyone kept seeing was the left-rear wall, not a
+  frontal target. Full field findings — including the visual cross-reference
+  method — are in `hardware.md` 2026-07-16 subsection.
 
-- **CONFIG VERDICT: run the reactive stack bone-stock.** Use the defaults —
-  15 Hz ultrasonic cap, 150 ms / 2-miss grace. The old "poll at 5-6 Hz, not
-  15 Hz" advice is now **obsolete and harmful**: the 150 ms grace window is
-  mathematically inert below ~6.7 Hz poll rate (re-pulse interval exceeds the
-  window, so 0 misses are absorbed). A new env knob `YALP_ULTRASONIC_MAX_POLL_HZ`
-  exists if the cap ever needs changing; grace knobs remain
-  `YALP_ULTRASONIC_GRACE_MS` / `YALP_ULTRASONIC_GRACE_MAX_MISSES`. A grace
-  construction-time warning now fires automatically if the window goes inert.
+- **Environment visually confirmed:** the target door is real, closed, ~1 m
+  ahead. A black woven-fabric storage cube in the corridor is an ultrasound
+  ABSORBER (invisible to sonar at any aim angle) and must be moved out of
+  drive lanes before the victory lap.
 
-- **Motor calibration is set on izzy:** `~/.config/yalp/calibration.json` has
-  `left_invert=true, right_invert=true`. Do NOT re-run calibration unless motors
-  move wrong.
+- **Code landed this session — 2 commits ahead of `origin/main`, not yet
+  merged:**
+  - `b1e1f34` — SIGINT shutdown fix: the real-stack previously survived
+    SIGINT during timeout storms (needed SIGTERM); motors now zeroed first in
+    teardown, bounded joins, regression tests added.
+  - `fde1587` — Ultrasonic observability counters: state/telemetry now carry
+    `total_reads / valid / raw_misses / coasted / unknown_served`. Eliminates
+    the lower-bound-only field analysis problem.
+  - Earlier (already on main): `YALP_ULTRASONIC_MAX_POLL_HZ` env knob and
+    inert-grace construction warning.
+  - **izzy is at `0ce8a26` (main).** Pull needed after these commits merge:
+    `git pull --ff-only`, then `.venv/bin/pip install -e . -q`.
 
-## THE NEXT TASK — first floor drive
+## THE NEXT TASK
 
-Off the stand, full reactive stack live (collision-stop underneath). Slow speed.
-Hand-over-sensor = brake pedal. Battery pack switch = hardware cutoff.
+**In order — nothing drives until step 2 reads true.**
 
-**⚠️ CRITICAL — aim-geometry blind spot (measured this session):**
+1. **Physical fix:** rotate the sensor bracket ~quarter turn CLOCKWISE (viewed
+   from above), pitch level, until the transducers visibly face the same
+   direction as the camera lens. Pack switch OFF for sensor-only work.
 
-The slightly downward-tilted ultrasonic sensor locks onto strong background
-echoes past low, curved, or off-axis obstacles. It **missed two real obstacles**
-during characterisation:
+2. **Verify BOTH axes:** with izzy ~1 m square to the closed door, run
+   `/tmp/ultra_char.py --hz 15 --seconds 8` (recreate from repo/session
+   artifacts if `/tmp` was wiped). Expect a STEADY ~95-105 cm. If reading ~2 m,
+   iterate yaw in 10-15° steps, using the steady-pass as the feedback signal.
+   **Do not drive until this reads true.**
 
-- Curved cat fountain at ~0.9 m actual → read as background **3.04 m**
-- Solid obstacle at ~0.46 m actual → read as hard background **1.14 m**
+3. **Clear the corridor:** move the fabric storage cube out of all drive lanes
+   (it is an ultrasound absorber — sonar-invisible regardless of aim). Re-square
+   izzy at ~1 m standoff from the door.
 
-By contrast, it tracks a centred palm cleanly through the 0.30 m threshold, and
-in open room the floor-graze echo is a steady ~2.6 m (safe). **Treat the
-ultrasonic as a last-resort centred reflex, NOT obstacle perception.** For the
-first floor drive, do NOT rely on it to catch furniture or walls — use the pack
-switch as a hard stop and your hand as the brake. Details in `hardware.md`
-field-findings section. Levers: (a) improve the aim/mount height; (b) consider a
-raised/leveled sensor bracket before or after the first drive.
-
-**Steps:**
-
-1. **Power on izzy.** Pack switch ON; wheels UP for any motor checks first, then
-   set her DOWN off the stand. Keep the stand nearby for the first few metres —
-   you can hop back on it any time.
-2. **Connect:** `ssh izzy` (host `izzy.local`, user `izzy`, key auth). The old
-   static IP `192.168.86.191` is **dead** — DHCP lease changed; use `izzy.local`
-   only.
-3. **Early housekeeping (do once):** the `.venv` has root-owned files from an old
-   `sudo pip` install — an editable reinstall currently refuses. Fix before a
-   pull or reinstall: `sudo chown -R izzy:izzy ~/yalp/.venv`. Harmless to skip
-   today if not pulling (the existing editable install already resolves imports
-   to the live `~/yalp/src` tree — verified working).
-4. **Optional pull:** izzy is at `67b312d` (contains `de48495`). No pull is
-   needed for the floor drive. Only pull if you want this session's hardening
-   changes (env knob, inert-grace warning, hardware-docs): push them first, then
-   `git pull --ff-only` on izzy, then `.venv/bin/pip install -e . -q`.
-5. **Set her down and run the floor drive** — same `DRIVE_GOAL` recipe as the
-   bench demo: `{"kind":"straight","target":10,"speed":0.3}` through
-   `RealReactiveBackend`, bone-stock config. Keep your hand 10–15 cm in front of
-   the sensor as a brake pedal throughout (pack switch = hard cutoff). Watch the
-   blind-spot geometry — don't approach her from the side or low; come centred
-   from the front.
-6. **After the drive:** consider leveling/raising the ultrasonic mount to reduce
-   the background-echo bias and improve off-axis coverage before tackling
-   person-following.
+4. **VICTORY LAP:** stock config (NO relaxed grace),
+   `DRIVE_GOAL` straight ~1.5 @ 0.3. Expect: valid decreasing distance track
+   from the door, a distance-triggered `SAFE_STOP` at 0.30 m (≈ true range
+   now), `BLOCKED`, no reverse, sticky latch. That run marks the floor-drive
+   rung DONE — update `roadmap.md` (mirror the milestone-J entry format).
 
 ## Key facts for whoever resumes
 
-- **izzy was powered OFF at end of this session.** No state to worry about.
-- **Connection:** `ssh izzy` — host `izzy.local`, user `izzy`, ed25519 key auth.
-  The old static IP `192.168.86.191` is **dead** (new DHCP lease); `izzy.local`
-  only.
-- **izzy's `~/yalp` is at `67b312d`** (contains `de48495`). No pull needed for
-  the floor drive unless this session's hardening tasks are pushed and wanted.
-- **Housekeeping (early next session):** `sudo chown -R izzy:izzy ~/yalp/.venv`
-  — fixes root-owned venv files from an old sudo install; harmless to defer (the
-  editable install resolves to the live `~/yalp/src` tree), but fix it before any
-  install/upgrade.
-- **`/tmp` artifacts on izzy** (`ultra_char.py`, `demo_drive.py`, characterisation
-  and demo logs) are wiped on reboot — recreate if needed. Persistent telemetry
-  lives at `~/.local/state/yalp/telemetry/telemetry.jsonl`.
-- **`.env` on izzy** holds the rotated `ANTHROPIC_API_KEY` (gitignored, mode 600).
-  `yalp see` / vision will work once that path is reached.
-- **Settled facts — do NOT re-diagnose:** header wiring correct; DRV8833 IN/IN
-  driver fix confirmed; motor calibration saved (`~/.config/yalp/calibration.json`,
-  both inverts `true`); camera is USB `/dev/video0`; `.env` on izzy holds the
-  rotated `ANTHROPIC_API_KEY`. Cosmetic known warnings: `cv2.CascadeClassifier`
-  fallback (FOLLOW-only concern); `gpiozero PWMSoftwareFallback` on Pi 5 — both
-  expected and harmless.
+- **Connection:** `ssh izzy` (host `izzy.local`). Old static IP is dead. Pack
+  switch = motor master cutoff; sensor-only work is safe with it off.
+
+- **Sensor ops procedure (new, hard-won):** after ANY mount adjustment verify
+  aim against a known frontal target before trusting any reading. Confident
+  stable readings can be a wall behind the robot's shoulder.
+
+- **izzy's `~/yalp` is at `0ce8a26` (main).** The two code commits from this
+  session are not yet merged. Pull after merge: `git pull --ff-only`, then
+  `.venv/bin/pip install -e . -q`.
+
+- **`/tmp` artifacts on izzy** (`ultra_char.py`, drive scripts, logs) are wiped
+  on reboot — recreate from repo/session artifacts if needed. Persistent
+  telemetry lives at `~/.local/state/yalp/telemetry/telemetry.jsonl`.
+
+- **Calibration and wiring — do NOT re-diagnose:** `~/.config/yalp/calibration.json`
+  has `left_invert=true, right_invert=true`; DRV8833 IN/IN driver fix confirmed;
+  camera `/dev/video0`; `.env` holds the rotated `ANTHROPIC_API_KEY` (mode 600,
+  gitignored). `venv` ownership fixed this session (`pip install -e .` works).
+
+- **Documented field findings (startup-blind latch semantics, timed-goal
+  ~20% short calibration, stiction asymmetry forward vs backward/right-pivot):**
+  see `hardware.md` 2026-07-16 subsection.
+
+- **Settled facts unchanged:** wiring, driver fix, motor calibration, milestone H
+  and J DONE (bench), grace fix verified at 15 Hz, cosmetic warnings expected
+  (`cv2.CascadeClassifier` fallback, `gpiozero PWMSoftwareFallback`).
+
 - **Safety ritual (unchanged):** wheels up on stand for motor tests; pack switch
-  is the motor master cutoff; keep Pin 1 (3V3) and Pin 2 (5V) wires dressed apart.
+  is the motor master cutoff; dress Pin 1 (3V3) and Pin 2 (5V) wires apart.
 
 ## The road after
 
-First floor drive → `yalp see` (vision Q&A, key is ready on izzy) →
-person-following (Gate H already measured GO at ~8.8× margin) → voice input on
-the C270's built-in mic. All software from here; the body is built and healthy.
+Sonar bracket fix → victory lap (floor collision-stop proven, floor-drive rung
+DONE) → `yalp see` (vision Q&A; the camera+vision loop already proved itself
+diagnosing the sonar) → person-following → voice.
