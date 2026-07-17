@@ -34,6 +34,7 @@ FEATURE_MODULES: list[str] = [
     "yalp.reactive.reactive_cli",
     "yalp.reactive.bench_cli",
     "yalp.reactive.calibration_cli",
+    "yalp.reactive.drive_cli",
     "yalp.voice.audio_cli",
 ]
 
