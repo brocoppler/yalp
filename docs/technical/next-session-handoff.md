@@ -1,11 +1,11 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-07-16, late evening (updated after root-cause closure).
-**One-line status:** Root cause of two-day ultrasonic saga confirmed and fixed in
-code — gpiozero Python-side timing on Pi 5 manufactures 2x/4x range inflation;
-`GpiodUltrasonicSensor` now auto-selected. Battery sag still blocks motor work —
-pull latest onto izzy, charge/swap the pack, validate the door reading, then run
-the victory lap.
+**Last updated:** 2026-07-16, late evening / overnight (floor-graze diagnosed,
+overnight tooling landed).
+**One-line status:** Root cause fixed, floor-graze at parking spot diagnosed,
+overnight tooling committed (hwtest soak+matrix+save, `yalp drive` subcommand,
+`startup_blind` latch semantics). Morning sequence: charge pack, pull repo, run
+channel matrix, soak sensor, then fire the one-command victory lap.
 
 ---
 
@@ -42,14 +42,30 @@ the victory lap.
   full day):** left-motor-FORWARD dead, right-motor-REVERSE marginal-to-dead
   at duty 0.3; left-rotation channels (left-reverse + right-forward) still
   worked. Channels failed progressively in order of load. **Charge or swap
-  the pack before any motor work next session**, then run a quick channel
-  matrix (fwd/rev per wheel, pivot both ways) before trusting any maneuver.
+  the pack before any motor work next session**, then run the channel matrix
+  before trusting any maneuver.
 
-- **Physical state at power-down:** izzy parked ~1.2-1.4 m square-facing the
-  quilt-covered door; quilt still hung on the door; black fabric storage cube
-  (sonar-invisible absorber) moved out of the drive lane; shoes + kettlebell
-  near the left wall by the original lane — **clear them before pivoting**
-  (they jammed right-pivots once already).
+- **Physical state at power-down (tape-measured):** izzy cleanly shut down,
+  parked **118 cm** square-ish to the quilt-covered door. Quilt stays up
+  (specular door without it). The ~112 cm sonar mode at shutdown matched the
+  tape — quilt hangs a few cm proud of the door. A transient ~88 cm mode
+  during final captures was the operator walking through the beam; expect and
+  ignore human transients in future captures.
+
+- **Floor-graze diagnosis (~75% confidence):** the dominant ~65 cm sonar mode
+  at the parking spot is most likely a **floor graze** — the flat-remounted
+  module leans forward a few degrees with the cardboard wall, putting the
+  lower beam skirt on the hardwood ~0.65 m out. Evidence: persists across
+  scene changes; 4× wider jitter than hard-surface modes; geometry closes for
+  a 0.12–0.18 m mount height. **Recommended permanent fix:** shim the
+  module's BOTTOM edge up 1–2 degrees (pushes any graze past 3 m).
+  **Quick discriminator:** lay a cloth flat on the floor 0.4–0.8 m ahead —
+  a graze mode dies, an object mode survives. **The lap is GO-able even
+  unshimmed:** the graze reads a constant safe ~65 cm until the door is truly
+  nearer, then tracks it down to the 0.30 m trip.
+
+- **Everything in `izzy:/tmp` died with the shutdown.** The validated gpiod
+  driver is now productized in the repo — no `/tmp` scripts need recreating.
 
 - **Environment visually confirmed:** the target door is real, closed. The
   quilt/towel stays on the glossy door for all sonar work (specular
@@ -66,58 +82,105 @@ the victory lap.
     first in teardown).
   - `fde1587` — Ultrasonic observability counters (`total_reads / valid /
     raw_misses / coasted / unknown_served` in state/telemetry).
+  - `2504b0c` — **`startup_blind` latch semantics:** cold-boot SAFE_STOP when
+    no valid read has ever landed is now labeled `reason="startup_blind"` (vs
+    `"echo_timeout"` for mid-run dropout). `yalp drive` pre-flight drives
+    through both (adoption lifts the latch); only a genuine close `"obstacle"`
+    causes refusal (exit 2, no intent sent).
+  - `71829b4` — **`yalp hwtest` upgrades:** `--seconds S`/`--hz H` ultrasonic
+    soak (prints count, valid%, miss%, min/median/max/stdev, longest-miss
+    streak); `--matrix` 6-step per-channel motor triage (LEFT-FWD/REV,
+    RIGHT-FWD/REV, PIVOT-LEFT/RIGHT); `--save PATH` camera frame save.
+  - `1925ad1` — **`yalp drive` subcommand** (first-class IPC drive, replaces
+    all hand-rolled `/tmp` scripts). See morning sequence below.
   - Earlier (already on main): `YALP_ULTRASONIC_MAX_POLL_HZ` env knob.
   - **izzy is at `0ce8a26` (main).** Pull after repo is pushed:
     `git pull --ff-only`, then `.venv/bin/pip install -e . -q`.
 
-## THE NEXT TASK
+## MORNING SEQUENCE
 
-**Root cause is fixed in code. The gpiod driver auto-selects on Pi 5 when
-`python3-libgpiod` v2 is present. The remaining steps are operational.**
+**Root cause fixed. Overnight tooling committed. Steps below are the complete
+morning run-card in order.**
 
-### Step 0 — mandatory before motor work
+### Step 1 — charged pack in, power on
 
-1. **Charge or swap the battery pack.** Left-FORWARD and right-REVERSE were
-   dead or marginal at session end. Nothing motor-powered until this is done.
-
-2. **Channel matrix:** fwd/rev per wheel, pivot both ways at duty 0.3. Confirm
-   all four channels alive before any maneuver. Note any that are still weak.
-
-3. **Clear the corridor:** shoes + kettlebell by the left wall — move them;
-   they jammed right-pivots once already. Storage cube already out of lane.
+Nothing motor-powered until the pack is fresh. Left-FORWARD and right-REVERSE
+were dead or marginal at session end (battery sag). **Charge or swap before
+continuing.**
 
 ---
 
-### Step 1 — pull latest onto izzy (requires the repo to be pushed first)
+### Step 2 — push repo, pull on izzy
 
-Push the laptop branch to origin first, then on izzy:
+**PUSH REQUIRED.** The repo's `main` is many commits ahead of origin (gpiod
+driver, docs, overnight tooling). The operator must authorize the push, then
+on izzy:
 ```
-git pull --ff-only
-.venv/bin/pip install -e . -q
+cd ~/yalp && git pull --ff-only && .venv/bin/pip install -e . -q
 ```
-The gpiod driver (`GpiodUltrasonicSensor`) will auto-select on the next
-`RealReactiveBackend` start. Confirm with `yalp hwtest --check ultrasonic` —
-you should see honest distances. If readings are still ~2–4× true, the gpiozero
-fallback is in use; check `python3-libgpiod` install on izzy.
 
 ---
 
-### Step 2 — remove the 30 cm test box; validate the door reading
+### Step 3 — channel matrix (wheels up)
 
-Remove the test box from the drive lane. Place izzy ~1.2-1.4 m square-facing
-the quilt-covered door (it's still hung; leave it — specular door otherwise).
-Run a live ultrasonic stream and expect STEADY ~1.2–1.4 m. That number is now
-honest with the gpiod driver. **Do not drive until the door reads true.**
+New `--matrix` flag runs a 6-step per-channel triage (LEFT-FWD/REV,
+RIGHT-FWD/REV, PIVOT-LEFT/RIGHT). **Put izzy on the stand — wheels off the
+ground** before running:
+```
+yalp hwtest --check motors --matrix
+```
+Confirm all channels alive and note any weak ones before trusting any maneuver.
 
 ---
 
-### Step 3 — victory lap (marks floor-drive rung DONE)
+### Step 4 — ultrasonic soak
 
-Stock config (NO relaxed grace). `DRIVE_GOAL straight 1.6 @ 0.3`.
-Expect: valid decreasing distance track from the door, `SAFE_STOP` at ≤ 0.30 m
-TRUE, goal status 'blocked', no reverse, sticky latch. **That run marks the
-floor-drive rung DONE — update `roadmap.md`** (mirror the milestone-J entry
-format, note gpiod driver in use).
+New `--seconds`/`--hz` flags run a timed soak with a summary (valid%, miss%,
+min/median/max, longest-miss streak). Place izzy facing the quilt-covered
+door at ~1.14 m (tape mark). Run:
+```
+yalp hwtest --check ultrasonic --seconds 20 --hz 10
+```
+**Expect:** primary mode at **~1.12–1.14 m** (quilt a few cm proud of door
+tape); a benign secondary **~65 cm floor-graze mode** (see floor-graze note
+above — harmless unless shimmed). Also verify: a rigid box at 30 cm must
+read **~29–31 cm**. If readings are still ~2–4× true, the gpiozero fallback
+is in use; check `python3-libgpiod` v2 on izzy.
+
+---
+
+### Step 5 — THE VICTORY LAP (one command)
+
+Stock config (no relaxed grace). Remove the test box from the lane first.
+```
+yalp drive
+```
+Default flags: `--target 1.6` (m), `--speed 0.3`. The command:
+1. Connects to the running reactive process via IPC.
+2. Pre-flights safety: refuses a genuine close `"obstacle"` (exit 2, no
+   intent sent); drives through a stale cold-boot latch (`"startup_blind"` or
+   `"echo_timeout"`, distance unknown) — adoption lifts it automatically.
+3. Sends `DRIVE_GOAL straight 1.6 @ 0.3`, polls at 5 Hz, prints a live
+   timeline row each poll (elapsed, distance, mode, status, progress/reason).
+4. **Expect:** decreasing distance track from quilt door, `SAFE_STOP` at a
+   true ≤ 0.30 m, reason `"obstacle"`, stop verdict printed, **exit 0**.
+   On timeout (60 s default): sends IDLE halt, exit 1.
+   Ctrl-C: IDLE halt, exit 130.
+
+**Note on `startup_blind`:** if the reactive process just booted and the first
+poll shows `reason="startup_blind"`, that is the cold-boot latch (no valid
+read yet). The CLI drives through it — it is safe and expected; adoption
+lifts it once the sensor delivers a valid reading. A genuine `"obstacle"`
+refusal prints why and exits 2 before any intent is sent.
+
+---
+
+### Step 6 — on success: mark floor-drive DONE
+
+Update `roadmap.md` — mirror the milestone-J format, mark the floor-drive
+rung DONE (note: gpiod driver, `yalp drive` command, `startup_blind`
+semantics, date 2026-07-17). Then the road opens:
+**`yalp see` → person-following → voice.**
 
 ## Key facts for whoever resumes
 
@@ -128,17 +191,15 @@ format, note gpiod driver in use).
   aim against a known frontal target before trusting any reading. Confident
   stable readings can be a wall behind the robot's shoulder.
 
-- **izzy's `~/yalp` is at `0ce8a26` (main).** The two code commits from this
-  session are not yet merged. Pull after merge: `git pull --ff-only`, then
+- **izzy's `~/yalp` is at `0ce8a26` (main).** Overnight commits (gpiod
+  driver, hwtest upgrades, `yalp drive`, `startup_blind`) are ahead of origin
+  and not yet on izzy. Pull after the push: `git pull --ff-only`, then
   `.venv/bin/pip install -e . -q`.
 
-- **`/tmp` artifacts on izzy** (`ultra_char.py`, drive scripts, logs) are wiped
-  on reboot — recreate from repo/session artifacts if needed. Persistent
-  telemetry lives at `~/.local/state/yalp/telemetry/telemetry.jsonl`.
-
-- **Helper scripts for pivots/arcs** were staged in `izzy:/tmp` this session
-  (wiped on reboot; trivial to recreate from `GpiozeroMotorDriver` — pivot
-  bursts at duty 0.3 with `try/finally` stop).
+- **`/tmp` artifacts on izzy died with the shutdown.** No `/tmp` scripts
+  need recreating — everything is now in the repo (`yalp drive`, `yalp hwtest
+  --matrix`, etc.). Persistent telemetry lives at
+  `~/.local/state/yalp/telemetry/telemetry.jsonl`.
 
 - **Jam signature:** commanded pivot with zero scene change in camera frames =
   wheel obstruction or dead channel, not a software bug. Check the channel
@@ -162,6 +223,8 @@ format, note gpiod driver in use).
 
 ## The road after
 
-Push → pull on izzy → charge pack → channel matrix → validate door reading
-(honest with gpiod driver) → victory lap (floor collision-stop proven, floor-drive
-rung DONE in `roadmap.md`) → `yalp see` (vision Q&A) → person-following → voice.
+Push → pull on izzy → charge pack → `yalp hwtest --check motors --matrix`
+(channel triage, wheels up) → `yalp hwtest --check ultrasonic --seconds 20 --hz 10`
+(soak, confirm door + floor-graze) → `yalp drive` (victory lap, floor
+collision-stop proven) → mark floor-drive rung DONE in `roadmap.md` →
+`yalp see` (vision Q&A) → person-following → voice.
