@@ -20,16 +20,36 @@ Plus two laptop fakes (:class:`FakeMotorDriver`, :class:`FakeRangeSensor`) for
 deterministic, hardware-free tests.
 
 The concrete, hardware-touching drivers that live here —
-:class:`GpiozeroMotorDriver` and :class:`GpiozeroUltrasonicSensor` — import
-``gpiozero``/``lgpio`` *lazily* (inside ``__init__``/methods), so this module
-still imports cleanly on a Mac with no hardware libraries present. Instantiating
-those classes is what requires the libraries; merely importing them does not.
+:class:`GpiozeroMotorDriver`, :class:`GpiozeroUltrasonicSensor`, and
+:class:`GpiodUltrasonicSensor` — import their GPIO libraries
+(``gpiozero``/``lgpio`` or ``python3-libgpiod`` v2) *lazily* (inside
+``__init__``/methods), so this module still imports cleanly on a Mac with no
+hardware libraries present. Instantiating those classes is what requires the
+libraries; merely importing them does not.
+
+The two ultrasonic drivers share one collision-stop envelope
+(:class:`_UltrasonicRangeSensorBase`) and are chosen by
+:func:`make_ultrasonic_sensor`, which PREFERS the libgpiod v2 driver on the Pi 5
+(where gpiozero's Python-timed echo manufactures 2x/4x range inflation — proven
+on hardware 2026-07-16) and falls back to gpiozero with a loud warning.
 """
 
 from __future__ import annotations
 
+import glob
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, runtime_checkable, Protocol
+import time
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    runtime_checkable,
+    Protocol,
+)
 
 from yalp import config
 
@@ -491,12 +511,15 @@ class GpiozeroMotorDriver:
             return False
 
 
-class GpiozeroUltrasonicSensor:
-    """A real, safety-critical :class:`RangeSensor` backed by ``gpiozero``.
+class _UltrasonicRangeSensorBase:
+    """Shared, hardware-agnostic core for HC-SR04 :class:`RangeSensor` drivers.
 
-    Drives an HC-SR04-style ultrasonic on a Raspberry Pi 5 to feed the reactive
-    layer's collision-stop. Because a missed echo is what stands between the
-    robot and a wall, this class is deliberately paranoid:
+    Both concrete backends — :class:`GpiozeroUltrasonicSensor` (legacy,
+    Python-timed echo) and :class:`GpiodUltrasonicSensor` (libgpiod v2,
+    kernel-timestamped edges) — share the SAME safety-critical envelope around the
+    raw per-ping read, so the collision-stop semantics can never fork between
+    them. Because a missed echo is what stands between the robot and a wall, that
+    envelope is deliberately paranoid:
 
     * **Timeout means UNKNOWN, never CLEAR.** If no echo returns within
       ``echo_timeout_s`` the reading is reported as ``known=False`` so the caller
@@ -509,25 +532,23 @@ class GpiozeroUltrasonicSensor:
       monotonic clock: if called sooner than ``1 / max_poll_hz`` since the last
       *real* sample it returns the cached reading **without re-pulsing** the
       sensor, rather than firing a ping that would read garbage.
-    * **Bounded "coast last-known" grace (Pi 5 phantom-STOP fix).** On the Pi 5
-      the echo is timed in *software* (pigpio is unavailable), so isolated reads
-      spuriously time out — especially at longer range where the return echo is
-      weak — and, since a miss correctly biases to STOP, the robot phantom-stops
-      every second or two and cannot drive. To fix this WITHOUT weakening the
-      invariant, a single miss (or a brief burst) re-serves the last VALID
-      distance instead of instantly declaring blindness, bounded by BOTH
-      ``grace_ms`` (a wall-clock window since the last valid reading) AND
-      ``grace_max_misses`` (a consecutive-miss budget). Whichever bound trips
-      FIRST ends the grace; the read then reverts to ``(placeholder, False)``
-      exactly as before → STOP. A single valid read resets both bounds. The
-      grace only ever RE-SERVES the exact last measured distance — it never
-      fabricates a larger/clear value — so a near obstacle (last valid inside
-      ``safe_stop_threshold_m``) is coasted as an obstacle (still STOP), and
-      **sustained** sensor loss still STOPs. This is a bounded, deliberate risk:
-      the robot coasts on the last good reading for at most ~``grace_ms`` /
-      ``grace_max_misses`` misses (~0.15 m of travel at 1 m/s), well inside the
-      ``safe_stop_threshold_m`` stopping margin. It is independent of the motor
-      watchdog (a stalled tick loop still trips the dead-man's switch).
+    * **Bounded "coast last-known" grace (Pi 5 phantom-STOP fix).** Isolated reads
+      can spuriously time out (a weak return echo at range), and since a miss
+      correctly biases to STOP the robot would phantom-stop every second or two
+      and never drive. To fix this WITHOUT weakening the invariant, a single miss
+      (or a brief burst) re-serves the last VALID distance instead of instantly
+      declaring blindness, bounded by BOTH ``grace_ms`` (a wall-clock window since
+      the last valid reading) AND ``grace_max_misses`` (a consecutive-miss
+      budget). Whichever bound trips FIRST ends the grace; the read then reverts
+      to ``(placeholder, False)`` exactly as before → STOP. A single valid read
+      resets both bounds. The grace only ever RE-SERVES the exact last measured
+      distance — it never fabricates a larger/clear value — so a near obstacle
+      (last valid inside ``safe_stop_threshold_m``) is coasted as an obstacle
+      (still STOP), and **sustained** sensor loss still STOPs. This is a bounded,
+      deliberate risk: the robot coasts on the last good reading for at most
+      ~``grace_ms`` / ``grace_max_misses`` misses (~0.15 m of travel at 1 m/s),
+      well inside the ``safe_stop_threshold_m`` stopping margin. It is independent
+      of the motor watchdog (a stalled tick loop still trips the dead-man's switch).
 
     * **Observability counters (true miss rate).** The coast grace re-serves a
       missed echo as ``known=True``, so an absorbed miss is INDISTINGUISHABLE over
@@ -542,19 +563,17 @@ class GpiozeroUltrasonicSensor:
       :meth:`stats`. They are threaded into the reactive state snapshot / telemetry
       so a field session can see the true miss rate, not just the absorbed remainder.
 
-    **Prefer :class:`gpiozero.DistanceSensor`.** It owns the TRIG pulse / ECHO
-    timing and exposes ``.distance`` as a fraction ``0..1`` of ``max_distance``;
-    a value at (or above) the ceiling with no real echo is treated as a timeout.
-    The pure unit-conversion (:meth:`_echo_seconds_to_distance`) and the
-    rate-limiter (:meth:`_RateLimiter`) are factored out so they can be tested
-    with no ``gpiozero`` present.
+    **Subclass contract.** A concrete backend supplies exactly two things:
 
-    **Pi 5 needs the lgpio pin factory** (``RPi.GPIO`` silently no-ops there), so
-    we force :class:`gpiozero.pins.lgpio.LGPIOFactory`, exactly like
-    :class:`GpiozeroMotorDriver`.
+    * :meth:`_sample` — take ONE real ping and return ``(distance_m, known)``
+      (``known=False`` on a timeout / over-range / hardware error); and
+    * :meth:`_release` — release its own GPIO on :meth:`close`.
 
-    **Lazy imports** keep this module laptop-importable; only *instantiating*
-    this class needs ``gpiozero``/``lgpio``.
+    It initialises this shared envelope by calling
+    :meth:`_init_grace_rate_counters` from its ``__init__``. The pure
+    unit-conversion (:meth:`_echo_seconds_to_distance`) and the rate-limiter
+    (:meth:`_RateLimiter`) are hardware-free so they can be unit-tested with no
+    GPIO library present.
     """
 
     class _RateLimiter:
@@ -576,11 +595,9 @@ class GpiozeroUltrasonicSensor:
                 return True
             return False
 
-    def __init__(
+    def _init_grace_rate_counters(
         self,
         *,
-        trig_pin: int = config.ULTRASONIC_TRIG_PIN,
-        echo_pin: int = config.ULTRASONIC_ECHO_PIN,
         max_distance_m: float = config.ULTRASONIC_MAX_DISTANCE_M,
         echo_timeout_s: float = config.ULTRASONIC_ECHO_TIMEOUT_S,
         max_poll_hz: float = config.ULTRASONIC_MAX_POLL_HZ,
@@ -590,6 +607,12 @@ class GpiozeroUltrasonicSensor:
         safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
         monotonic: Optional[Callable[[], float]] = None,
     ) -> None:
+        """Set up the shared rate-cap / coast-grace / counter state.
+
+        Called by a concrete backend's ``__init__`` BEFORE it touches hardware, so
+        the safety envelope is identical across backends. Also emits the one-time
+        "grace is INERT at this poll rate" warning (Pi 5 field finding).
+        """
         self._max_distance_m = float(max_distance_m)
         self._echo_timeout_s = float(echo_timeout_s)
         self._speed_of_sound = float(speed_of_sound)
@@ -602,7 +625,7 @@ class GpiozeroUltrasonicSensor:
 
         # Rate-cap: >= 1 / max_poll_hz between real samples (>= ~60 ms at 15 Hz).
         min_interval_s = (1.0 / max_poll_hz) if max_poll_hz and max_poll_hz > 0 else 0.0
-        self._limiter = GpiozeroUltrasonicSensor._RateLimiter(min_interval_s)
+        self._limiter = _UltrasonicRangeSensorBase._RateLimiter(min_interval_s)
 
         # --- Bounded "coast last-known" grace (Pi 5 phantom-STOP fix) ---------
         # A miss briefly re-serves the last VALID reading, bounded by BOTH a
@@ -667,30 +690,6 @@ class GpiozeroUltrasonicSensor:
         self._raw_misses: int = 0
         self._coasted_reads: int = 0
         self._unknown_served: int = 0
-
-        # --- Lazy hardware imports (keep the module laptop-importable) --------
-        try:
-            import gpiozero  # noqa: F401
-            from gpiozero import DistanceSensor
-        except Exception as exc:  # pragma: no cover - needs a real Pi env
-            raise RuntimeError(
-                "gpiozero is required to read the ultrasonic sensor on the Pi "
-                f"but could not be imported ({exc!r}). Install the 'pi' extra on "
-                f"the Raspberry Pi and see {_PIN_FACTORY_DOCS}."
-            ) from exc
-
-        # Reuse the motor driver's lgpio-factory enforcement (Pi 5 requirement).
-        GpiozeroMotorDriver._set_lgpio_pin_factory(gpiozero)
-
-        # gpiozero.DistanceSensor owns the TRIG pulse / ECHO timing. queue_len=1
-        # so .distance is the latest single sample (no smoothing of stale pings);
-        # threshold_distance is unused here (we don't use the event API).
-        self._sensor: Any = DistanceSensor(
-            echo=echo_pin,
-            trigger=trig_pin,
-            max_distance=self._max_distance_m,
-            queue_len=1,
-        )
 
     @staticmethod
     def _echo_seconds_to_distance(seconds: float, speed_of_sound: float = config.SPEED_OF_SOUND_MPS) -> float:
@@ -841,6 +840,112 @@ class GpiozeroUltrasonicSensor:
             return False  # wall-clock window since the last valid read elapsed
         return True
 
+    def _sample(self) -> Tuple[float, bool]:  # pragma: no cover - abstract
+        """Take ONE real ping → ``(distance_m, known)``. Implemented by a subclass.
+
+        ``known=False`` means the ping missed (timeout / over-range / hardware
+        error); the returned distance is then only a placeholder the shared
+        :meth:`read_distance` flow ignores.
+        """
+        raise NotImplementedError
+
+    def _release(self) -> None:  # pragma: no cover - abstract
+        """Release the backend's own GPIO. Called once by :meth:`close`."""
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Release the underlying device via :meth:`_release`. Idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._release()
+        except Exception:  # pragma: no cover - best effort during teardown
+            pass
+
+
+class GpiozeroUltrasonicSensor(_UltrasonicRangeSensorBase):
+    """A real, safety-critical :class:`RangeSensor` backed by ``gpiozero``.
+
+    **UNSAFE as the Pi 5 collision-stop sensor — see
+    :class:`GpiodUltrasonicSensor`.** gpiozero times the HC-SR04 echo pulse in
+    *Python* (pigpio is unavailable on the Pi 5), and that Python-side timing was
+    proven on hardware (2026-07-16) to manufacture EVEN-MULTIPLE range inflation:
+    a target at 0.30 m read 1.17 m (4x), a door at 0.84 m read 1.74 m (2x), while
+    a simultaneous kernel-timestamped gpiod v2 capture of the SAME echoes read the
+    true range 50/50. With this backend a SAFE_STOP served at 0.30 m therefore
+    fires at ~0.075–0.15 m TRUE distance — at or after contact. Prefer the libgpiod
+    v2 :class:`GpiodUltrasonicSensor`; this class is retained for A/B testing and
+    for non-Pi-5 boards where the Python-timing defect does not apply.
+
+    It reuses the shared collision-stop envelope
+    (:class:`_UltrasonicRangeSensorBase`): the poll-rate cap, the bounded coast
+    grace, the observability counters, and the "timeout ⇒ UNKNOWN, never CLEAR"
+    invariant. This class only owns the raw per-ping read (:meth:`_sample`) and its
+    own GPIO teardown (:meth:`_release`).
+
+    **Uses :class:`gpiozero.DistanceSensor`.** It owns the TRIG pulse / ECHO
+    timing and exposes ``.distance`` as a fraction ``0..1`` of ``max_distance``;
+    a value at (or above) the ceiling with no real echo is treated as a timeout.
+
+    **Pi 5 needs the lgpio pin factory** (``RPi.GPIO`` silently no-ops there), so
+    we force :class:`gpiozero.pins.lgpio.LGPIOFactory`, exactly like
+    :class:`GpiozeroMotorDriver`.
+
+    **Lazy imports** keep this module laptop-importable; only *instantiating*
+    this class needs ``gpiozero``/``lgpio``.
+    """
+
+    def __init__(
+        self,
+        *,
+        trig_pin: int = config.ULTRASONIC_TRIG_PIN,
+        echo_pin: int = config.ULTRASONIC_ECHO_PIN,
+        max_distance_m: float = config.ULTRASONIC_MAX_DISTANCE_M,
+        echo_timeout_s: float = config.ULTRASONIC_ECHO_TIMEOUT_S,
+        max_poll_hz: float = config.ULTRASONIC_MAX_POLL_HZ,
+        speed_of_sound: float = config.SPEED_OF_SOUND_MPS,
+        grace_ms: float = config.ULTRASONIC_GRACE_MS,
+        grace_max_misses: int = config.ULTRASONIC_GRACE_MAX_MISSES,
+        safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
+        monotonic: Optional[Callable[[], float]] = None,
+    ) -> None:
+        # Shared safety envelope FIRST (rate cap, coast grace, counters, warning).
+        self._init_grace_rate_counters(
+            max_distance_m=max_distance_m,
+            echo_timeout_s=echo_timeout_s,
+            max_poll_hz=max_poll_hz,
+            speed_of_sound=speed_of_sound,
+            grace_ms=grace_ms,
+            grace_max_misses=grace_max_misses,
+            safe_stop_threshold_m=safe_stop_threshold_m,
+            monotonic=monotonic,
+        )
+
+        # --- Lazy hardware imports (keep the module laptop-importable) --------
+        try:
+            import gpiozero  # noqa: F401
+            from gpiozero import DistanceSensor
+        except Exception as exc:  # pragma: no cover - needs a real Pi env
+            raise RuntimeError(
+                "gpiozero is required to read the ultrasonic sensor on the Pi "
+                f"but could not be imported ({exc!r}). Install the 'pi' extra on "
+                f"the Raspberry Pi and see {_PIN_FACTORY_DOCS}."
+            ) from exc
+
+        # Reuse the motor driver's lgpio-factory enforcement (Pi 5 requirement).
+        GpiozeroMotorDriver._set_lgpio_pin_factory(gpiozero)
+
+        # gpiozero.DistanceSensor owns the TRIG pulse / ECHO timing. queue_len=1
+        # so .distance is the latest single sample (no smoothing of stale pings);
+        # threshold_distance is unused here (we don't use the event API).
+        self._sensor: Any = DistanceSensor(
+            echo=echo_pin,
+            trigger=trig_pin,
+            max_distance=self._max_distance_m,
+            queue_len=1,
+        )
+
     def _sample(self) -> Tuple[float, bool]:
         """Take one real reading from ``gpiozero.DistanceSensor``.
 
@@ -868,17 +973,393 @@ class GpiozeroUltrasonicSensor:
 
         return (distance_m, True)
 
-    def close(self) -> None:
-        """Release the underlying gpiozero device. Idempotent."""
-        if self._closed:
-            return
-        self._closed = True
+    def _release(self) -> None:
+        """Release the underlying gpiozero device (best-effort)."""
         sensor = getattr(self, "_sensor", None)
         if sensor is not None:
             try:
                 sensor.close()
             except Exception:  # pragma: no cover - best effort during teardown
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# libgpiod v2 backend — kernel-timestamped edge capture (the Pi 5 safe driver).
+# --------------------------------------------------------------------------- #
+#: Kernel label of the Raspberry Pi 5 header GPIO controller. It is exposed as
+#: ``gpiochip0`` on current Pi 5 kernels and ``gpiochip4`` on older ones, so we
+#: match by LABEL rather than hardcoding the index (see :func:`_discover_gpiochip`).
+_RP1_CHIP_LABEL = "pinctrl-rp1"
+
+
+def _default_gpiochip_paths() -> List[str]:
+    """Sorted ``/dev/gpiochipN`` device paths present on this host (may be empty).
+
+    Factored out (rather than inlined) so tests can monkeypatch it to inject a
+    fake set of chip paths with no ``/dev`` present.
+    """
+    return sorted(glob.glob("/dev/gpiochip*"))
+
+
+def _discover_gpiochip(
+    gpiod_module: Any,
+    *,
+    override: str = "",
+    label_hint: str = _RP1_CHIP_LABEL,
+    chip_paths: Optional[Iterable[str]] = None,
+) -> Optional[str]:
+    """Resolve the header GPIO chip device path, or ``None`` if none matches.
+
+    The chip index is NEVER hardcoded. ``override`` (from ``YALP_GPIOCHIP``) may be
+    a full device path (``/dev/gpiochip0`` → used verbatim), a bare index (``0`` →
+    ``/dev/gpiochip0``), or a label substring (matched like the default hint). With
+    no override we iterate the available chips and return the first whose kernel
+    label contains ``label_hint`` (``pinctrl-rp1`` — the Pi 5 header controller,
+    which is ``gpiochip0`` on new kernels and ``gpiochip4`` on old ones).
+    """
+    if override:
+        override = override.strip()
+        if override:
+            if override.startswith("/dev/"):
+                return override
+            if override.isdigit():
+                return f"/dev/gpiochip{override}"
+            # Otherwise treat it as a label substring to match below.
+            label_hint = override
+
+    paths = list(chip_paths) if chip_paths is not None else _default_gpiochip_paths()
+    for path in paths:
+        try:
+            chip = gpiod_module.Chip(path)
+        except Exception:  # pragma: no cover - unopenable chip, skip
+            continue
+        try:
+            label = chip.get_info().label
+        except Exception:  # pragma: no cover - defensive
+            label = ""
+        finally:
+            try:
+                chip.close()
+            except Exception:  # pragma: no cover - best effort
+                pass
+        if label_hint in label:
+            return path
+    return None
+
+
+def _gpiod_v2_available() -> bool:
+    """True iff ``python3-libgpiod`` v2 (the request_lines/LineSettings API) imports.
+
+    v1 (libgpiod 0.x/1.x) has a completely different Python API and is NOT usable
+    here, so we require the v2 surface (``request_lines`` + ``LineSettings``) — not
+    merely that *some* ``gpiod`` imports.
+    """
+    try:
+        import gpiod  # noqa: F401
+    except Exception:
+        return False
+    return hasattr(gpiod, "request_lines") and hasattr(gpiod, "LineSettings")
+
+
+class GpiodUltrasonicSensor(_UltrasonicRangeSensorBase):
+    """A real, safety-critical :class:`RangeSensor` on **libgpiod v2** edge events.
+
+    This is the Pi 5 collision-stop driver. Unlike :class:`GpiozeroUltrasonicSensor`
+    (which times the echo pulse in Python and manufactures 2x/4x range inflation on
+    the Pi 5 — see that class), this driver reads the HC-SR04 ECHO line as
+    **kernel-timestamped edge events**: the rising and falling edges of the echo
+    pulse are stamped in the kernel against ``CLOCK_MONOTONIC``, so the pulse width
+    — and hence the range — is measured with no Python-scheduling jitter. A
+    validated field prototype using exactly this method read 100/100 valid pings at
+    15 Hz (median 29.0 cm, stdev 0.24 cm) against a 30 cm target, with ZERO 2x/4x
+    stragglers and a clean timeout path.
+
+    **Timing core (per the validated field notes).** One ``request_lines`` owns
+    BOTH lines: TRIG as an OUTPUT (starting INACTIVE) and ECHO as an INPUT with
+    ``Edge.BOTH`` detection clocked on ``Clock.MONOTONIC``. Each ping:
+
+    1. drains any pending (stale) edge events left over from a previous ping;
+    2. emits a ≥10 µs TRIG pulse (busy-waited — longer is harmless, shorter never);
+    3. waits for edge events within ``echo_timeout_s`` (60 ms default); and
+    4. pairs the FIRST rising edge after the trigger with its falling edge
+       (ignoring any later risings) → ``distance = (t_fall − t_rise) · v / 2``.
+
+    A ping with no rising (or no falling) edge inside the timeout, OR a computed
+    distance beyond ``max_distance_m``, is reported as ``known=False`` — NEVER
+    clamped to a valid reading. A ≥60 ms re-trigger spacing floor is enforced
+    independently of the shared poll-rate cap (reverb settling).
+
+    **Chip selection is not hardcoded.** The Pi 5 header controller is
+    ``pinctrl-rp1`` — ``gpiochip0`` on current kernels, ``gpiochip4`` on older ones
+    — so we detect it by label (:func:`_discover_gpiochip`), with a
+    ``YALP_GPIOCHIP`` override (path / index / label substring).
+
+    **Lazy imports** keep this module laptop-importable; only *instantiating* this
+    class needs ``python3-libgpiod`` v2.
+    """
+
+    #: Trigger pulse width (s). ≥10 µs per the HC-SR04 datasheet; 12 µs gives margin.
+    _TRIGGER_PULSE_S = 12e-6
+
+    def __init__(
+        self,
+        *,
+        trig_pin: int = config.ULTRASONIC_TRIG_PIN,
+        echo_pin: int = config.ULTRASONIC_ECHO_PIN,
+        max_distance_m: float = config.ULTRASONIC_MAX_DISTANCE_M,
+        echo_timeout_s: float = config.ULTRASONIC_ECHO_TIMEOUT_S,
+        max_poll_hz: float = config.ULTRASONIC_MAX_POLL_HZ,
+        speed_of_sound: float = config.SPEED_OF_SOUND_MPS,
+        grace_ms: float = config.ULTRASONIC_GRACE_MS,
+        grace_max_misses: int = config.ULTRASONIC_GRACE_MAX_MISSES,
+        safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
+        chip: str = config.GPIOCHIP,
+        min_retrigger_s: float = 0.060,
+        consumer: str = "yalp-ultrasonic",
+        monotonic: Optional[Callable[[], float]] = None,
+        sleep: Optional[Callable[[float], None]] = None,
+        _gpiod: Optional[Any] = None,
+        _chip_paths: Optional[Iterable[str]] = None,
+    ) -> None:
+        # Shared safety envelope FIRST (rate cap, coast grace, counters, warning).
+        self._init_grace_rate_counters(
+            max_distance_m=max_distance_m,
+            echo_timeout_s=echo_timeout_s,
+            max_poll_hz=max_poll_hz,
+            speed_of_sound=speed_of_sound,
+            grace_ms=grace_ms,
+            grace_max_misses=grace_max_misses,
+            safe_stop_threshold_m=safe_stop_threshold_m,
+            monotonic=monotonic,
+        )
+
+        self._trig_pin = int(trig_pin)
+        self._echo_pin = int(echo_pin)
+        # Independent >=60 ms re-trigger floor (reverb settling). The shared poll
+        # cap covers this at 15 Hz, but we enforce a floor even if the cap is
+        # raised/disabled. Injectable sleep so tests advance a fake clock instead
+        # of really sleeping.
+        self._min_retrigger_s = max(0.0, float(min_retrigger_s))
+        self._sleep: Callable[[float], None] = sleep if sleep is not None else time.sleep
+        self._last_trigger_at: Optional[float] = None
+        self._request: Any = None
+
+        # --- Lazy hardware imports (keep the module laptop-importable) --------
+        gpiod = _gpiod
+        if gpiod is None:
+            try:
+                import gpiod  # type: ignore  # noqa: F401
+            except Exception as exc:  # pragma: no cover - needs a real Pi env
+                raise RuntimeError(
+                    "python3-libgpiod v2 is required for GpiodUltrasonicSensor "
+                    f"but could not be imported ({exc!r}). Install it on the "
+                    f"Raspberry Pi (apt: python3-libgpiod, >= v2) and see "
+                    f"{_PIN_FACTORY_DOCS}."
+                ) from exc
+
+        # gpiod.line is a submodule; it is normally imported by ``import gpiod``,
+        # but resolve it defensively (and support an injected fake module).
+        line = getattr(gpiod, "line", None)
+        if line is None:  # pragma: no cover - defensive for odd builds
+            import importlib
+
+            line = importlib.import_module("gpiod.line")
+
+        # Cache the enum members used on the hot path (avoids attr lookups/ping).
+        self._RISING = gpiod.EdgeEvent.Type.RISING_EDGE
+        self._FALLING = gpiod.EdgeEvent.Type.FALLING_EDGE
+        self._VALUE_ACTIVE = line.Value.ACTIVE
+        self._VALUE_INACTIVE = line.Value.INACTIVE
+
+        # Resolve the header GPIO chip by LABEL (never a hardcoded index).
+        chip_path = _discover_gpiochip(
+            gpiod, override=chip, chip_paths=_chip_paths
+        )
+        if chip_path is None:
+            raise RuntimeError(
+                "no matching GPIO chip found for GpiodUltrasonicSensor: could not "
+                f"locate a controller labelled {_RP1_CHIP_LABEL!r} (the Pi 5 header "
+                "GPIO). Set YALP_GPIOCHIP to a device path, index, or label "
+                f"substring. See {_PIN_FACTORY_DOCS}."
+            )
+
+        # ONE request owns BOTH lines: TRIG output (INACTIVE) + ECHO input with
+        # BOTH-edge detection clocked on CLOCK_MONOTONIC (kernel timestamps).
+        line_config = {
+            self._trig_pin: gpiod.LineSettings(
+                direction=line.Direction.OUTPUT,
+                output_value=line.Value.INACTIVE,
+            ),
+            self._echo_pin: gpiod.LineSettings(
+                direction=line.Direction.INPUT,
+                edge_detection=line.Edge.BOTH,
+                event_clock=line.Clock.MONOTONIC,
+            ),
+        }
+        self._request = gpiod.request_lines(
+            chip_path, consumer=consumer, config=line_config
+        )
+
+    # -- per-ping read -------------------------------------------------------
+    def _sample(self) -> Tuple[float, bool]:
+        """Take ONE kernel-timestamped ping → ``(distance_m, known)``.
+
+        Drains stale edges, enforces the re-trigger floor, pulses TRIG, then pairs
+        the FIRST rising edge with its falling edge inside ``echo_timeout_s``. A
+        missing rising/falling edge or an over-range width yields
+        ``(max_distance_m, False)`` — never a clamped valid reading.
+        """
+        req = self._request
+        if req is None:  # closed / never built
+            return (self._max_distance_m, False)
+
+        self._await_retrigger_floor()
+        self._drain_edges()
+        try:
+            self._pulse_trigger()
+        except Exception:  # pragma: no cover - hardware/IO error path
+            return (self._max_distance_m, False)
+
+        deadline = self._now() + self._echo_timeout_s
+        t_rise_ns: Optional[int] = None
+        while True:
+            remaining = deadline - self._now()
+            if remaining <= 0.0:
+                break  # timeout
+            try:
+                got = req.wait_edge_events(remaining)
+            except Exception:  # pragma: no cover - hardware/IO error path
+                return (self._max_distance_m, False)
+            if not got:
+                break  # timeout: no (further) edges arrived
+            for ev in req.read_edge_events():
+                if getattr(ev, "line_offset", self._echo_pin) != self._echo_pin:
+                    continue  # not our ECHO line
+                if ev.event_type == self._RISING:
+                    if t_rise_ns is None:
+                        t_rise_ns = int(ev.timestamp_ns)
+                    # Ignore any LATER rising edges (pair the FIRST one).
+                elif ev.event_type == self._FALLING:
+                    if t_rise_ns is None:
+                        continue  # falling before any rising -> stale, ignore
+                    dt_s = (int(ev.timestamp_ns) - t_rise_ns) / 1e9
+                    distance_m = (dt_s * self._speed_of_sound) / 2.0
+                    if distance_m > self._max_distance_m:
+                        # Over range: unknown, never clamp to a valid reading.
+                        return (self._max_distance_m, False)
+                    return (distance_m, True)
+        # No rising edge, or a rising with no matching falling within the timeout.
+        return (self._max_distance_m, False)
+
+    def _await_retrigger_floor(self) -> None:
+        """Sleep just enough to honour the >=60 ms re-trigger spacing floor."""
+        if self._min_retrigger_s <= 0.0 or self._last_trigger_at is None:
+            return
+        elapsed = self._now() - self._last_trigger_at
+        wait = self._min_retrigger_s - elapsed
+        if wait > 0.0:
+            self._sleep(wait)
+
+    def _drain_edges(self) -> None:
+        """Discard any pending edge events BEFORE triggering (stale-ping hygiene)."""
+        req = self._request
+        try:
+            while req.wait_edge_events(0):
+                req.read_edge_events()
+        except Exception:  # pragma: no cover - best effort
+            pass
+
+    def _pulse_trigger(self) -> None:
+        """Emit a >=10 µs TRIG pulse (busy-waited) and record the trigger time."""
+        req = self._request
+        req.set_value(self._trig_pin, self._VALUE_ACTIVE)
+        self._busy_wait(self._TRIGGER_PULSE_S)
+        req.set_value(self._trig_pin, self._VALUE_INACTIVE)
+        self._last_trigger_at = self._now()
+
+    @staticmethod
+    def _busy_wait(seconds: float) -> None:
+        """Busy-wait ``seconds`` (a few µs) — too short to sleep() reliably."""
+        end = time.perf_counter() + seconds
+        while time.perf_counter() < end:
+            pass
+
+    def _release(self) -> None:
+        """Release the libgpiod line request (best-effort, idempotent)."""
+        req = getattr(self, "_request", None)
+        if req is not None:
+            try:
+                req.release()
+            except Exception:  # pragma: no cover - best effort during teardown
+                pass
+        self._request = None
+
+
+def make_ultrasonic_sensor(
+    *,
+    backend: Optional[str] = None,
+    **kwargs: Any,
+) -> RangeSensor:
+    """Build the range sensor for the real stack, choosing the safe backend.
+
+    Selection (``backend`` arg wins, else :data:`config.ULTRASONIC_BACKEND`):
+
+    * ``"gpiod"``    — force :class:`GpiodUltrasonicSensor` (raises if it cannot be
+      built);
+    * ``"gpiozero"`` — force :class:`GpiozeroUltrasonicSensor`, emitting the LOUD
+      Pi 5 2x/4x-defect warning (this backend is unsafe as the Pi 5 collision
+      sensor);
+    * ``"auto"`` (default) — PREFER the gpiod driver when python3-libgpiod v2 is
+      importable AND a matching header chip is found; otherwise fall back to
+      gpiozero with the same LOUD warning naming the defect.
+
+    Unknown kwargs are forwarded to the chosen sensor's constructor.
+    """
+    backend = (backend or config.ULTRASONIC_BACKEND or "auto").strip().lower()
+
+    if backend == "gpiozero":
+        _warn_gpiozero_unsafe("YALP_ULTRASONIC_BACKEND=gpiozero forces it")
+        return GpiozeroUltrasonicSensor(**kwargs)
+
+    if backend == "gpiod":
+        # Explicit: let any construction failure propagate (fail loud, no silent
+        # fallback to the unsafe backend).
+        return GpiodUltrasonicSensor(**kwargs)
+
+    if backend != "auto":
+        logger.warning(
+            "unknown YALP_ULTRASONIC_BACKEND=%r; falling back to 'auto' selection.",
+            backend,
+        )
+
+    # auto: prefer gpiod when v2 is importable and a chip is found.
+    if _gpiod_v2_available():
+        try:
+            return GpiodUltrasonicSensor(**kwargs)
+        except Exception as exc:
+            logger.warning(
+                "python3-libgpiod v2 is present but the gpiod ultrasonic driver "
+                "could not be built (%r); falling back to the gpiozero backend.",
+                exc,
+            )
+            _warn_gpiozero_unsafe("gpiod driver unavailable at runtime")
+            return GpiozeroUltrasonicSensor(**kwargs)
+
+    _warn_gpiozero_unsafe("python3-libgpiod v2 is not importable")
+    return GpiozeroUltrasonicSensor(**kwargs)
+
+
+def _warn_gpiozero_unsafe(reason: str) -> None:
+    """Emit the LOUD warning that names the Pi 5 2x/4x gpiozero range defect."""
+    logger.warning(
+        "USING THE gpiozero ULTRASONIC BACKEND (%s). On the Raspberry Pi 5 this "
+        "backend is UNSAFE as the collision-stop sensor: gpiozero's Python-side "
+        "echo timing manufactures EVEN-MULTIPLE (2x/4x) range inflation (proven on "
+        "hardware 2026-07-16 — a 0.30 m target read 1.17 m), so SAFE_STOP fires at "
+        "or AFTER contact. Prefer the libgpiod v2 backend (install python3-libgpiod "
+        ">= v2, or set YALP_ULTRASONIC_BACKEND=gpiod).",
+        reason,
+    )
 
 
 __all__ = [
@@ -888,4 +1369,6 @@ __all__ = [
     "FakeRangeSensor",
     "GpiozeroMotorDriver",
     "GpiozeroUltrasonicSensor",
+    "GpiodUltrasonicSensor",
+    "make_ultrasonic_sensor",
 ]

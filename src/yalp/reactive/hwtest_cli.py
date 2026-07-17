@@ -232,11 +232,14 @@ def _check_ultrasonic(*, dry_run: bool, camera_source: str) -> int:
         _note = "  [DRY RUN — fake sensor]"
     else:
         try:
-            from .hardware import GpiozeroUltrasonicSensor
-            sensor = GpiozeroUltrasonicSensor()
-            _note = "  [REAL GPIO]"
+            # Use the SAME backend selection the real stack uses (prefer the safe
+            # libgpiod v2 driver on the Pi 5; fall back to gpiozero with a loud
+            # 2x/4x-defect warning). Honors YALP_ULTRASONIC_BACKEND.
+            from .hardware import make_ultrasonic_sensor
+            sensor = make_ultrasonic_sensor()
+            _note = f"  [REAL GPIO — {type(sensor).__name__}]"
         except Exception as exc:
-            print(f"  ERROR: could not construct GpiozeroUltrasonicSensor — {exc}")
+            print(f"  ERROR: could not construct the ultrasonic sensor — {exc}")
             return 1
 
     print(_note)

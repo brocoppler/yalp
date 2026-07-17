@@ -84,8 +84,12 @@ class RealReactiveBackend(ReactiveTickCore):
         inject a :class:`~yalp.reactive.hardware.FakeMotorDriver`.
     range_sensor:
         A :class:`~yalp.reactive.hardware.RangeSensor`. ``None`` lazily
-        constructs a real
-        :class:`~yalp.reactive.hardware.GpiozeroUltrasonicSensor`; tests inject a
+        constructs a real sensor via
+        :func:`~yalp.reactive.hardware.make_ultrasonic_sensor`, which PREFERS the
+        libgpiod v2 :class:`~yalp.reactive.hardware.GpiodUltrasonicSensor` on the
+        Pi 5 and falls back to
+        :class:`~yalp.reactive.hardware.GpiozeroUltrasonicSensor` with a loud
+        warning naming the 2x/4x Pi 5 range defect; tests inject a
         :class:`~yalp.reactive.hardware.FakeRangeSensor`.
     camera / camera_source:
         The reactive layer OWNS one :class:`~yalp.camera.Camera` for the run
@@ -165,7 +169,7 @@ class RealReactiveBackend(ReactiveTickCore):
         # gpiozero/lgpio are only touched when we actually have to BUILD a real
         # driver/sensor; an injected fake skips the import entirely.
         if motor_driver is None or range_sensor is None:
-            from .hardware import GpiozeroMotorDriver, GpiozeroUltrasonicSensor
+            from .hardware import GpiozeroMotorDriver, make_ultrasonic_sensor
 
             if motor_driver is None:
                 # Honor the calibration's miswire fixes on the real driver too.
@@ -179,7 +183,11 @@ class RealReactiveBackend(ReactiveTickCore):
                 else:
                     motor_driver = GpiozeroMotorDriver()
             if range_sensor is None:
-                range_sensor = GpiozeroUltrasonicSensor()
+                # Backend selection (Pi 5 collision-stop safety): PREFER the
+                # libgpiod v2 kernel-timestamped driver and fall back to gpiozero
+                # with a LOUD warning naming the 2x/4x Pi 5 range defect. Honors
+                # YALP_ULTRASONIC_BACKEND. Zero operator action on the real stack.
+                range_sensor = make_ultrasonic_sensor()
         self._motor_driver = motor_driver
         self._range_sensor = range_sensor
 

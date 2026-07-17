@@ -422,6 +422,27 @@ MOTOR_STBY_PIN: int | None = (
 ULTRASONIC_TRIG_PIN: int = _env_int("YALP_ULTRASONIC_TRIG_PIN", 5)
 ULTRASONIC_ECHO_PIN: int = _env_int("YALP_ULTRASONIC_ECHO_PIN", 6)
 
+# --- Ultrasonic backend selection (Pi 5 collision-stop safety) --------------
+# Which HC-SR04 driver the real stack builds (see yalp.reactive.hardware):
+#   'auto'     — PREFER the libgpiod v2 kernel-timestamped driver
+#                (GpiodUltrasonicSensor) when python3-libgpiod v2 is importable
+#                AND a matching header GPIO chip is found; otherwise fall back to
+#                the legacy gpiozero driver with a LOUD warning. This is the
+#                default so the real stack self-heals with zero operator action.
+#   'gpiod'    — FORCE the libgpiod v2 driver (errors if it cannot be built).
+#   'gpiozero' — FORCE the legacy gpiozero driver. UNSAFE on the Pi 5: gpiozero's
+#                Python-side echo timing manufactures EVEN-MULTIPLE (2x/4x) range
+#                inflation (proven on hardware 2026-07-16 — a 0.30 m target read
+#                1.17 m), so SAFE_STOP fires at/after contact. Only for A/B
+#                testing or non-Pi boards where the defect does not apply.
+ULTRASONIC_BACKEND: str = _env_str("YALP_ULTRASONIC_BACKEND", "auto")  # auto|gpiod|gpiozero
+# GPIO chip selector for the gpiod backend. Empty ('') => AUTO-DETECT the header
+# GPIO controller by its kernel label ('pinctrl-rp1' on the Pi 5 — gpiochip0 on
+# current kernels, gpiochip4 on older ones), so the chip index is never
+# hardcoded. May instead be a full device path ('/dev/gpiochip0'), a bare index
+# ('0'), or a label substring to match.
+GPIOCHIP: str = _env_str("YALP_GPIOCHIP", "")
+
 # Motor driver kind: 'drv8833' (default, nSLEEP tied HIGH) or 'tb6612fng' (STBY used).
 MOTOR_DRIVER_KIND: str = _env_str("YALP_MOTOR_DRIVER", "drv8833")
 
@@ -551,6 +572,8 @@ class Config:
     motor_stby_pin: int | None = MOTOR_STBY_PIN
     ultrasonic_trig_pin: int = ULTRASONIC_TRIG_PIN
     ultrasonic_echo_pin: int = ULTRASONIC_ECHO_PIN
+    ultrasonic_backend: str = ULTRASONIC_BACKEND
+    gpiochip: str = GPIOCHIP
     motor_driver_kind: str = MOTOR_DRIVER_KIND
     motor_pwm_frequency_hz: int = MOTOR_PWM_FREQUENCY_HZ
     ultrasonic_max_poll_hz: float = ULTRASONIC_MAX_POLL_HZ
@@ -648,6 +671,8 @@ __all__ = [
     "MOTOR_STBY_PIN",
     "ULTRASONIC_TRIG_PIN",
     "ULTRASONIC_ECHO_PIN",
+    "ULTRASONIC_BACKEND",
+    "GPIOCHIP",
     "MOTOR_DRIVER_KIND",
     "MOTOR_PWM_FREQUENCY_HZ",
     "ULTRASONIC_MAX_POLL_HZ",
