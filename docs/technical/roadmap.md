@@ -23,15 +23,15 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 > **Phase 1 (the brain) is COMPLETE and laptop-tested — 597+ tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
-> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **11 of 16
-> rungs are green (0, A, B, C, D, E + Pi-hardware rungs F, G, H, I, and J)** plus voice
+> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **12 of 16
+> rungs are green (0, A, B, C, D, E + Pi-hardware rungs F, G, H, I, J, and first floor drive)** plus voice
 > OUTPUT *and* INPUT (milestone O is now functionally done on the laptop); the remaining
 > hardware rungs (K–N) are **gated on the Pi 5 + Phase 2**. **Phase 2 / Wave 3
 > hardware bring-up is UNDERWAY on the real robot — see the next note.** The full §3 status
 > and the §1 ladder have the detail; this is the skim.
 
 > **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, ultrasonic,
-> drivetrain, Hello Motors, and now collision-stop reflex (J) are ALL DONE on real hardware; milestones H and J both PASSED 2026-07-15.**
+> drivetrain, Hello Motors, collision-stop reflex (J), and now first floor drive are ALL DONE on real hardware; milestones H and J PASSED 2026-07-15; first floor drive PASSED 2026-07-17.**
 > The physical robot — named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with
 > Raspberry Pi OS Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp
 > installed from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
@@ -49,7 +49,7 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 > **milestone H (Hello Motors) PASSED 2026-07-15** on the replacement Pi 5 after a PMIC
 > hardware failure required a board swap — both drive wheels rolling forward together and
 > in-place LEFT/RIGHT turns confirmed, driven through `GpiozeroMotorDriver` and the saved
-> motor calibration (`left_invert=True`, `right_invert=True`). And now **milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP latched at 0.2815 m (< 0.30 m threshold) within ~50 ms; goal 'blocked'; latch persisted 76/76 polls; no reverse; grace fix (commit de48495) verified 18/18 at 15 Hz. **NEXT: first floor drive (off the stand, full reactive stack, collision-stop live) → combined-load gate (K) → follow on hardware (M); then `yalp see` / person-following / voice input.**
+> motor calibration (`left_invert=True`, `right_invert=True`). And now **milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP latched at 0.2815 m (< 0.30 m threshold) within ~50 ms; goal 'blocked'; latch persisted 76/76 polls; no reverse; grace fix (commit de48495) verified 18/18 at 15 Hz. **First floor drive ✅ PASSED 2026-07-17. NEXT: `yalp see` (vision Q&A on hardware) → person-following → voice input; combined-load gate (K) → follow on hardware (M) run in parallel.**
 
 **DONE — the laptop phase (run any of these today):**
 
@@ -98,13 +98,13 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 11 of 16 green — the entire laptop phase, all four Pi-hardware bring-up
-> rungs (F, G, H, I), milestone J (collision-stop), and milestone O are DONE.** Steps **0, A, B, C, D, E** are green
+> **Progress: 12 of 16 green — the entire laptop phase, all four Pi-hardware bring-up
+> rungs (F, G, H, I), milestone J (collision-stop), first floor drive, and milestone O are DONE.** Steps **0, A, B, C, D, E** are green
 > (plus voice OUTPUT **and** INPUT and the full follow brain — the whole voice → follow →
 > voice-stop loop works end to end), all laptop-tested (**597+ tests passing**); and on the
 > **real Pi 5 ("Izzy")** — **GPIO first light (G)**, **HC-SR04 divider (I)**, **Gate E
-> power/brownout (F)**, **Hello Motors (H, PASSED 2026-07-15)**, and now **collision-stop reflex (J, PASSED 2026-07-15)** are all green, with
-> **B (camera)** and **C (vision)** re-confirmed on Izzy. **Next target: first floor drive (off the stand, full reactive stack, collision-stop live) → combined-load gate (K) → follow on hardware (M).** Update this line as each
+> power/brownout (F)**, **Hello Motors (H, PASSED 2026-07-15)**, **collision-stop reflex (J, PASSED 2026-07-15)**, and now **first floor drive (PASSED 2026-07-17)** are all green, with
+> **B (camera)** and **C (vision)** re-confirmed on Izzy. **Next target: `yalp see` (vision Q&A on hardware) → person-following → voice input; combined-load gate (K) → follow on hardware (M).** Update this line as each
 > done-signal goes green.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
@@ -120,6 +120,7 @@ the Phase 1 hardware already in hand.
 | **H** ✅ DONE *(Pi, 2026-07-15)* | **Hello motors** | **PASSED 2026-07-15** on the replacement Pi 5 ("Izzy"). Both drive wheels confirmed rolling forward together; in-place LEFT and RIGHT turns confirmed (wheels counter-rotating via differential steering). Driven through yalp's own `GpiozeroMotorDriver` and the saved motor calibration. **Blocked path to sign-off (fully resolved):** in order — (1) failed SD card; (2) DRV8833 driver decay-mode bug (found and fixed in code, commit 9c43242 — the idle/opposite channel now stays truly still and `stop()` coasts; the pre-fix code spun an "idle" channel at full reverse); (3) "train" chassis (one motor per axle, rebuilt to one motor per side); (4) Raspberry Pi PMIC hardware failure requiring a board replacement. **Motor calibration as-built:** both wheels were wired with reversed polarity relative to the driver's forward convention (a symmetric consequence of mirror-mounting the two motors), corrected in software with `left_invert=True` and `right_invert=True`, persisted to `~/.config/yalp/calibration.json` on the Pi (machine-local, not committed). No re-soldering needed. | Pi 5 + Phase 2 + F + G | |
 | **I** ✅ DONE *(Pi)* | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. **Green on Izzy:** wired with an as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider (kit had no 2 kΩ; pins/software unchanged); `yalp hwtest --check ultrasonic` returns real distances (~22/25 good reads tracking a hand). Full as-built wiring: `as-built-wiring.md`. | Pi 5 + HC-SR04 + resistors | |
 | **J** ✅ DONE *(Pi, 2026-07-15)* | **Safety reflex** (collision-stop) | **PASSED 2026-07-15** on the Pi 5 ("Izzy"), wheels-up on a stand. `DRIVE_GOAL {"kind":"straight","target":10,"speed":0.3}` through `RealReactiveBackend` (20 Hz tick, 15 Hz ultrasonic cap, stock config); motors drove at +0.3/+0.3 for ~10 s; an approaching hand produced a cleanly decreasing valid distance series. SAFE_STOP latched on a valid echo of 0.2815 m (< `SAFE_STOP_THRESHOLD_M` 0.30 m), reason 'obstacle'; motors zeroed within one 20 Hz tick (~50 ms); goal status 'blocked' with `{'reason':'obstacle','distance':0.2815}`. Zero reverse motor commands in the full run. Latch persisted 76/76 polls over 15 s after obstacle removed — only a fresh adopted intent lifts it; clean SIGINT shutdown, motors idle. Separately verified same day: phantom-stop grace fix (commit de48495, bounded coast-last-known grace) confirmed on hardware — 18/18 induced open-room echo timeouts coasted with zero phantom stops at 15 Hz stock config. *(The served trip distance 0.2815 m was later found inflated ~2× by a Pi 5 gpiozero timing artifact — true hand distance at trip ~0.14 m — corrected by the `GpiodUltrasonicSensor` driver now auto-selected on Pi 5; the reflex logic and latch behavior are fully validated.)* | Pi 5 + Phase 2 | |
+| **First floor drive** ✅ DONE *(Pi, 2026-07-17)* | **First floor drive** (off the stand, full reactive stack, collision-stop live) | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). Commanded forward drives on hardwood executed and frame-verified: three moving laps, ~2 m total true displacement, via the new `yalp drive` CLI through `RealReactiveBackend`, stock config, gpiod kernel-timestamped ultrasonic backend. Sonar tracked TRUE range throughout: monotone-decreasing wall tracks (e.g. 1.94 → 1.08 m at physical closing speed); ~5,000 reads across the session, 100% valid, zero raw misses. The reflex earned the rung: SAFE_STOP latched at served 0.30 m, reason 'obstacle', motors zeroed within one poll tick, exit 0; immediate retry REFUSED by the pre-flight gate (genuine obstacle latched); zero reverse commands in any timeline; post-lap frame shows ~a foot of physical clearance to the wall. Bonus live save: with the operator standing in the lane at 0.28 m, the drive CLI refused to start (no intent sent, exit 2) — twice. Known minor defects filed for the backlog (not blockers): open-loop timed distance over-reports ~1.8× vs actual travel (encoders or speed recalibration needed); slight leftward veer under way (motor trim); goal timer can expire before reflex trips on long approaches (same calibration fix); benign ~0.6 m floor-graze mode until sensor is shimmed up 1–2 degrees. | Pi 5 + Phase 2 + J | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
 | **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. **→ DETECTOR-FPS CRITERION MEASURED GO (2026-07-01, real Pi 5 + C270, no motors):** `person` (MobileNet-SSD) ~26.6 Hz sustained (p99 25.5 Hz), `hog` ~55 Hz — vs the 3 Hz floor (~8.8× and ~18× margin). See [pi-validation-2026-07.md](./pi-validation-2026-07.md) §5. **Caveat:** this is the detector-fps criterion only; the motor-loaded flavor of Gate H (sustained fps under reactive loop + camera + motor-PWM stress) remains open until motors are wired. **Thermal note:** sustained detection drives the Pi to 80–83 °C with soft throttling (`0xe0000`/`0xe0008`); fps stays well above the gate but active cooling is recommended for prolonged FOLLOW. **Gate K fake-backend ceiling (§6 of validation doc):** tick p99 18.63 ms vs 33 ms budget — PASS as a fake-driver ceiling, NOT the real Gate K (real Gate K needs `--backend real` with live motor writes). | Pi 5 + Phase 2 | |
 | **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): the laptop-proven track-by-detection pipeline runs on the Pi — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): swap in the blob/color `Detector` behind the same pluggable interface — robot follows a colored target, collision-stop underneath, own bench demo. The follow *logic/steering* is already proven; only the Pi's detector fps is the open question Gate H answers. A NO-GO is a *different detector, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
@@ -266,14 +267,14 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
 > (597+ tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
-> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **11 of 16 rungs green** — the entire
+> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **12 of 16 rungs green** — the entire
 > laptop phase (**0, A, B, C, D, E**), all four Pi bring-up rungs (**F** Gate E, **G** GPIO
-> first light, **H** Hello Motors, **I** HC-SR04 divider) and now **J** (collision-stop reflex), with **B (camera)** and
+> first light, **H** Hello Motors, **I** HC-SR04 divider), **J** (collision-stop reflex), and now **first floor drive** (PASSED 2026-07-17), with **B (camera)** and
 > **C (vision)** re-confirmed on Izzy itself — plus voice OUTPUT *and* INPUT and the full
 > follow brain, so the whole **voice → follow → voice-stop loop works end to end** (milestone
 > O is functionally done on the laptop). **Milestone H (Hello Motors) PASSED 2026-07-15** on
 > the replacement Pi 5 — both drive wheels forward, in-place LEFT/RIGHT turns, driven through
-> `GpiozeroMotorDriver` and saved motor calibration. **Milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP at 0.2815 m (< 0.30 m threshold, ~50 ms halt), goal status 'blocked', sticky latch (76/76 polls), no reverse; grace fix (commit de48495) verified 18/18. **The next target is first floor drive (off the stand, full reactive stack, collision-stop live) → combined-load gate (K) → follow on hardware (M). Laptop brain covers all
+> `GpiozeroMotorDriver` and saved motor calibration. **Milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP at 0.2815 m (< 0.30 m threshold, ~50 ms halt), goal status 'blocked', sticky latch (76/76 polls), no reverse; grace fix (commit de48495) verified 18/18. **First floor drive PASSED 2026-07-17** — three moving laps on hardwood, ~2 m true displacement, sonar TRUE throughout, SAFE_STOP at 0.30 m, zero reverse, pre-flight gate refused retry. **Next targets: `yalp see` (vision Q&A on hardware) → person-following → voice input; combined-load gate (K) → follow on hardware (M). Laptop brain covers all
 > three headline behaviors:**
 > **see** (`yalp see` — webcam still → Claude → spoken-style description,
 > `--speak`/`--image`/free-text), **agent** (`yalp agent` — full deliberative loop D1–D3
@@ -316,16 +317,15 @@ number means you swap the detector — not redesign the follow loop. See `softwa
    and reading real distances (as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider — see
    `as-built-wiring.md`).
 
-**NEXT TARGET — first floor drive (off the stand, full reactive stack, collision-stop live)** (follow `hardware-runbook.md`): collision-stop reflex (**J** ✅ DONE 2026-07-15) is green — `RealReactiveBackend` bench-proven; what's next is the first drive on the actual floor:
+**DONE ✅ — first floor drive (off the stand, full reactive stack, collision-stop live) PASSED 2026-07-17** — three moving laps on hardwood (~2 m true displacement), sonar TRUE throughout, SAFE_STOP live at 0.30 m, pre-flight gate refused retry, zero reverse. See the §1 ladder rung for full pass record.
 
-1. **First floor drive (off the stand):** take Izzy off the bench stand and run the full reactive stack (`RealReactiveBackend`, collision-stop live) on the actual floor — confirming the system on the real body with full freedom of movement.
-2. **Then combined-load gate (K):** reactive-tick p99 latency < 33 ms with tracker +
-   detector + capture + motor writes all live simultaneously.
-3. **Then follow on hardware (M):** the laptop-proven track-by-detection pipeline drives Izzy
-   in a bench loop — the motor-loaded flavor of Gate H (fps under reactive loop + motor-PWM
-   stress) is confirmed as part of this.
+**NEXT TARGET — `yalp see` (vision Q&A on hardware), then person-following, then voice input:**
+
+1. **`yalp see` on hardware:** confirm `yalp see` (vision Q&A — webcam still → Claude → description) runs cleanly on Izzy end-to-end, including the `--speak` path.
+2. **Then person-following on hardware (M):** the laptop-proven track-by-detection pipeline drives Izzy in a bench loop — Gate K (combined-load latency) confirmed as part of this.
+3. **Then voice input on hardware (O / Pi):** push-to-talk STT (`yalp agent --listen`) on the Pi with mic attached.
 4. **`RealReactiveBackend`** (already fully implemented — tick loop, collision-stop,
-   motor paths, `MotorWatchdog`) is bench-proven (milestone J). No backend code remains to write.
+   motor paths, `MotorWatchdog`) is floor-proven (first floor drive). No backend code remains to write.
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
