@@ -22,6 +22,14 @@ The contract ordering (software-spec.md §2.3), implemented once in :meth:`tick`
   2. **Safety override FIRST** — collision-stop beats everything. Halt the motors,
      latch a **sticky** ``SAFE_STOP`` / ``BLOCKED``, and **do NOT drain the
      mailbox** while blocked (a pending intent cannot override a live safety stop).
+     ``goal["reason"]`` distinguishes THREE blind/blocked causes so a client need
+     not guess: ``obstacle`` (a KNOWN reading inside the stop threshold);
+     ``echo_timeout`` (an UNKNOWN reading *after* the sensor has ever produced a
+     valid read — she went blind mid-run, a sensor dropout); and ``startup_blind``
+     (an UNKNOWN reading *before any* valid read has EVER landed — a cold-boot
+     blind latch, so it is safe to send an intent). The distinction is a goal-dict
+     string only: additive and wire-compatible — the ``RobotState`` schema is
+     unchanged.
   3. **Drain the single-slot mailbox** and adopt the newest intent (preempts the
      current mode; reaching here means the obstacle is clear, so adopting is also
      what lifts a sticky ``SAFE_STOP``). A mode-changing intent that replaces an
@@ -97,7 +105,21 @@ class ReactiveTickCore(ReactiveBackend):
     perception worker (``_perception``) and its reactive-tick confirmation clock
     (``_ticks_since_confirmation`` / ``_seen_confirmations``) are created lazily by
     :meth:`_ensure_perception` on the first FOLLOW tick.
+
+    :attr:`_ever_valid` (a core-level ``bool``, class-default ``False``, also set
+    explicitly in each subclass ``__init__``) latches ``True`` the first time a
+    range read reports ``distance_known=True`` — the ONE piece of state that tells
+    a cold-boot blind latch (``startup_blind``) apart from a mid-run sensor dropout
+    (``echo_timeout``) in :meth:`tick`. It reads the ``known`` flag off
+    :meth:`read_range` directly, NOT :meth:`read_range_stats` (which is ``None`` on
+    some backends).
     """
+
+    #: Has any range read EVER reported a valid (``known=True``) distance? Latched
+    #: ``True`` in step 1 of :meth:`tick`; drives the ``startup_blind`` vs
+    #: ``echo_timeout`` goal reason in step 2. Class-level default so the safety
+    #: tick never ``AttributeError``s even for a subclass that forgets to init it.
+    _ever_valid: bool = False
 
     # -- backend-specific hooks ---------------------------------------------
     @abstractmethod
@@ -308,6 +330,13 @@ class ReactiveTickCore(ReactiveBackend):
             distance_m, known = self.read_range()
             s.distance_m = distance_m
             s.distance_known = known
+            if known:
+                # Latch that the sensor has produced at least one valid reading
+                # this session, so a later blind latch can be told apart from a
+                # never-yet-sighted cold boot (echo_timeout vs startup_blind in
+                # step 2). Read off the ``known`` flag directly — NOT
+                # read_range_stats(), which is None on some backends.
+                self._ever_valid = True
             s.obstacle = (not s.distance_known) or (
                 s.distance_m < self.safe_stop_threshold_m
             )
@@ -332,8 +361,19 @@ class ReactiveTickCore(ReactiveBackend):
                 self._halt_motors()
                 s.mode = Mode.SAFE_STOP
                 s.goal_status = GoalStatus.BLOCKED
+                # A KNOWN close reading is an ``obstacle``. An UNKNOWN reading is a
+                # blind latch — distinguish a cold-boot blindness we have never
+                # sighted past (``startup_blind``, safe to send an intent) from a
+                # mid-run sensor dropout (``echo_timeout``, she went blind). This is
+                # a goal-dict string only: additive/wire-compatible (§2.3).
+                if s.distance_known:
+                    reason = "obstacle"
+                elif self._ever_valid:
+                    reason = "echo_timeout"
+                else:
+                    reason = "startup_blind"
                 s.goal = {
-                    "reason": "obstacle" if s.distance_known else "echo_timeout",
+                    "reason": reason,
                     "distance": s.distance_m,
                 }
                 return self._finish()

@@ -283,9 +283,25 @@ def test_fake_backend_collision_latches_safe_stop():
     assert st.mode == Mode.FOLLOW
 
 
-def test_fake_backend_unknown_echo_biases_to_stop():
+def test_fake_backend_unknown_echo_at_boot_biases_to_startup_blind():
+    # COLD BOOT: the very first read is unknown, so no valid read has EVER landed
+    # -> the blind latch is startup_blind (safe to send an intent), not a mid-run
+    # echo_timeout.
     backend = FakeReactiveBackend()
     backend.set_sensor(distance_m=10.0, known=False)  # echo timeout -> unknown
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal["reason"] == "startup_blind"
+
+
+def test_fake_backend_unknown_echo_after_valid_read_biases_to_echo_timeout():
+    # A valid read FIRST, THEN an unknown -> a mid-run sensor dropout, so the blind
+    # latch stays echo_timeout (never decayed to "clear").
+    backend = FakeReactiveBackend()
+    backend.set_sensor(distance_m=4.0, known=True)     # a valid clear read first
+    assert backend.tick().mode != Mode.SAFE_STOP
+
+    backend.set_sensor(distance_m=10.0, known=False)   # now blind mid-run
     st = backend.tick()
     assert st.mode == Mode.SAFE_STOP
     assert st.goal["reason"] == "echo_timeout"

@@ -216,6 +216,9 @@ class RealReactiveBackend(ReactiveTickCore):
         self._frame_id = 0
         self._lock = threading.Lock()
         self._closed = False
+        # Has any range read EVER reported a valid distance? (See ReactiveTickCore:
+        # drives startup_blind vs echo_timeout on a blind safety latch.)
+        self._ever_valid = False
 
     # -- shared-core hooks: real range read + real motor commands ------------
     def read_range(self) -> Tuple[float, bool]:

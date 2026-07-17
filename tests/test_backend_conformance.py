@@ -182,23 +182,70 @@ def test_sticky_release_adopts_pending_intent_once_cleared(factory):
 
 
 # --------------------------------------------------------------------------- #
-# (5) Unknown echo (known=False) -> SAFE_STOP with reason echo_timeout
+# (5) Unknown echo (known=False) -> SAFE_STOP. The blind-latch reason is the same
+#     on BOTH backends: startup_blind before any valid read has ever landed (cold
+#     boot), echo_timeout after one has (a mid-run dropout).
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("factory", _FACTORIES)
-def test_unknown_echo_biases_to_safe_stop(factory):
+def test_unknown_echo_at_boot_biases_to_startup_blind(factory):
+    # (a) COLD BOOT: the very first read is unknown -> no valid read has EVER
+    # landed -> startup_blind (safe to send an intent), identically on both.
     h = factory()
     backend = h.backend
-    h.set_obstacle(10.0, known=False)  # echo timeout -> unknown
+    h.set_obstacle(10.0, known=False)  # echo timeout -> unknown, before any tick
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal_status == GoalStatus.BLOCKED
+    assert st.distance_known is False
+    assert st.goal["reason"] == "startup_blind"
+
+    # Real-backend-only: an unknown reading also stops the motors.
+    if h.motor is not None:
+        assert h.motor.stop_count >= 1
+        assert h.motor.last == (0.0, 0.0)
+
+
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_unknown_echo_after_valid_read_biases_to_echo_timeout(factory):
+    # (b) A valid read FIRST, THEN an unknown -> a mid-run sensor dropout ->
+    # echo_timeout (not startup_blind), identically on both backends.
+    h = factory()
+    backend = h.backend
+    h.set_obstacle(4.0, known=True)               # a valid clear read first
+    assert backend.tick().mode != Mode.SAFE_STOP  # sighted the world: not blocked
+
+    h.set_obstacle(10.0, known=False)             # now goes blind mid-run
     st = backend.tick()
     assert st.mode == Mode.SAFE_STOP
     assert st.goal_status == GoalStatus.BLOCKED
     assert st.distance_known is False
     assert st.goal["reason"] == "echo_timeout"
 
-    # Real-backend-only: an unknown reading also stops the motors.
     if h.motor is not None:
         assert h.motor.stop_count >= 1
         assert h.motor.last == (0.0, 0.0)
+
+
+@pytest.mark.parametrize("factory", _FACTORIES)
+def test_startup_blind_latch_lifts_on_intent_adoption(factory):
+    # (c) The startup_blind latch is sticky and lifts on intent adoption EXACTLY
+    # like an obstacle latch (mirrors test_sticky_release_adopts_pending_intent_
+    # once_cleared), identically on both backends.
+    h = factory()
+    backend = h.backend
+    h.set_obstacle(10.0, known=False)  # cold-boot blind: first read is unknown
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal["reason"] == "startup_blind"
+
+    # A fresh intent arrives while still blind (queued, not adopted).
+    backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=2))
+    assert backend.tick().mode == Mode.SAFE_STOP
+
+    # A valid reading arrives -> the (still-pending) fresh intent is adopted.
+    h.set_obstacle(4.0, known=True)
+    st = backend.tick()
+    assert st.mode == Mode.FOLLOW
 
 
 # --------------------------------------------------------------------------- #

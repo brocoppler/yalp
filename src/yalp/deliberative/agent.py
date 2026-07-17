@@ -618,6 +618,17 @@ def _state_summary(state: Optional[RobotState], intent: Optional[Intent] = None)
         reason = (state.goal or {}).get("reason", "obstacle")
         dist = ("unknown distance" if not state.distance_known
                 else f"~{state.distance_m:.2f} m ahead")
+        if reason == "startup_blind":
+            # The BENIGN blind case: the range sensor has not returned a single
+            # valid reading since boot (a cold-boot blind latch, not a mid-run
+            # dropout). The robot never moved, so there is nothing to reverse away
+            # from — it is safe to send a drive/follow intent, which lifts the
+            # latch as soon as a valid reading lands.
+            return (f"BLOCKED (startup_blind, {dist}) — the range sensor has not "
+                    "returned a valid reading since boot; the robot HALTED and "
+                    "has not moved. This is the benign cold-boot case: send a "
+                    "drive or follow intent (the latch lifts once a valid reading "
+                    "lands); do not assume a physical obstacle.")
         return (f"BLOCKED ({reason}, {dist}) — the robot HALTED and did not "
                 "reverse. Turn to a clear heading or stop; do not drive backward.")
     if intent is not None and intent.mode == Mode.IDLE:

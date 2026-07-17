@@ -124,6 +124,9 @@ class FakeReactiveBackend(ReactiveTickCore):
         self._goal_duration_s = 0.0
         self._frame_id = 0
         self._lock = threading.Lock()
+        # Has any range read EVER reported a valid distance? (See ReactiveTickCore:
+        # drives startup_blind vs echo_timeout on a blind safety latch.)
+        self._ever_valid = False
 
         # Simulated ultrasonic reading (clear by default).
         self._sensor_distance_m = 10.0

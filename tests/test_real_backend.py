@@ -16,8 +16,9 @@ Covered (mirrors the contract the fake is held to, software-spec.md §2.3):
         the pending mailbox intent is NOT drained while blocked;
   (iii) SAFE_STOP is sticky: a fresh intent while blocked does not resume; once
         the obstacle clears the pending intent is adopted and it resumes;
-  (iv)  an UNKNOWN (echo-timeout) reading biases to SAFE_STOP with reason
-        ``echo_timeout`` (never decayed to "clear");
+  (iv)  an UNKNOWN reading biases to SAFE_STOP (never decayed to "clear"), with
+        reason ``startup_blind`` before any valid read has ever landed (a cold-boot
+        blind latch) or ``echo_timeout`` after one has (a mid-run sensor dropout);
   (v)   a commanded speed above ``speed_limit`` is clamped before it reaches PWM.
 
 Plus: import/construction stay hardware-free, rotate spins the wheels in place,
@@ -267,12 +268,34 @@ def test_safe_stop_stays_latched_without_a_fresh_intent():
 
 
 # --------------------------------------------------------------------------- #
-# (iv) Unknown (echo-timeout) reading -> SAFE_STOP with reason echo_timeout
+# (iv) Unknown reading -> SAFE_STOP; reason distinguishes a cold-boot blind latch
+#      (startup_blind, never a valid read) from a mid-run dropout (echo_timeout).
 # --------------------------------------------------------------------------- #
-def test_echo_timeout_biases_to_safe_stop():
+def test_startup_blind_biases_to_safe_stop():
+    # (a) COLD BOOT: the very first read is a timeout -> no valid read has EVER
+    # landed, so the blind latch is startup_blind (safe to send an intent), not a
+    # mid-run echo_timeout. FakeRangeSensor defaults known=True at construction,
+    # but .timeout() flips it BEFORE the first tick reads it, so the first read is
+    # unknown.
     backend, motor, sensor = _make_backend()
-    # distance is nominally "clear" (4.0 m) but the echo is UNKNOWN -> STOP.
     sensor.timeout()
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal_status == GoalStatus.BLOCKED
+    assert st.distance_known is False
+    assert st.goal["reason"] == "startup_blind"
+    assert motor.stop_count >= 1
+    assert motor.last == (0.0, 0.0)
+
+
+def test_echo_timeout_after_valid_read_biases_to_safe_stop():
+    # (b) A valid read FIRST (she has sighted the world), THEN a timeout storm ->
+    # a mid-run sensor dropout -> reason echo_timeout, NOT startup_blind.
+    backend, motor, sensor = _make_backend()
+    sensor.set_distance(4.0, known=True)
+    assert backend.tick().mode != Mode.SAFE_STOP  # a valid clear read: not blocked
+
+    sensor.timeout()  # now she goes blind mid-run
     st = backend.tick()
     assert st.mode == Mode.SAFE_STOP
     assert st.goal_status == GoalStatus.BLOCKED
@@ -280,6 +303,26 @@ def test_echo_timeout_biases_to_safe_stop():
     assert st.goal["reason"] == "echo_timeout"
     assert motor.stop_count >= 1
     assert motor.last == (0.0, 0.0)
+
+
+def test_startup_blind_latch_lifts_on_intent_adoption():
+    # (c) The startup_blind latch is sticky and lifts on intent adoption EXACTLY
+    # like an obstacle/echo_timeout latch (mirrors
+    # test_safe_stop_is_sticky_until_cleared_then_resumes).
+    backend, motor, sensor = _make_backend(tracker=_FakeTracker())
+    sensor.timeout()  # cold-boot blind: first read is a timeout
+    st = backend.tick()
+    assert st.mode == Mode.SAFE_STOP
+    assert st.goal["reason"] == "startup_blind"
+
+    # A fresh intent arriving WHILE still blind does not resume (stays latched).
+    backend.apply_intent(Intent(Mode.FOLLOW, {"target": "nearest_person"}, seq=2))
+    assert backend.tick().mode == Mode.SAFE_STOP
+
+    # A valid reading arrives -> the (still-pending) fresh intent is adopted.
+    sensor.set_distance(4.0, known=True)
+    st = backend.tick()
+    assert st.mode == Mode.FOLLOW
 
 
 # --------------------------------------------------------------------------- #
