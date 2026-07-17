@@ -164,7 +164,7 @@ Default flags: `--target 1.6` (m), `--speed 0.3`. The command:
    timeline row each poll (elapsed, distance, mode, status, progress/reason).
 4. **Expect:** decreasing distance track from quilt door, `SAFE_STOP` at a
    true ≤ 0.30 m, reason `"obstacle"`, stop verdict printed, **exit 0**.
-   On timeout (60 s default): sends IDLE halt, exit 1.
+   On timeout (45 s default): sends IDLE halt, exit 1.
    Ctrl-C: IDLE halt, exit 130.
 
 **Note on `startup_blind`:** if the reactive process just booted and the first
