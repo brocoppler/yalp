@@ -1,10 +1,11 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-07-16, end of evening session.
-**One-line status:** Victory lap correctly ABORTED — sonar boresight measured
-~35-45° LEFT of camera/wheel axis, battery sag killed left-FORWARD and degraded
-right-REVERSE by session end, safety geometry was inverted. Charge the pack,
-fix the sonar bracket ~40° CW, verify with live data, then drive.
+**Last updated:** 2026-07-16, late evening (updated after root-cause closure).
+**One-line status:** Root cause of two-day ultrasonic saga confirmed and fixed in
+code — gpiozero Python-side timing on Pi 5 manufactures 2x/4x range inflation;
+`GpiodUltrasonicSensor` now auto-selected. Battery sag still blocks motor work —
+pull latest onto izzy, charge/swap the pack, validate the door reading, then run
+the victory lap.
 
 ---
 
@@ -19,20 +20,23 @@ fix the sonar bracket ~40° CW, verify with live data, then drive.
   because the sonar never saw the door (reason: it was pointing at the wrong
   wall — see below).
 
-- **Sonar boresight refined: ~35-45° LEFT of camera/wheel axis (not the
-  earlier 90-140° CCW estimate).** Evening pivot-sweep triangulation pinned
-  this more tightly. Falsification test: hanging a quilt on the door changed
-  the door's acoustics but the dominant 174.4 cm reading did not move a
-  millimeter — the beam was never on the door. Photos alone repeatedly failed
-  to reveal this; only live-data tests did. Full field findings (including the
-  visual cross-reference method) are in `hardware.md` 2026-07-16 subsection.
+- **ROOT CAUSE IDENTIFIED AND FIXED: gpiozero Python-side echo timing on Pi 5
+  manufactures 2x/4x range inflation.** Simultaneous capture proved it:
+  `libgpiod` v2 kernel-timestamped edges read 29.0–29.6 cm on a 30 cm box;
+  gpiozero read 116–118 cm on the same scene. The earlier "sonar boresight
+  ~35-45° left" finding was this artifact — the pivot-sweep "left wall track"
+  was 2× a shoe/kettlebell cluster dead ahead; the quilt/towel falsification
+  test re-reads as the door at 2.08× true range. The HC-SR04 module and
+  bracket are aimed correctly. **The `GpiodUltrasonicSensor` driver is now
+  auto-selected on Pi 5 when `python3-libgpiod` v2 is present.** Full closure
+  notes in `hardware.md` 2026-07-16 late-evening subsection.
 
 - **Victory lap correctly ABORTED (2026-07-16 evening):** autonomous attempt
   (drive at the quilt-covered door, expect `SAFE_STOP` at 0.30 m) was
-  aborted before any drive — no sonar lock on the target, inverted safety
-  geometry (distance threshold was unreachable given beam angle), and a
-  failing drive channel. No contact; izzy parked clean ~1.2-1.4 m
-  square-facing the door.
+  aborted before any drive — battery sag had killed left-FORWARD, and with the
+  gpiozero defect still in place the safety geometry was untrustworthy. No
+  contact; izzy parked clean ~1.2-1.4 m square-facing the door. The code fix
+  is now in; the battery and the pull are the remaining blockers.
 
 - **Actuation degradation at session end (prime suspect: battery sag after a
   full day):** left-motor-FORWARD dead, right-motor-REVERSE marginal-to-dead
@@ -52,28 +56,29 @@ fix the sonar bracket ~40° CW, verify with live data, then drive.
   otherwise). Black woven-fabric storage cube is an ultrasound ABSORBER
   (invisible to sonar at any aim) — keep it out of drive lanes.
 
-- **Code landed this session — 2 commits ahead of `origin/main`, not yet
-  merged:**
-  - `b1e1f34` — SIGINT shutdown fix: the real-stack previously survived
-    SIGINT during timeout storms (needed SIGTERM); motors now zeroed first in
-    teardown, bounded joins, regression tests added.
-  - `fde1587` — Ultrasonic observability counters: state/telemetry now carry
-    `total_reads / valid / raw_misses / coasted / unknown_served`. Eliminates
-    the lower-bound-only field analysis problem.
-  - Earlier (already on main): `YALP_ULTRASONIC_MAX_POLL_HZ` env knob and
-    inert-grace construction warning.
-  - **izzy is at `0ce8a26` (main).** Pull needed after these commits merge:
+- **Code on laptop (pull required on izzy):**
+  - `992e3f0` — **`GpiodUltrasonicSensor` driver** (libgpiod v2, kernel-
+    timestamped): auto-selected by `make_ultrasonic_sensor()` when
+    `python3-libgpiod` v2 is importable. Fixes the gpiozero 2x/4x
+    range-inflation safety defect. Force with `YALP_ULTRASONIC_BACKEND=gpiod`;
+    chip discovery via `YALP_GPIOCHIP`.
+  - `b1e1f34` — SIGINT shutdown fix (real-stack, bounded joins, motors zeroed
+    first in teardown).
+  - `fde1587` — Ultrasonic observability counters (`total_reads / valid /
+    raw_misses / coasted / unknown_served` in state/telemetry).
+  - Earlier (already on main): `YALP_ULTRASONIC_MAX_POLL_HZ` env knob.
+  - **izzy is at `0ce8a26` (main).** Pull after repo is pushed:
     `git pull --ff-only`, then `.venv/bin/pip install -e . -q`.
 
 ## THE NEXT TASK
 
-**Both paths require a charged pack first. Run a channel matrix before
-trusting any maneuver. Verify sonar aim with live data — never with photos.**
+**Root cause is fixed in code. The gpiod driver auto-selects on Pi 5 when
+`python3-libgpiod` v2 is present. The remaining steps are operational.**
 
-### Step 0 — mandatory before either path
+### Step 0 — mandatory before motor work
 
 1. **Charge or swap the battery pack.** Left-FORWARD and right-REVERSE were
-   dead or marginal at session end. Nothing else until this is done.
+   dead or marginal at session end. Nothing motor-powered until this is done.
 
 2. **Channel matrix:** fwd/rev per wheel, pivot both ways at duty 0.3. Confirm
    all four channels alive before any maneuver. Note any that are still weak.
@@ -83,36 +88,36 @@ trusting any maneuver. Verify sonar aim with live data — never with photos.**
 
 ---
 
-### Path A — RECOMMENDED (permanent fix)
+### Step 1 — pull latest onto izzy (requires the repo to be pushed first)
 
-**Rotate the sonar bracket ~40° CLOCKWISE** (viewed from above, pitch stays
-level) so the transducers co-align with the camera.
-
-- Verify BOTH axes: izzy ~1.2-1.4 m square to the quilt-covered door. Run
-  `/tmp/ultra_char.py --hz 15 --seconds 8` (recreate from
-  `GpiozeroMotorDriver` session artifacts if `/tmp` was wiped). Expect STEADY
-  ~1.2-1.4 m AND the camera frame showing the door centered.
-- If not steady, iterate yaw in ~10° steps with live sonar as feedback —
-  photos are useless for this.
-- **Do not drive until BOTH read true.**
-
-**Victory lap:** stock config (NO relaxed grace),
-`DRIVE_GOAL` straight 1.6 @ 0.3. Expect: valid decreasing distance track from
-the door, distance-triggered `SAFE_STOP` at ≤ 0.30 m, `BLOCKED`, no reverse,
-sticky latch. That run marks the floor-drive rung DONE — update `roadmap.md`
-(mirror the milestone-J entry format).
+Push the laptop branch to origin first, then on izzy:
+```
+git pull --ff-only
+.venv/bin/pip install -e . -q
+```
+The gpiod driver (`GpiodUltrasonicSensor`) will auto-select on the next
+`RealReactiveBackend` start. Confirm with `yalp hwtest --check ultrasonic` —
+you should see honest distances. If readings are still ~2–4× true, the gpiozero
+fallback is in use; check `python3-libgpiod` install on izzy.
 
 ---
 
-### Path B — as-is compensation (no hardware change)
+### Step 2 — remove the 30 cm test box; validate the door reading
 
-Place/rotate izzy ~40° RIGHT of facing the door so the skewed beam squares
-onto the quilt. Verify sonar reads STEADY ~1.1-1.6 m. Drive the same goal
-diagonally — closing speed along the sonar ray is ~cos(40°) × 0.15 m/s;
-`SAFE_STOP` trips at 0.30 m ray range.
+Remove the test box from the drive lane. Place izzy ~1.2-1.4 m square-facing
+the quilt-covered door (it's still hung; leave it — specular door otherwise).
+Run a live ultrasonic stream and expect STEADY ~1.2–1.4 m. That number is now
+honest with the gpiod driver. **Do not drive until the door reads true.**
 
-Path A is cleaner and makes future work sane. Path B is a fallback if
-hardware adjustment isn't feasible this session.
+---
+
+### Step 3 — victory lap (marks floor-drive rung DONE)
+
+Stock config (NO relaxed grace). `DRIVE_GOAL straight 1.6 @ 0.3`.
+Expect: valid decreasing distance track from the door, `SAFE_STOP` at ≤ 0.30 m
+TRUE, goal status 'blocked', no reverse, sticky latch. **That run marks the
+floor-drive rung DONE — update `roadmap.md`** (mirror the milestone-J entry
+format, note gpiod driver in use).
 
 ## Key facts for whoever resumes
 
@@ -157,7 +162,6 @@ hardware adjustment isn't feasible this session.
 
 ## The road after
 
-Charge pack → channel matrix → sonar bracket fix (~40° CW) → victory lap
-(floor collision-stop proven, floor-drive rung DONE in `roadmap.md`) →
-`yalp see` (vision Q&A; the camera+vision loop already proved itself
-diagnosing the sonar) → person-following → voice.
+Push → pull on izzy → charge pack → channel matrix → validate door reading
+(honest with gpiod driver) → victory lap (floor collision-stop proven, floor-drive
+rung DONE in `roadmap.md`) → `yalp see` (vision Q&A) → person-following → voice.
