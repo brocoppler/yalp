@@ -12,6 +12,7 @@ Key guarantees verified:
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 import importlib
@@ -354,6 +355,420 @@ class TestAllCheck:
 
 
 # ---------------------------------------------------------------------------
+# Field add-on: ultrasonic soak (--seconds / --hz)
+# ---------------------------------------------------------------------------
+
+class _SequenceRangeSensor:
+    """A fake range sensor that replays a preset ``(distance_m, known)`` sequence.
+
+    Lets us drive the soak summary through a mix of valid reads and misses so we
+    can assert the miss count / longest-miss-streak / distance-stats math.
+    """
+
+    def __init__(self, seq):
+        self._seq = list(seq)
+        self.read_count = 0
+        self.closed = False
+
+    def read_distance(self):
+        reading = self._seq[self.read_count]
+        self.read_count += 1
+        return reading
+
+    def close(self):
+        self.closed = True
+
+
+class TestUltrasonicSoak:
+    def test_soak_read_count_math(self):
+        """--seconds S with --hz H performs ~round(S*H) reads (10 here)."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeRangeSensor
+
+        instances: List[FakeRangeSensor] = []
+
+        def make_fake(**kw):
+            inst = FakeRangeSensor(distance_m=0.45, known=True)
+            instances.append(inst)
+            return inst
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeRangeSensor", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_ultrasonic(
+                        dry_run=True, camera_source="webcam", seconds=2.0, hz=5.0
+                    )
+
+        assert rc == 0
+        assert instances
+        assert instances[0].read_count == 10, (
+            f"Expected round(2.0*5.0)=10 reads, got {instances[0].read_count}"
+        )
+
+    def test_soak_read_count_rounds(self):
+        """Read count is round(S*H): 3.0 s at 3.0 Hz -> 9 reads."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeRangeSensor
+
+        instances: List[FakeRangeSensor] = []
+
+        def make_fake(**kw):
+            inst = FakeRangeSensor(distance_m=0.45, known=True)
+            instances.append(inst)
+            return inst
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeRangeSensor", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_ultrasonic(
+                        dry_run=True, camera_source="webcam", seconds=3.0
+                    )
+
+        assert rc == 0
+        assert instances[0].read_count == 9
+
+    def test_soak_summary_all_valid(self):
+        """Summary reports total, 100% valid, zero misses on an all-valid soak."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeRangeSensor
+
+        def make_fake(**kw):
+            return FakeRangeSensor(distance_m=0.45, known=True)
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeRangeSensor", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_ultrasonic(
+                        dry_run=True, camera_source="webcam", seconds=2.0, hz=5.0
+                    )
+
+        assert rc == 0
+        out = buf.getvalue()
+        assert "soak summary" in out
+        assert "total reads:" in out and "10" in out
+        assert "100.0%" in out
+        assert re.search(r"misses:\s+0\b", out), out
+        assert re.search(r"longest miss streak:\s+0\b", out), out
+        # An all-valid soak of a constant 0.45 m has zero spread.
+        assert re.search(r"0\.450 / 0\.450 / 0\.450 m", out), out
+        assert re.search(r"distance stdev:\s+0\.000 m", out), out
+
+    def test_soak_summary_mixed_valid_and_misses(self):
+        """Summary math: miss count, longest consecutive-miss streak, distance stats."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+
+        # 5 reads: valid, miss, miss, valid, miss -> 2 valid, 3 misses, streak 2.
+        seq = [
+            (0.400, True),
+            (9.999, False),
+            (9.999, False),
+            (0.500, True),
+            (9.999, False),
+        ]
+        instances: List[_SequenceRangeSensor] = []
+
+        def make_fake(**kw):
+            inst = _SequenceRangeSensor(seq)
+            instances.append(inst)
+            return inst
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeRangeSensor", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    # 1.0 s at 5.0 Hz -> exactly 5 reads.
+                    rc = cli_mod._check_ultrasonic(
+                        dry_run=True, camera_source="webcam", seconds=1.0, hz=5.0
+                    )
+
+        assert rc == 0
+        assert instances[0].read_count == 5
+        assert instances[0].closed, "sensor.close() was not called"
+        out = buf.getvalue()
+        assert re.search(r"total reads:\s+5\b", out), out
+        assert "2 (40.0%)" in out, out
+        assert re.search(r"misses:\s+3\b", out), out
+        assert re.search(r"longest miss streak:\s+2\b", out), out
+        # min/median/max of the two valid reads (0.400, 0.500).
+        assert re.search(r"0\.400 / 0\.450 / 0\.500 m", out), out
+        # STOP flag must still appear for each miss.
+        assert "STOP" in out
+
+    def test_soak_real_path_constructs_sensor_with_requested_max_poll_hz(self):
+        """The REAL (non-dry-run) soak builds make_ultrasonic_sensor(max_poll_hz=H)."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeRangeSensor
+
+        captured_kwargs: List[dict] = []
+
+        def fake_factory(**kw):
+            captured_kwargs.append(kw)
+            return FakeRangeSensor(distance_m=0.45, known=True)
+
+        buf = StringIO()
+        with patch.object(hw_mod, "make_ultrasonic_sensor", side_effect=fake_factory):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_ultrasonic(
+                        dry_run=False, camera_source="webcam", seconds=2.0, hz=7.0
+                    )
+
+        assert rc == 0
+        assert captured_kwargs, "make_ultrasonic_sensor was never called"
+        assert captured_kwargs[0].get("max_poll_hz") == 7.0, captured_kwargs
+
+    def test_legacy_real_path_passes_no_max_poll_hz(self):
+        """Without --seconds the real path calls make_ultrasonic_sensor() with no kwargs."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeRangeSensor
+
+        captured_kwargs: List[dict] = []
+
+        def fake_factory(**kw):
+            captured_kwargs.append(kw)
+            return FakeRangeSensor(distance_m=0.45, known=True)
+
+        buf = StringIO()
+        with patch.object(hw_mod, "make_ultrasonic_sensor", side_effect=fake_factory):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_ultrasonic(dry_run=False, camera_source="webcam")
+
+        assert rc == 0
+        assert captured_kwargs == [{}], captured_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Field add-on: motor channel matrix (--matrix)
+# ---------------------------------------------------------------------------
+
+class TestMotorsMatrix:
+    _EXPECTED_ORDER = [
+        (0.4, 0.0),   # LEFT-FORWARD
+        (-0.4, 0.0),  # LEFT-REVERSE
+        (0.0, 0.4),   # RIGHT-FORWARD
+        (0.0, -0.4),  # RIGHT-REVERSE
+        (-0.4, 0.4),  # PIVOT-LEFT
+        (0.4, -0.4),  # PIVOT-RIGHT
+    ]
+
+    def test_matrix_emits_six_labeled_calls_in_order(self):
+        """--matrix issues the six per-channel commands in order, ending with stop."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeMotorDriver
+
+        instances: List[FakeMotorDriver] = []
+
+        def make_fake():
+            inst = FakeMotorDriver()
+            instances.append(inst)
+            return inst
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeMotorDriver", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_motors(
+                        dry_run=True, camera_source="webcam", matrix=True
+                    )
+
+        assert rc == 0
+        assert instances
+        calls = instances[0].calls
+        # The six drive commands, in order, with the (0.0, 0.0) stops removed.
+        non_stop = [c for c in calls if c != (0.0, 0.0)]
+        assert non_stop == self._EXPECTED_ORDER, non_stop
+        # The very last recorded call must be the final stop.
+        assert calls[-1] == (0.0, 0.0), calls[-1]
+        # close() must run in the finally block.
+        assert instances[0].closed, "close() was not called after the matrix"
+
+        out = buf.getvalue()
+        for label in (
+            "LEFT-FORWARD",
+            "LEFT-REVERSE",
+            "RIGHT-FORWARD",
+            "RIGHT-REVERSE",
+            "PIVOT-LEFT",
+            "PIVOT-RIGHT",
+        ):
+            assert label in out, f"Missing '{label}' label in matrix output"
+
+    def test_matrix_labels_appear_in_order(self):
+        """The six labels are printed in the documented channel order."""
+        import yalp.reactive.hwtest_cli as cli_mod
+
+        buf = StringIO()
+        with patch("time.sleep"):
+            with patch("sys.stdout", buf):
+                rc = cli_mod._check_motors(
+                    dry_run=True, camera_source="webcam", matrix=True
+                )
+        assert rc == 0
+        out = buf.getvalue()
+        order = [
+            "LEFT-FORWARD",
+            "LEFT-REVERSE",
+            "RIGHT-FORWARD",
+            "RIGHT-REVERSE",
+            "PIVOT-LEFT",
+            "PIVOT-RIGHT",
+        ]
+        positions = [out.index(lbl) for lbl in order]
+        assert positions == sorted(positions), f"Labels out of order: {positions}"
+
+    def test_matrix_keeps_safety_warning(self):
+        """The wheels-up safety warning is preserved in matrix mode."""
+        import yalp.reactive.hwtest_cli as cli_mod
+
+        buf = StringIO()
+        with patch("time.sleep"):
+            with patch("sys.stdout", buf):
+                cli_mod._check_motors(dry_run=True, camera_source="webcam", matrix=True)
+        assert "PUT THE ROBOT ON A STAND" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Field add-on: camera frame save (--save)
+# ---------------------------------------------------------------------------
+
+class TestCameraSave:
+    def test_save_writes_file_in_dry_run(self, tmp_path):
+        """--save PATH writes the synthetic frame to disk in dry-run."""
+        import yalp.reactive.hwtest_cli as cli_mod
+
+        out_path = tmp_path / "frame.png"
+        buf = StringIO()
+        with patch("sys.stdout", buf):
+            rc = cli_mod._check_camera(
+                dry_run=True, camera_source="webcam", save=str(out_path)
+            )
+
+        assert rc == 0
+        assert out_path.exists(), "cv2.imwrite did not create the file"
+        assert out_path.stat().st_size > 0
+        assert "saved frame" in buf.getvalue()
+
+    def test_save_absent_writes_nothing(self, tmp_path):
+        """Without --save, no file is written and no 'saved frame' line appears."""
+        import yalp.reactive.hwtest_cli as cli_mod
+
+        stray = tmp_path / "should_not_exist.png"
+        buf = StringIO()
+        with patch("sys.stdout", buf):
+            rc = cli_mod._check_camera(dry_run=True, camera_source="webcam")
+
+        assert rc == 0
+        assert not stray.exists()
+        assert "saved frame" not in buf.getvalue()
+
+    def test_save_warns_and_survives_when_cv2_missing(self, tmp_path):
+        """A missing cv2 warns but does NOT fail the check."""
+        import builtins
+        import yalp.reactive.hwtest_cli as cli_mod
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "cv2":
+                raise ImportError("simulated: no cv2")
+            return real_import(name, *args, **kwargs)
+
+        out_path = tmp_path / "frame.png"
+        buf = StringIO()
+        with patch("builtins.__import__", side_effect=fake_import):
+            with patch("sys.stdout", buf):
+                rc = cli_mod._check_camera(
+                    dry_run=True, camera_source="webcam", save=str(out_path)
+                )
+
+        assert rc == 0, "check must not fail just because cv2 is unavailable"
+        assert not out_path.exists()
+        assert "cv2 unavailable" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Guarantee: absent flags leave every check byte-identical to the legacy path
+# ---------------------------------------------------------------------------
+
+class TestLegacyUnchanged:
+    def test_ultrasonic_absent_flags_is_exactly_five_reads_no_summary(self):
+        """No --seconds -> exactly 5 reads and NO soak summary block."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeRangeSensor
+
+        instances: List[FakeRangeSensor] = []
+
+        def make_fake(**kw):
+            inst = FakeRangeSensor(distance_m=0.45, known=True)
+            instances.append(inst)
+            return inst
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeRangeSensor", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_ultrasonic(dry_run=True, camera_source="webcam")
+
+        assert rc == 0
+        assert instances[0].read_count == 5
+        out = buf.getvalue()
+        assert "soak summary" not in out
+        assert "Ultrasonic test: printing 5 reads at ~3 Hz." in out
+
+    def test_motors_absent_matrix_uses_legacy_sequence(self):
+        """No --matrix -> legacy forward/left/right/stop sequence, no matrix labels."""
+        import yalp.reactive.hwtest_cli as cli_mod
+        from yalp.reactive import hardware as hw_mod
+        from yalp.reactive.hardware import FakeMotorDriver
+
+        instances: List[FakeMotorDriver] = []
+
+        def make_fake():
+            inst = FakeMotorDriver()
+            instances.append(inst)
+            return inst
+
+        buf = StringIO()
+        with patch.object(hw_mod, "FakeMotorDriver", side_effect=make_fake):
+            with patch("time.sleep"):
+                with patch("sys.stdout", buf):
+                    rc = cli_mod._check_motors(dry_run=True, camera_source="webcam")
+
+        assert rc == 0
+        non_stop = [c for c in instances[0].calls if c != (0.0, 0.0)]
+        assert non_stop == [(0.4, 0.4), (-0.4, 0.4), (0.4, -0.4)], non_stop
+        out = buf.getvalue()
+        for matrix_label in ("LEFT-FORWARD", "PIVOT-LEFT", "PIVOT-RIGHT"):
+            assert matrix_label not in out, f"Legacy path leaked matrix label {matrix_label}"
+        assert "Motors test: forward → left turn → right turn → stop." in out
+
+    def test_camera_absent_save_matches_legacy_output(self):
+        """No --save -> output identical to a plain legacy camera check."""
+        import yalp.reactive.hwtest_cli as cli_mod
+
+        buf_new = StringIO()
+        with patch("sys.stdout", buf_new):
+            rc_new = cli_mod._check_camera(dry_run=True, camera_source="webcam", save=None)
+
+        assert rc_new == 0
+        out = buf_new.getvalue()
+        assert "saved frame" not in out
+        assert "shape" in out or "no frame" in out
+
+
+# ---------------------------------------------------------------------------
 # CLI integration: feature module is registered in FEATURE_MODULES
 # ---------------------------------------------------------------------------
 
@@ -371,3 +786,32 @@ class TestCliRegistration:
         args = parser.parse_args(["hwtest", "--check", "gpio", "--dry-run"])
         assert args.check == "gpio"
         assert args.dry_run is True
+
+    def test_build_parser_accepts_new_field_flags(self):
+        """The new opt-in flags parse and carry the documented defaults."""
+        from yalp.cli import build_parser
+        parser = build_parser()
+
+        # Defaults when the flags are absent.
+        args = parser.parse_args(["hwtest", "--check", "all", "--dry-run"])
+        assert args.seconds is None
+        assert args.hz == 3.0
+        assert args.matrix is False
+        assert args.save is None
+
+        # Explicit values round-trip.
+        args = parser.parse_args(
+            [
+                "hwtest",
+                "--check", "ultrasonic",
+                "--dry-run",
+                "--seconds", "20",
+                "--hz", "10",
+                "--matrix",
+                "--save", "/tmp/frame.png",
+            ]
+        )
+        assert args.seconds == 20.0
+        assert args.hz == 10.0
+        assert args.matrix is True
+        assert args.save == "/tmp/frame.png"
