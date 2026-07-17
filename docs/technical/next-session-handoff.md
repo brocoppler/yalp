@@ -1,11 +1,10 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-07-16, end of the on-hardware session.
-**One-line status:** First supervised floor drive COMPLETED (timed goal, human
-backstop); collision-stop reflex on the floor still UNPROVEN — sonar discovered
-pointing ~90-140° CCW off the nose. Physical quarter-turn clockwise bracket fix
-+ verification is THE next task, then the "victory lap" drive where she stops
-herself at the door.
+**Last updated:** 2026-07-16, end of evening session.
+**One-line status:** Victory lap correctly ABORTED — sonar boresight measured
+~35-45° LEFT of camera/wheel axis, battery sag killed left-FORWARD and degraded
+right-REVERSE by session end, safety geometry was inverted. Charge the pack,
+fix the sonar bracket ~40° CW, verify with live data, then drive.
 
 ---
 
@@ -20,18 +19,38 @@ herself at the door.
   because the sonar never saw the door (reason: it was pointing at the wrong
   wall — see below).
 
-- **Sonar saga resolved: mount is ~90-140° CCW off the nose (viewed from
-  above).** After a hand "leveling" of the mount an autonomous camera+sonar
-  diagnosis (pivot sweeps cross-referenced with video frames) proved the
-  transducers point into the left-rear quadrant. The persistent 2.3-2.7 m
-  "background band" everyone kept seeing was the left-rear wall, not a
-  frontal target. Full field findings — including the visual cross-reference
-  method — are in `hardware.md` 2026-07-16 subsection.
+- **Sonar boresight refined: ~35-45° LEFT of camera/wheel axis (not the
+  earlier 90-140° CCW estimate).** Evening pivot-sweep triangulation pinned
+  this more tightly. Falsification test: hanging a quilt on the door changed
+  the door's acoustics but the dominant 174.4 cm reading did not move a
+  millimeter — the beam was never on the door. Photos alone repeatedly failed
+  to reveal this; only live-data tests did. Full field findings (including the
+  visual cross-reference method) are in `hardware.md` 2026-07-16 subsection.
 
-- **Environment visually confirmed:** the target door is real, closed, ~1 m
-  ahead. A black woven-fabric storage cube in the corridor is an ultrasound
-  ABSORBER (invisible to sonar at any aim angle) and must be moved out of
-  drive lanes before the victory lap.
+- **Victory lap correctly ABORTED (2026-07-16 evening):** autonomous attempt
+  (drive at the quilt-covered door, expect `SAFE_STOP` at 0.30 m) was
+  aborted before any drive — no sonar lock on the target, inverted safety
+  geometry (distance threshold was unreachable given beam angle), and a
+  failing drive channel. No contact; izzy parked clean ~1.2-1.4 m
+  square-facing the door.
+
+- **Actuation degradation at session end (prime suspect: battery sag after a
+  full day):** left-motor-FORWARD dead, right-motor-REVERSE marginal-to-dead
+  at duty 0.3; left-rotation channels (left-reverse + right-forward) still
+  worked. Channels failed progressively in order of load. **Charge or swap
+  the pack before any motor work next session**, then run a quick channel
+  matrix (fwd/rev per wheel, pivot both ways) before trusting any maneuver.
+
+- **Physical state at power-down:** izzy parked ~1.2-1.4 m square-facing the
+  quilt-covered door; quilt still hung on the door; black fabric storage cube
+  (sonar-invisible absorber) moved out of the drive lane; shoes + kettlebell
+  near the left wall by the original lane — **clear them before pivoting**
+  (they jammed right-pivots once already).
+
+- **Environment visually confirmed:** the target door is real, closed. The
+  quilt/towel stays on the glossy door for all sonar work (specular
+  otherwise). Black woven-fabric storage cube is an ultrasound ABSORBER
+  (invisible to sonar at any aim) — keep it out of drive lanes.
 
 - **Code landed this session — 2 commits ahead of `origin/main`, not yet
   merged:**
@@ -48,27 +67,52 @@ herself at the door.
 
 ## THE NEXT TASK
 
-**In order — nothing drives until step 2 reads true.**
+**Both paths require a charged pack first. Run a channel matrix before
+trusting any maneuver. Verify sonar aim with live data — never with photos.**
 
-1. **Physical fix:** rotate the sensor bracket ~quarter turn CLOCKWISE (viewed
-   from above), pitch level, until the transducers visibly face the same
-   direction as the camera lens. Pack switch OFF for sensor-only work.
+### Step 0 — mandatory before either path
 
-2. **Verify BOTH axes:** with izzy ~1 m square to the closed door, run
-   `/tmp/ultra_char.py --hz 15 --seconds 8` (recreate from repo/session
-   artifacts if `/tmp` was wiped). Expect a STEADY ~95-105 cm. If reading ~2 m,
-   iterate yaw in 10-15° steps, using the steady-pass as the feedback signal.
-   **Do not drive until this reads true.**
+1. **Charge or swap the battery pack.** Left-FORWARD and right-REVERSE were
+   dead or marginal at session end. Nothing else until this is done.
 
-3. **Clear the corridor:** move the fabric storage cube out of all drive lanes
-   (it is an ultrasound absorber — sonar-invisible regardless of aim). Re-square
-   izzy at ~1 m standoff from the door.
+2. **Channel matrix:** fwd/rev per wheel, pivot both ways at duty 0.3. Confirm
+   all four channels alive before any maneuver. Note any that are still weak.
 
-4. **VICTORY LAP:** stock config (NO relaxed grace),
-   `DRIVE_GOAL` straight ~1.5 @ 0.3. Expect: valid decreasing distance track
-   from the door, a distance-triggered `SAFE_STOP` at 0.30 m (≈ true range
-   now), `BLOCKED`, no reverse, sticky latch. That run marks the floor-drive
-   rung DONE — update `roadmap.md` (mirror the milestone-J entry format).
+3. **Clear the corridor:** shoes + kettlebell by the left wall — move them;
+   they jammed right-pivots once already. Storage cube already out of lane.
+
+---
+
+### Path A — RECOMMENDED (permanent fix)
+
+**Rotate the sonar bracket ~40° CLOCKWISE** (viewed from above, pitch stays
+level) so the transducers co-align with the camera.
+
+- Verify BOTH axes: izzy ~1.2-1.4 m square to the quilt-covered door. Run
+  `/tmp/ultra_char.py --hz 15 --seconds 8` (recreate from
+  `GpiozeroMotorDriver` session artifacts if `/tmp` was wiped). Expect STEADY
+  ~1.2-1.4 m AND the camera frame showing the door centered.
+- If not steady, iterate yaw in ~10° steps with live sonar as feedback —
+  photos are useless for this.
+- **Do not drive until BOTH read true.**
+
+**Victory lap:** stock config (NO relaxed grace),
+`DRIVE_GOAL` straight 1.6 @ 0.3. Expect: valid decreasing distance track from
+the door, distance-triggered `SAFE_STOP` at ≤ 0.30 m, `BLOCKED`, no reverse,
+sticky latch. That run marks the floor-drive rung DONE — update `roadmap.md`
+(mirror the milestone-J entry format).
+
+---
+
+### Path B — as-is compensation (no hardware change)
+
+Place/rotate izzy ~40° RIGHT of facing the door so the skewed beam squares
+onto the quilt. Verify sonar reads STEADY ~1.1-1.6 m. Drive the same goal
+diagonally — closing speed along the sonar ray is ~cos(40°) × 0.15 m/s;
+`SAFE_STOP` trips at 0.30 m ray range.
+
+Path A is cleaner and makes future work sane. Path B is a fallback if
+hardware adjustment isn't feasible this session.
 
 ## Key facts for whoever resumes
 
@@ -86,6 +130,14 @@ herself at the door.
 - **`/tmp` artifacts on izzy** (`ultra_char.py`, drive scripts, logs) are wiped
   on reboot — recreate from repo/session artifacts if needed. Persistent
   telemetry lives at `~/.local/state/yalp/telemetry/telemetry.jsonl`.
+
+- **Helper scripts for pivots/arcs** were staged in `izzy:/tmp` this session
+  (wiped on reboot; trivial to recreate from `GpiozeroMotorDriver` — pivot
+  bursts at duty 0.3 with `try/finally` stop).
+
+- **Jam signature:** commanded pivot with zero scene change in camera frames =
+  wheel obstruction or dead channel, not a software bug. Check the channel
+  matrix and clear physical obstacles first.
 
 - **Calibration and wiring — do NOT re-diagnose:** `~/.config/yalp/calibration.json`
   has `left_invert=true, right_invert=true`; DRV8833 IN/IN driver fix confirmed;
@@ -105,6 +157,7 @@ herself at the door.
 
 ## The road after
 
-Sonar bracket fix → victory lap (floor collision-stop proven, floor-drive rung
-DONE) → `yalp see` (vision Q&A; the camera+vision loop already proved itself
+Charge pack → channel matrix → sonar bracket fix (~40° CW) → victory lap
+(floor collision-stop proven, floor-drive rung DONE in `roadmap.md`) →
+`yalp see` (vision Q&A; the camera+vision loop already proved itself
 diagnosing the sonar) → person-following → voice.
