@@ -101,6 +101,12 @@ class RealReactiveBackend(ReactiveTickCore):
     max_speed_mps / turn_rate_dps:
         Open-loop motion model used to convert a drive/turn target into a timed
         duration — the honest stand-in for odometry, identical to the fake.
+        ``max_speed_mps`` is the forward speed at FULL throttle (duty 1.0).
+    duty_deadband / turn_duty_deadband:
+        Commanded-duty motor deadband for the straight-drive speed model (below it
+        the wheels stall under load) and a reserved turn deadband. Sourced from the
+        calibration file when present (a pre-deadband file yields ``0.0`` = old
+        linear model), else ``config.DRIVE_DUTY_DEADBAND`` / ``TURN_DUTY_DEADBAND``.
     tick_hz:
         Default tick rate for ``run()`` and the per-tick time step.
     tracker / follow_controller:
@@ -125,6 +131,8 @@ class RealReactiveBackend(ReactiveTickCore):
         safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
         max_speed_mps: Optional[float] = None,
         turn_rate_dps: Optional[float] = None,
+        duty_deadband: Optional[float] = None,
+        turn_duty_deadband: Optional[float] = None,
         tick_hz: float = config.REACTIVE_TICK_HZ,
         tracker: Optional[object] = None,
         follow_controller: Optional[FollowController] = None,
@@ -159,6 +167,31 @@ class RealReactiveBackend(ReactiveTickCore):
         )
         self.turn_rate_dps = max(
             1e-3, turn_rate_dps if turn_rate_dps is not None else cal_turn
+        )
+        # Open-loop speed-model deadband. A calibration file provides it (a
+        # pre-deadband file -> 0.0 via MotorCalibration.from_dict, keeping the old
+        # linear behaviour); with no file we fall back to the measured config
+        # default. Clamped to a sane [0, 0.9] so gain = max_speed/(1-deadband)
+        # never blows up. turn_duty_deadband is reserved (0.0 = no turn model yet).
+        cal_deadband = (
+            calibration.duty_deadband
+            if calibration is not None
+            else config.DRIVE_DUTY_DEADBAND
+        )
+        cal_turn_deadband = (
+            calibration.turn_duty_deadband
+            if calibration is not None
+            else config.TURN_DUTY_DEADBAND
+        )
+        self.duty_deadband = max(
+            0.0,
+            min(0.9, duty_deadband if duty_deadband is not None else cal_deadband),
+        )
+        self.turn_duty_deadband = max(
+            0.0,
+            turn_duty_deadband
+            if turn_duty_deadband is not None
+            else cal_turn_deadband,
         )
         self.tick_hz = max(1.0, tick_hz)
         # Convert the seconds-domain lost-grace window to ticks at OUR actual tick

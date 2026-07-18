@@ -114,8 +114,10 @@ def _wait_for_intent(mailbox: IntentMailbox, timeout: float = 2.0) -> Intent:
 def test_drive_goal_halts_after_client_drops():
     backend, motor, sensor, server, client, mailbox, teardown = _make_rig()
     try:
-        # Client -> server: a bounded straight drive. target/speed/max_speed give
-        # a finite open-loop duration (0.5 / (1.0 * 0.5) = 1.0 s ≈ 50 ticks).
+        # Client -> server: a bounded straight drive. speed 0.5 is above the motor
+        # deadband (0.27), so the open-loop duration is finite: with the deadband
+        # model v = (1.0/(1-0.27))*(0.5-0.27) ≈ 0.315 m/s, duration ≈ 1.6 s. The
+        # 5000-tick advance below covers it comfortably; the goal still HALTS.
         client.send_intent(
             Intent(
                 Mode.DRIVE_GOAL,

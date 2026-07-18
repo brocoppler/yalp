@@ -66,7 +66,12 @@ class FakeReactiveBackend(ReactiveTickCore):
         Distance (m) under which collision-stop fires.
     max_speed_mps / turn_rate_dps:
         Open-loop motion model used to convert a drive/turn target into a timed
-        duration (the honest stand-in for odometry).
+        duration (the honest stand-in for odometry). ``max_speed_mps`` is the
+        forward speed at FULL throttle (duty 1.0).
+    duty_deadband / turn_duty_deadband:
+        Commanded-duty motor deadband for the straight-drive speed model and a
+        reserved turn deadband (defaults from ``config``); see the deadband note in
+        :mod:`yalp.config` and :meth:`ReactiveTickCore._model_speed_mps`.
     tick_hz:
         Default tick rate for ``run()`` and the per-tick simulated time step.
     """
@@ -80,6 +85,8 @@ class FakeReactiveBackend(ReactiveTickCore):
         safe_stop_threshold_m: float = config.SAFE_STOP_THRESHOLD_M,
         max_speed_mps: float = 0.5,
         turn_rate_dps: float = 120.0,
+        duty_deadband: float = config.DRIVE_DUTY_DEADBAND,
+        turn_duty_deadband: float = config.TURN_DUTY_DEADBAND,
         tick_hz: float = config.REACTIVE_TICK_HZ,
         tracker: Optional[object] = None,
         follow_controller: Optional[FollowController] = None,
@@ -97,6 +104,11 @@ class FakeReactiveBackend(ReactiveTickCore):
         self.safe_stop_threshold_m = safe_stop_threshold_m
         self.max_speed_mps = max(1e-3, max_speed_mps)
         self.turn_rate_dps = max(1e-3, turn_rate_dps)
+        # Open-loop speed-model deadband (see config.DRIVE_DUTY_DEADBAND). Applied
+        # identically to the real backend so sims/tests reflect the measured stall
+        # floor; clamped to [0, 0.9] so gain = max_speed/(1-deadband) stays finite.
+        self.duty_deadband = max(0.0, min(0.9, duty_deadband))
+        self.turn_duty_deadband = max(0.0, turn_duty_deadband)
         self.tick_hz = max(1.0, tick_hz)
         # Convert the seconds-domain lost-grace window to ticks at OUR actual tick
         # rate (not the 20 Hz import-time default), so the ~0.9 s window holds.

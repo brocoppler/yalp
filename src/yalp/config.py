@@ -505,6 +505,40 @@ ULTRASONIC_GRACE_MAX_MISSES: int = _env_int("YALP_ULTRASONIC_GRACE_MAX_MISSES", 
 MOTOR_LEFT_INVERT: bool = _env_bool("YALP_MOTOR_LEFT_INVERT", False)
 MOTOR_RIGHT_INVERT: bool = _env_bool("YALP_MOTOR_RIGHT_INVERT", False)
 
+# --- Open-loop drive speed model: motor deadband (2026-07-17 field tuning) ----
+# The reactive layer has NO encoders, so it converts a distance target into a
+# TIMED command using an open-loop speed model (yalp.reactive.calibration and
+# ReactiveTickCore._drive_duration). Field measurement on the real robot
+# (2026-07-17, hardwood, under load) showed the drive motors do NOT overcome
+# stiction below a commanded duty ~0.3: a 5.4 s commanded drive at duty 0.30 moved
+# ZERO cm (frame- and sonar-verified stall), while duty 0.45 moved reliably (and
+# its measured speed sagged ~26% over ~28 runs as the battery drooped). A single
+# linear "v = max_speed_mps * duty" is therefore only ever right at one duty/one
+# battery level and lies badly near the floor.
+#
+# The model is now  v = max(0, gain * (duty - DRIVE_DUTY_DEADBAND))  with
+# gain = max_speed_mps / (1 - DRIVE_DUTY_DEADBAND). This keeps max_speed_mps's
+# meaning intact (forward speed at FULL throttle, duty 1.0 -> v == max_speed_mps)
+# while a duty at/below the deadband predicts NO motion. 0.27 is the measured
+# midpoint of the [stall <=0.30, moves 0.45] band. DRIVE_DUTY_DEADBAND=0 recovers
+# the exact old linear model (used for back-compat with pre-deadband calibration
+# files — see MotorCalibration.from_dict). Env-overridable for per-surface tuning.
+DRIVE_DUTY_DEADBAND: float = _env_float("YALP_DRIVE_DUTY_DEADBAND", 0.27)
+
+# Below this commanded duty, IN-PLACE ROTATION is stiction-dominated and the
+# turn_rate_dps estimate OVER-predicts actual rotation by ~5-10x (measured
+# 2026-07-17: commanded 30-60 deg delivered only 2-15 deg at duty 0.45). We do
+# NOT correct the rotation estimate — there is not enough field data for an honest
+# turn model — but a rotate goal commanded BELOW this duty emits a "the turn will
+# massively under-rotate" honesty warning (ReactiveTickCore._warn_if_below_deadband).
+TURN_STICTION_DUTY: float = _env_float("YALP_TURN_STICTION_DUTY", 0.5)
+
+# Reserved MEASURED turn deadband (duty below which in-place rotation does not
+# start at all). Defaults to 0.0 = "not yet measured / no turn deadband applied",
+# so the rotation TIMING model is unchanged; it exists as a calibration/config
+# hook for future field tuning of the stiction-dominated turn behavior above.
+TURN_DUTY_DEADBAND: float = _env_float("YALP_TURN_DUTY_DEADBAND", 0.0)
+
 
 @dataclass(frozen=True)
 class Config:
@@ -584,6 +618,9 @@ class Config:
     speed_of_sound_mps: float = SPEED_OF_SOUND_MPS
     motor_left_invert: bool = MOTOR_LEFT_INVERT
     motor_right_invert: bool = MOTOR_RIGHT_INVERT
+    drive_duty_deadband: float = DRIVE_DUTY_DEADBAND
+    turn_stiction_duty: float = TURN_STICTION_DUTY
+    turn_duty_deadband: float = TURN_DUTY_DEADBAND
 
 
 def get_api_key() -> str | None:
@@ -683,6 +720,9 @@ __all__ = [
     "SPEED_OF_SOUND_MPS",
     "MOTOR_LEFT_INVERT",
     "MOTOR_RIGHT_INVERT",
+    "DRIVE_DUTY_DEADBAND",
+    "TURN_STICTION_DUTY",
+    "TURN_DUTY_DEADBAND",
     "Config",
     "get_api_key",
     "require_api_key",

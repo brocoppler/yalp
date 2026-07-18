@@ -41,7 +41,8 @@ def test_calibration_round_trip(tmp_path):
     assert written == path
     assert path.exists()
 
-    # The on-disk JSON has exactly the expected fields/values.
+    # The on-disk JSON has exactly the expected fields/values (deadband fields
+    # take their dataclass defaults since the constructor above did not set them).
     on_disk = json.loads(path.read_text())
     assert on_disk == {
         "left_invert": True,
@@ -50,6 +51,8 @@ def test_calibration_round_trip(tmp_path):
         "right_trim": 1.1,
         "max_speed_mps": 0.42,
         "turn_rate_dps": 137.0,
+        "duty_deadband": 0.27,
+        "turn_duty_deadband": 0.0,
     }
 
     loaded = MotorCalibration.load(path)
@@ -62,6 +65,10 @@ def test_defaults_are_sane():
     assert cal.left_trim == 1.0 and cal.right_trim == 1.0
     assert cal.max_speed_mps == 0.5
     assert cal.turn_rate_dps == 120.0
+    # The deadband field default is the 2026-07-17 measured midpoint; the turn
+    # deadband is a reserved future-tuning hook (0.0 = not yet modeled).
+    assert cal.duty_deadband == 0.27
+    assert cal.turn_duty_deadband == 0.0
 
 
 def test_from_dict_ignores_unknown_keys():
@@ -70,6 +77,25 @@ def test_from_dict_ignores_unknown_keys():
     )
     assert cal.max_speed_mps == 0.3
     assert cal.turn_rate_dps == 90.0
+
+
+def test_from_dict_missing_deadband_is_back_compat_zero():
+    """A pre-deadband file (no ``duty_deadband`` key) loads as 0.0, NOT the 0.27
+    field default — so its old pure-linear speed model is reproduced exactly.
+
+    This is the live-robot file shape ({max_speed_mps, right_trim}); imposing the
+    field default would silently ~halve its operating speed (see from_dict docs).
+    """
+    cal = MotorCalibration.from_dict({"max_speed_mps": 0.29, "right_trim": 0.90})
+    assert cal.max_speed_mps == 0.29
+    assert cal.right_trim == 0.90
+    assert cal.duty_deadband == 0.0  # back-compat: deadband disabled, not 0.27
+
+    # A file that DOES carry the key uses it verbatim.
+    explicit = MotorCalibration.from_dict(
+        {"max_speed_mps": 0.55, "duty_deadband": 0.27}
+    )
+    assert explicit.duty_deadband == 0.27
 
 
 def test_default_path_env_override(tmp_path, monkeypatch):
@@ -114,6 +140,8 @@ def test_dry_run_calibrate_writes_file(tmp_path, capsys):
         "right_trim",
         "max_speed_mps",
         "turn_rate_dps",
+        "duty_deadband",
+        "turn_duty_deadband",
     }
     # ...with the deterministic values derived from the scripted answers
     # ("y" -> no invert; 1.0 m over 2.0 s -> 0.5 m/s; 360° over 2.0 s -> 180 °/s).
@@ -121,6 +149,9 @@ def test_dry_run_calibrate_writes_file(tmp_path, capsys):
     assert data["right_invert"] is False
     assert data["max_speed_mps"] == pytest.approx(0.5)
     assert data["turn_rate_dps"] == pytest.approx(180.0)
+    # The wizard writes the measured deadband default (it does not yet measure it).
+    assert data["duty_deadband"] == pytest.approx(0.27)
+    assert data["turn_duty_deadband"] == pytest.approx(0.0)
 
 
 def test_calibrate_inverts_on_no_answers():
@@ -193,6 +224,37 @@ def test_real_backend_falls_back_to_defaults_without_file(tmp_path):
     )
     assert backend.max_speed_mps == pytest.approx(0.5)
     assert backend.turn_rate_dps == pytest.approx(120.0)
+    # No file -> the deadband falls back to the measured config default.
+    from yalp import config
+
+    assert backend.duty_deadband == pytest.approx(config.DRIVE_DUTY_DEADBAND)
+
+
+def test_real_backend_pre_deadband_file_reproduces_linear_model(tmp_path):
+    """Loading the LIVE-robot file shape (max_speed_mps + trim, NO deadband key)
+    disables the deadband (0.0) and reproduces measured reality: duty 0.45 ->
+    ~0.13 m/s, inside the recorded 0.114..0.155 m/s sag band."""
+    from yalp.camera import Camera
+    from yalp.reactive.hardware import FakeMotorDriver, FakeRangeSensor
+    from yalp.reactive.real_backend import RealReactiveBackend
+
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"max_speed_mps": 0.29, "right_trim": 0.90}))
+
+    backend = RealReactiveBackend(
+        motor_driver=FakeMotorDriver(),
+        range_sensor=FakeRangeSensor(),
+        camera=Camera(source="synthetic"),
+        calibration_path=path,
+    )
+    assert backend.max_speed_mps == pytest.approx(0.29)
+    assert backend.duty_deadband == 0.0  # back-compat: no deadband imposed
+
+    v45 = backend._model_speed_mps(0.45)
+    assert v45 == pytest.approx(0.29 * 0.45)
+    assert 0.114 <= v45 <= 0.155
+    # Full-throttle speed is still exactly max_speed_mps (pure linear).
+    assert backend._model_speed_mps(1.0) == pytest.approx(0.29)
 
 
 def test_real_backend_explicit_args_override_calibration(tmp_path):

@@ -72,7 +72,9 @@ def test_drive_flag_defaults():
 
     args = build_parser().parse_args(["drive"])
     assert args.target == 1.6
-    assert args.speed == 0.3
+    # Default raised from 0.3 (BELOW the measured ~0.27 motor deadband — 0.30
+    # stalled on hardwood) to 0.45, the lowest duty that moves reliably.
+    assert args.speed == 0.45
     assert args.host == config.IPC_HOST
     assert args.port == config.IPC_PORT
     assert args.timeout == 45.0
@@ -359,6 +361,43 @@ def test_negative_target_warns_and_drives():
     assert rc == 0, out
     assert "REVERSE DRIVE" in out
     assert "no rear" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Duty-floor safety: a --speed at/below the motor deadband warns, and (because
+# the deadband speed model gives it zero speed) the timed drive cannot complete.
+# ---------------------------------------------------------------------------
+def test_low_duty_speed_prints_deadband_warning_and_times_out():
+    h = _Harness()
+    try:
+        h.wait_first_tick()
+        rc, out = _run_handler_capture(
+            _drive_args(h.port, target=1.0, speed=0.2, timeout=0.6, poll_hz=50.0)
+        )
+    finally:
+        h.close()
+
+    assert "LOW DUTY" in out
+    assert "motor deadband" in out
+    # Below the deadband the modeled speed is zero, so the open-loop drive never
+    # completes on timing -> it hits --timeout and halts (exit 1).
+    assert rc == 1, out
+    assert "TIMEOUT" in out
+
+
+def test_healthy_speed_has_no_deadband_warning():
+    h = _Harness()
+    try:
+        h.wait_first_tick()
+        # 0.45 is above the deadband (0.27): no warning, and it completes.
+        rc, out = _run_handler_capture(
+            _drive_args(h.port, target=0.05, speed=0.45, poll_hz=50.0)
+        )
+    finally:
+        h.close()
+
+    assert rc == 0, out
+    assert "LOW DUTY" not in out
 
 
 # ===========================================================================

@@ -108,7 +108,9 @@ def test_remote_backend_roundtrips_intent_and_state():
         remote.connect()
         assert remote.connected is True
 
-        # Intent UP: a bounded straight drive (duration = 0.5/(0.5*0.5) = 2s).
+        # Intent UP: a bounded straight drive. speed 0.5 is above the motor
+        # deadband (0.27); the poll below only needs the adopted mode to cross the
+        # wire (RUNNING or COMPLETED), not a specific duration.
         remote.send_intent(
             Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 0.5, "speed": 0.5}, seq=1)
         )

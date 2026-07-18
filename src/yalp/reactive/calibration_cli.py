@@ -126,8 +126,13 @@ def run(args) -> int:
     print(f"  saved calibration -> {written}")
     print(f"    left_invert={cal.left_invert} right_invert={cal.right_invert}")
     print(f"    left_trim={cal.left_trim} right_trim={cal.right_trim}")
-    print(f"    max_speed_mps={cal.max_speed_mps:.4f}")
+    print(f"    max_speed_mps={cal.max_speed_mps:.4f} (speed at FULL throttle)")
     print(f"    turn_rate_dps={cal.turn_rate_dps:.4f}")
+    print(
+        f"    duty_deadband={cal.duty_deadband:.4f} "
+        "(measured motor deadband; below it the wheels stall — see "
+        "config.DRIVE_DUTY_DEADBAND)"
+    )
     return 0
 
 

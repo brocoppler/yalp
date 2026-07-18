@@ -68,6 +68,7 @@ observation age in *reactive ticks*).
 
 from __future__ import annotations
 
+import logging
 import time
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional, Tuple
@@ -88,6 +89,8 @@ from .perception import PerceptionWorker
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .person_tracker import TrackResult
 
+logger = logging.getLogger(__name__)
+
 
 class ReactiveTickCore(ReactiveBackend):
     """Shared reactive tick implementation behind small hardware hooks.
@@ -98,7 +101,8 @@ class ReactiveTickCore(ReactiveBackend):
     real backend, :meth:`command_motors` / :meth:`stop_motors`).
 
     Required instance attributes (set by the subclass ``__init__``): ``mailbox``,
-    ``safe_stop_threshold_m``, ``max_speed_mps``, ``turn_rate_dps``, ``tick_hz``,
+    ``safe_stop_threshold_m``, ``max_speed_mps``, ``turn_rate_dps``,
+    ``duty_deadband``, ``turn_duty_deadband``, ``tick_hz``,
     ``_tracker``, ``_follow``, ``last_follow_decision``, ``_camera``,
     ``_camera_started``, ``_state``, ``_goal_duration_s``, ``_frame_id``,
     ``_lock`` (a ``threading.Lock``), and ``_lost_grace_ticks``. The FOLLOW
@@ -120,6 +124,13 @@ class ReactiveTickCore(ReactiveBackend):
     #: ``echo_timeout`` goal reason in step 2. Class-level default so the safety
     #: tick never ``AttributeError``s even for a subclass that forgets to init it.
     _ever_valid: bool = False
+
+    #: Open-loop speed-model deadband defaults — class-level so the drive-timing
+    #: math never ``AttributeError``s for a subclass/test double that skips them
+    #: (both subclass ``__init__``s set them explicitly). See
+    #: :meth:`_model_speed_mps` and :mod:`yalp.config`.
+    duty_deadband: float = config.DRIVE_DUTY_DEADBAND
+    turn_duty_deadband: float = config.TURN_DUTY_DEADBAND
 
     # -- backend-specific hooks ---------------------------------------------
     @abstractmethod
@@ -454,20 +465,98 @@ class ReactiveTickCore(ReactiveBackend):
         self._goal_duration_s = 0.0
         if s.mode == Mode.DRIVE_GOAL and s.goal is not None:
             self._goal_duration_s = self._drive_duration(s.goal)
+            self._warn_if_below_deadband(s.goal)
             s.goal["progress"] = 0.0
             s.goal["elapsed_s"] = 0.0
         self._safe_notify(self.on_intent_adopted, intent)
 
+    def _model_speed_mps(self, duty: float) -> float:
+        """Open-loop forward speed (m/s) for a commanded ``duty`` (motor deadband).
+
+        The model is ``v = max(0, gain * (duty - duty_deadband))`` with
+        ``gain = max_speed_mps / (1 - duty_deadband)``. Parameterisation choice
+        (2026-07-17 field tuning, documented in :mod:`yalp.config`):
+
+        * ``max_speed_mps`` KEEPS its meaning — the speed at FULL throttle: at
+          ``duty == 1.0`` the deadband term is ``1 - duty_deadband`` and the gain
+          cancels it, so ``v == max_speed_mps`` for any deadband. Calibration files
+          that only carry ``max_speed_mps`` therefore still mean what they meant.
+        * A commanded ``duty`` at/below the deadband predicts **no motion** (0.0):
+          the measured stall (duty 0.30 -> 0 displacement) is now in the model.
+        * ``duty_deadband == 0`` recovers the exact old linear ``max_speed_mps *
+          duty`` — how a pre-deadband calibration file behaves (its missing field
+          loads as 0.0), so e.g. ``max_speed_mps 0.29`` still gives duty 0.45 ->
+          ~0.13 m/s, matching the field measurement.
+        """
+        dead = float(self.duty_deadband)
+        span = 1.0 - dead
+        if span <= 1e-9:  # degenerate deadband -> nothing ever moves
+            return 0.0
+        gain = self.max_speed_mps / span
+        return max(0.0, gain * (float(duty) - dead))
+
     def _drive_duration(self, goal: dict) -> float:
-        """Convert a drive/turn target into a timed open-loop duration (s)."""
+        """Convert a drive/turn target into a timed open-loop duration (s).
+
+        Straight drives use the deadband speed model (:meth:`_model_speed_mps`): a
+        commanded duty at/below the motor deadband models NO motion, so the
+        duration is ``+inf`` — the timed goal cannot complete, which is the honest
+        open-loop read on a stalled command (no encoders to prove otherwise). The
+        raw duty still reaches the pins via :meth:`_drive_throttles`; only the
+        *timing* changes. Rotation keeps the linear ``turn_rate_dps`` estimate
+        (documented as stiction-over-predicting below ``config.TURN_STICTION_DUTY``
+        — see :meth:`_warn_if_below_deadband`; a real turn model needs field data
+        we do not yet have).
+        """
         kind = goal.get("kind", "straight")
         target = abs(float(goal.get("target", 0.0)))
+        if target == 0.0:
+            return 0.0  # nothing to travel -> completes immediately (as before)
         # Clamp commanded speed to the current speed limit (software-spec.md §2.3).
-        speed = min(float(goal.get("speed", 0.5)), self._state.speed_limit)
-        speed = max(1e-3, speed)
+        duty = min(float(goal.get("speed", 0.5)), self._state.speed_limit)
+        duty = max(0.0, duty)
         if kind == "rotate":
-            return target / (self.turn_rate_dps * speed)
-        return target / (self.max_speed_mps * speed)
+            rate = self.turn_rate_dps * max(1e-3, duty)
+            return target / rate if rate > 0 else float("inf")
+        v = self._model_speed_mps(duty)
+        if v <= 0.0:
+            return float("inf")  # commanded below the motor deadband -> stalled
+        return target / v
+
+    def _warn_if_below_deadband(self, goal: dict) -> None:
+        """Log an honesty warning when a commanded duty likely will not move.
+
+        The open-loop timing has no encoders, so it cannot detect a stall or a
+        stiction-shortened turn; it commands the duty and reports a *timed*
+        completion. When the commanded (speed-limited) duty is at/below the motor
+        deadband — a straight drive that will not overcome stiction, or a rotation
+        in the stiction-dominated band where ``turn_rate_dps`` over-predicts by
+        ~5-10x — we surface a WARNING so the operator is not misled by a
+        "completed (timed, unverified)" the hardware never actually performed.
+        """
+        kind = str(goal.get("kind", "straight"))
+        duty = min(float(goal.get("speed", 0.5)), float(self._state.speed_limit))
+        if kind == "rotate":
+            if duty < config.TURN_STICTION_DUTY:
+                logger.warning(
+                    "commanded turn duty %.2f is below the stiction-dominated "
+                    "rotation floor %.2f — turn_rate_dps OVER-predicts actual "
+                    "rotation by ~5-10x here (measured 2026-07-17: 30-60 deg "
+                    "commanded delivered only 2-15 deg); the reported 'completed "
+                    "(timed, unverified)' will greatly overstate the true angle.",
+                    duty,
+                    config.TURN_STICTION_DUTY,
+                )
+            return
+        if duty <= self.duty_deadband:
+            logger.warning(
+                "commanded duty %.2f is at/below the motor deadband %.2f — the "
+                "robot will likely NOT move (measured 2026-07-17: duty 0.30 "
+                "produced zero displacement); the open-loop timing cannot detect "
+                "the stall, so the drive runs without displacement.",
+                duty,
+                self.duty_deadband,
+            )
 
     def _step_drive_goal(self, dt: float) -> None:
         """Advance the timed open-loop drive AND command the wheels.

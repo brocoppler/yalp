@@ -16,7 +16,10 @@ This module captures all of that as a tiny JSON-serialisable dataclass that the
 
 * ``left_invert`` / ``right_invert`` — flip a backwards-wired wheel,
 * ``left_trim`` / ``right_trim`` — per-wheel magnitude scaling (drift fix),
-* ``max_speed_mps`` / ``turn_rate_dps`` — the measured motion model.
+* ``max_speed_mps`` / ``turn_rate_dps`` — the measured motion model, and
+* ``duty_deadband`` / ``turn_duty_deadband`` — the commanded-duty deadband below
+  which the drive motors do not overcome stiction (measured 2026-07-17; see the
+  speed-model note in :mod:`yalp.config`).
 
 It is **pure stdlib** (``json`` + ``dataclasses`` + ``pathlib``) so it imports
 cleanly on a laptop with no hardware libraries present.
@@ -77,9 +80,23 @@ class MotorCalibration:
         Per-wheel magnitude multiplier (``1.0`` = unchanged) to correct a robot
         that veers because one side is mechanically/electrically stronger.
     max_speed_mps:
-        Measured forward speed at full throttle (m/s).
+        Measured forward speed at FULL throttle (duty 1.0), in m/s. The open-loop
+        speed model is ``v = max(0, gain * (duty - duty_deadband))`` with
+        ``gain = max_speed_mps / (1 - duty_deadband)``, so this stays the speed at
+        duty 1.0 regardless of the deadband (config.DRIVE_DUTY_DEADBAND note).
     turn_rate_dps:
-        Measured in-place rotation rate at full throttle (deg/s).
+        Measured in-place rotation rate at full throttle (deg/s). Known to
+        over-predict small turns badly below ~duty 0.5 (stiction) — see
+        ``config.TURN_STICTION_DUTY``; not corrected here.
+    duty_deadband:
+        Commanded-duty motor deadband for the SPEED model (below it the drive
+        motors stall under load). Field default ``0.27`` (the 2026-07-17 measured
+        midpoint). NOTE the field default (0.27) and the back-compat default that
+        :meth:`from_dict` applies to a calibration file MISSING this key (``0.0``)
+        differ on purpose — see :meth:`from_dict`.
+    turn_duty_deadband:
+        Reserved measured turn deadband for future tuning (``0.0`` = not yet
+        modeled; the rotation timing is unchanged).
     """
 
     left_invert: bool = False
@@ -88,6 +105,8 @@ class MotorCalibration:
     right_trim: float = 1.0
     max_speed_mps: float = 0.5
     turn_rate_dps: float = 120.0
+    duty_deadband: float = 0.27
+    turn_duty_deadband: float = 0.0
 
     def to_dict(self) -> dict:
         """Return a JSON-ready dict with normalised (bool/float) values."""
@@ -98,13 +117,30 @@ class MotorCalibration:
             "right_trim": float(self.right_trim),
             "max_speed_mps": float(self.max_speed_mps),
             "turn_rate_dps": float(self.turn_rate_dps),
+            "duty_deadband": float(self.duty_deadband),
+            "turn_duty_deadband": float(self.turn_duty_deadband),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "MotorCalibration":
-        """Build a calibration from a dict, ignoring unknown keys."""
+        """Build a calibration from a dict, ignoring unknown keys.
+
+        Back-compat for ``duty_deadband``: a calibration file written BEFORE the
+        deadband field existed (e.g. the live robot's ``{max_speed_mps: 0.29,
+        right_trim: 0.90}``) was measured under the OLD pure-linear model
+        ``v = max_speed_mps * duty``. Retroactively imposing the ``0.27`` field
+        default on such a file would nearly halve its speed at the operating duty
+        (duty 0.45: ``0.29 * 0.45 = 0.13`` m/s -> ``0.07`` m/s) and make every
+        open-loop drive overshoot ~2x. So a MISSING key defaults to ``0.0`` — the
+        deadband is disabled and the model degenerates to the exact old linear
+        behaviour, reproducing measured reality (duty 0.45 with max_speed_mps 0.29
+        -> ~0.13 m/s, unchanged). A file that DOES carry the key uses it verbatim.
+        """
         known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        kwargs = {k: v for k, v in data.items() if k in known}
+        if "duty_deadband" not in data:
+            kwargs["duty_deadband"] = 0.0
+        return cls(**kwargs)
 
     def save(self, path: Optional[PathLike] = None) -> Path:
         """Write this calibration as pretty JSON, creating parent dirs.

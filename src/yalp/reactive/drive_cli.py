@@ -69,9 +69,14 @@ def add_parser(subparsers) -> None:
     parser.add_argument(
         "--speed",
         type=float,
-        default=0.3,
+        default=0.45,
         metavar="FRACTION",
-        help="Drive speed as a 0..1 fraction of full throttle (default: 0.3).",
+        help=(
+            "Drive speed as a 0..1 fraction of full throttle (default: 0.45). "
+            "The old 0.3 default is BELOW the measured motor deadband (~0.27) — "
+            "duty 0.30 stalled on hardwood under load, so 0.45 is the lowest duty "
+            "that moves reliably. A --speed at/below the deadband prints a warning."
+        ),
     )
     parser.add_argument(
         "--host",
@@ -323,7 +328,7 @@ def run(args) -> int:
     from ..contract.messages import Intent, Mode
 
     target = float(getattr(args, "target", 1.6))
-    speed = min(1.0, max(0.0, float(getattr(args, "speed", 0.3))))
+    speed = min(1.0, max(0.0, float(getattr(args, "speed", 0.45))))
     host = getattr(args, "host", None) or config.IPC_HOST
     port = int(getattr(args, "port", None) or config.IPC_PORT)
     timeout = max(0.1, float(getattr(args, "timeout", 45.0)))
@@ -355,6 +360,13 @@ def run(args) -> int:
             "ultrasonic — collision-stop CANNOT protect a backward move. The "
             "wheels will reverse open-loop. Proceed only if the path behind is "
             "known clear."
+        )
+    if speed <= config.DRIVE_DUTY_DEADBAND:
+        print(
+            f"  !!! LOW DUTY: commanded duty {speed:.2f} is at/below the motor "
+            f"deadband {config.DRIVE_DUTY_DEADBAND:.2f} — the robot will likely "
+            "NOT move (measured 2026-07-17: duty 0.30 produced zero displacement; "
+            "duty 0.45 moves reliably). Raise --speed to at least 0.45."
         )
     print()
 
