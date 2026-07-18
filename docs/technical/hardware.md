@@ -192,6 +192,16 @@ For a bot that *turns and follows* — and a future version near a 5–8-year-ol
 
 **Correction — milestone-J bench demo distance.** The milestone-J bench demo's served trip distance (0.2815 m) was subject to the same gpiozero inflation — the true hand distance at trip was roughly half that (~0.14 m). The reflex logic (SAFE_STOP latching, goal → 'blocked', sticky latch, zero reverse commands) and all latch behavior remain fully validated; only the distance scale was wrong.
 
+**Field findings (2026-07-17, afternoon — drivetrain tuning session).**
+
+1. **Motor deadband confirmed under load on hardwood.** A 5.4 s commanded drive at duty 0.30 produced zero displacement — frame- and sonar-verified stall, no motion at all. Duty 0.45 is reliably above the stiction floor. Speed at duty 0.45: 0.155 m/s on fresh batteries, drooping to 0.114 m/s after ~28 runs (~26% sag across one session). This is the measured origin of the `duty_deadband` calibration field (field default 0.27, the stall/move midpoint) and `DRIVE_DUTY_DEADBAND` config constant added to the open-loop speed model in commit `ebbd727`.
+
+2. **Reverse asymmetry and pivot stiction.** Reverse is slower than forward and pulls the nose right. In-place pivots at duty 0.45 are stiction-dominated: commanded 30–60° delivered only 2–15° — `turn_rate_dps` (120 dps default) over-predicts actual rotation by 5–10×. Field data is insufficient for a full turn model; commit `ebbd727` adds `TURN_STICTION_DUTY` (0.5) and a reserved `turn_duty_deadband` calibration field for future tuning.
+
+3. **Field calibration committed to Izzy.** Post-tuning calibration written to `~/.config/yalp/calibration.json` (pre-tune backup at `calibration.json.bak-pretune`): `max_speed_mps 0.29`, `right_trim 0.90`. Verified post-tune: commanded 1.0 m delivered 0.94 m sonar-true; veer reduced to ~7 cm/m; SAFE_STOP re-verified at served 0.28 m. A fresh-battery confirmation run is still recommended before fully trusting the trim value.
+
+4. **Sonar: parked readings can lock onto a floor-graze constant.** With the robot stationary, the sensor can settle on a steady 0.35–0.51 m echo while the true wall is farther away. True surfaces track correctly during motion; the floor-graze echo stays constant. Candidate future filter: "constant-while-moving = graze, discount it." Backlog idea — not implemented.
+
 > **RISK —** A single front HC-SR04 leaves the robot blind to the sides, the rear, glass, and drop-offs. It validates the reflex but is not adequate collision coverage for autonomous turning/following, and definitely not for the kid version.
 
 > **OPEN —** Final sensor count and placement undecided. Leading candidate: 2–3 HC-SR04s (front + corners) for v1.x, with an IR cliff sensor considered before the bot is ever left running near stairs or a child. Decide once the chassis geometry is real.

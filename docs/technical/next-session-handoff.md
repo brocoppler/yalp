@@ -1,10 +1,12 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-07-17, morning session (floor drive earned).
-**One-line status:** First floor drive MILESTONE EARNED 2026-07-17 — three
-frame-verified laps, true-range sonar throughout, SAFE_STOP at served 0.30 m
-(reason `'obstacle'`), sticky latch, live operator-in-lane refusals. The body
-and reflexes are done; next up is the mind: `yalp see` vision Q&A.
+**Last updated:** 2026-07-17, afternoon session (driving tuned + deadband code
+landed + first `yalp see` on-robot run).
+**One-line status:** Drivetrain tuned under load — deadband at duty 0.30 confirmed,
+duty 0.45 reliable, calibration committed. Deadband code landed (commit `ebbd727`).
+First `yalp see` run on Izzy: frame captured, accurate scene description returned,
+independently verified — milestone C done on real hardware. Road: richer `yalp see`
+session and the path to person-following.
 
 ---
 
@@ -48,46 +50,79 @@ and reflexes are done; next up is the mind: `yalp see` vision Q&A.
     sending intent).
   - Frame-verified motion gate before trusting any motor run.
 
+- **Drivetrain tuned (2026-07-17 afternoon).** Motor stall confirmed at duty
+  0.30 — zero displacement over a 5.4 s commanded drive (frame- and
+  sonar-verified). Duty 0.45 reliably above stiction. Speed sag measured:
+  0.155 m/s fresh → 0.114 m/s after ~28 runs (~26% across one session —
+  recharge between long sessions). Pivots stiction-dominated at duty 0.45:
+  commanded 30–60° delivers 2–15°. Reverse is slower than forward and
+  pulls the nose right. Deadband code landed in commit `ebbd727` (see Key
+  facts). Calibration written to `~/.config/yalp/calibration.json` (backup
+  at `calibration.json.bak-pretune`): `max_speed_mps 0.29`,
+  `right_trim 0.90`. Post-tune verification: commanded 1.0 m → 0.94 m
+  sonar-true, veer ~7 cm/m, SAFE_STOP re-verified at served 0.28 m.
+
+- **First `yalp see` on-robot run (2026-07-17 afternoon).** `yalp see` ran
+  from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the
+  C270 webcam captured a frame; the model returned an accurate scene
+  description of the wall corner, baseboard, and floor Izzy faced —
+  verified against the frame by an independent reviewer. Milestone C
+  done-signal satisfied; PASSED 2026-07-17 in the roadmap.
+
 ---
 
 ## Defect backlog (minor — none blocking)
 
 1. **Open-loop timed distance over-reports ~1.8×:** ~0.9 m actual on a
-   1.6 m commanded goal. Fix: recalibrate the speed constant, or add
-   encoders. Side-effect: goal-timer-vs-reflex race on long approaches (the
-   reflex wins cleanly but the timer fires early). Non-blocking.
+   1.6 m commanded goal. Fix: recalibrate the speed constant (now
+   `max_speed_mps 0.29` in calibration), or add encoders. Side-effect:
+   goal-timer-vs-reflex race on long approaches (the reflex wins cleanly
+   but the timer fires early). Non-blocking.
 
-2. **Leftward veer** under way — motor trim calibration needed.
+2. **Veer** under way — tuned to `right_trim 0.90` this session; veer now
+   ~7 cm/m. A fresh-battery confirmation run is recommended before declaring
+   the trim final (battery sag shifts the asymmetry).
 
 3. **Floor-graze mode ~0.6 m** — the sensor module's bottom edge leans
    forward a few degrees, putting the lower beam skirt on the hardwood ~0.6 m
    out. Permanent fix: shim the module's bottom edge up 1–2 degrees. Benign
    meanwhile: it can only stop her early, never late.
 
-4. **Retinue-side (not this repo):** tasks that depend on archived task IDs
+4. **Battery-sag awareness** — speed droops ~26% over ~28 runs in one
+   session (0.155 → 0.114 m/s at duty 0.45). Recharge between long sessions.
+   Future: recharge flag or per-session recal.
+
+5. **Rotation model** — `turn_rate_dps` 120 over-predicts small turns
+   5–10× below ~duty 0.5 (stiction). Reserving a `turn_duty_deadband`
+   calibration field and `TURN_STICTION_DUTY` config constant for future
+   tuning (commit `ebbd727`); full model deferred.
+
+6. **Retinue-side (not this repo):** tasks that depend on archived task IDs
    stall. Known workaround: clear `depends_on` on the stalled task.
 
 ---
 
-## THE NEXT TASK: `yalp see` — vision Q&A
+## THE NEXT TASK: richer `yalp see` session and the road to person-following
 
-The `ANTHROPIC_API_KEY` is already in izzy's `.env` (mode 600, gitignored).
-The camera is proven — it diagnosed the sonar saga and has been the motion
-gate all session.
+The first `yalp see` on-robot run is done — frame captured, accurate scene
+description returned, independently verified (2026-07-17 afternoon). The
+camera + LLM seam is live. What's next is deepening it.
 
-**Suggested first session:**
+**Suggested next session:**
 
-1. Run `yalp see`.
-2. Ask her what's in front of her.
-3. Compare the answer with a live sonar reading.
-
-That's the first camera + sonar + LLM moment.
+1. Run `yalp see` with a free-text question (e.g. "what obstacles are near
+   the floor?") and compare the answer with a live sonar reading.
+2. Try `yalp see --speak` — verify the TTS path on Izzy end-to-end.
+3. Multiple scenes / questions in one session — prove the interaction loop,
+   not just the single-shot capture.
 
 **After that, in order:**
 
-- **Person-following** — Gate H measured GO at ~8.8× margin. The detection
-  path is already exercised.
-- **Voice** — on the C270 mic (same USB device as the camera).
+- **Person-following (M)** — Gate H measured GO at ~8.8× margin; the
+  detection path is already exercised on the laptop. Drive the bench loop
+  on Izzy.
+- **Voice** — push-to-talk STT (`yalp agent --listen`) on the C270 mic
+  (same USB device as the camera).
 
 ---
 
@@ -110,13 +145,28 @@ That's the first camera + sonar + LLM moment.
   `red = VM = breadboard J1`, `black = J3`, caps' + legs on the VM column.
   See `as-built-wiring.md` §3.3 before touching anything in J1.
 
-- **Settled facts — do NOT re-diagnose:** `~/.config/yalp/calibration.json`
-  has `left_invert=true, right_invert=true`; DRV8833 IN/IN driver fix
-  confirmed; camera `/dev/video0`; `.env` holds `ANTHROPIC_API_KEY` (mode
-  600, gitignored). `GpiodUltrasonicSensor` auto-selected when
-  `python3-libgpiod` v2 is present (force with
-  `YALP_ULTRASONIC_BACKEND=gpiod`; chip via `YALP_GPIOCHIP`). Milestones H,
-  J, and floor-drive are all DONE — do not re-run them to prove the stack.
+- **Calibration state (post 2026-07-17 tuning):** `~/.config/yalp/calibration.json`
+  has `left_invert=true, right_invert=true, max_speed_mps=0.29,
+  right_trim=0.90`. Pre-tune backup at `calibration.json.bak-pretune`.
+  The `duty_deadband` key is NOT in the live calibration file (pre-deadband
+  file: from_dict defaults it to 0.0, preserving the measured linear
+  behavior — see below).
+
+- **Deadband code landed (commit `ebbd727`):** `MotorCalibration` now has
+  `duty_deadband` (field default 0.27) and `turn_duty_deadband` (default 0.0)
+  fields; `config.py` adds `DRIVE_DUTY_DEADBAND` (0.27), `TURN_STICTION_DUTY`
+  (0.5), `TURN_DUTY_DEADBAND` (0.0). Back-compat: `from_dict` defaults a
+  MISSING `duty_deadband` to 0.0 (not 0.27), so the live calibration file
+  reproduces the old linear model exactly. `yalp drive` default `--speed`
+  raised from 0.3 → 0.45. Stall/rotation warnings added to CLI and backend.
+
+- **Settled facts — do NOT re-diagnose:** DRV8833 IN/IN driver fix confirmed;
+  camera `/dev/video0`; `.env` holds `ANTHROPIC_API_KEY` (mode 600, gitignored)
+  — key loads via `load_dotenv` when running `yalp see` from `~/yalp`.
+  `GpiodUltrasonicSensor` auto-selected when `python3-libgpiod` v2 is present
+  (force with `YALP_ULTRASONIC_BACKEND=gpiod`; chip via `YALP_GPIOCHIP`).
+  Milestones H, J, floor-drive, and C (`yalp see` first-light) are all DONE —
+  do not re-run them to prove the stack.
 
 - **Jam signature (unchanged):** commanded pivot with zero scene change in
   camera frames = wheel obstruction or dead channel, not a software bug. Run
@@ -133,8 +183,10 @@ That's the first camera + sonar + LLM moment.
 
 ## The road after
 
-`yalp see` (vision Q&A — camera + sonar + LLM first moment) → person-following
-(Gate H GO at ~8.8× margin) → voice on the C270 mic → trim calibration
-(fix leftward veer) → encoder addition or speed-constant recalibration (fix
-open-loop distance over-reporting) → sensor shim (clean floor headroom
-telemetry).
+Richer `yalp see` session (interactive Q&A, `--speak` path, multiple scenes)
+→ person-following (M — Gate H GO at ~8.8× margin, laptop-proven detection
+path) → voice on the C270 mic (`yalp agent --listen`) → fresh-battery
+confirmation run for `right_trim 0.90` → encoder addition or speed-constant
+recalibration (fix open-loop distance over-reporting) → rotation model tuning
+(`turn_duty_deadband`, `TURN_STICTION_DUTY` hooks are in code) → sensor shim
+(clean floor headroom telemetry).

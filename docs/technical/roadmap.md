@@ -23,8 +23,8 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 > **Phase 1 (the brain) is COMPLETE and laptop-tested — 597+ tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
-> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **12 of 16
-> rungs are green (0, A, B, C, D, E + Pi-hardware rungs F, G, H, I, J, and first floor drive)** plus voice
+> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **13 of 16
+> rungs are green (0, A, B, C, D, E + Pi-hardware rungs F, G, H, I, J, first floor drive, and `yalp see` Pi-first-light)** plus voice
 > OUTPUT *and* INPUT (milestone O is now functionally done on the laptop); the remaining
 > hardware rungs (K–N) are **gated on the Pi 5 + Phase 2**. **Phase 2 / Wave 3
 > hardware bring-up is UNDERWAY on the real robot — see the next note.** The full §3 status
@@ -49,7 +49,7 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 > **milestone H (Hello Motors) PASSED 2026-07-15** on the replacement Pi 5 after a PMIC
 > hardware failure required a board swap — both drive wheels rolling forward together and
 > in-place LEFT/RIGHT turns confirmed, driven through `GpiozeroMotorDriver` and the saved
-> motor calibration (`left_invert=True`, `right_invert=True`). And now **milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP latched at 0.2815 m (< 0.30 m threshold) within ~50 ms; goal 'blocked'; latch persisted 76/76 polls; no reverse; grace fix (commit de48495) verified 18/18 at 15 Hz. **First floor drive ✅ PASSED 2026-07-17. NEXT: `yalp see` (vision Q&A on hardware) → person-following → voice input; combined-load gate (K) → follow on hardware (M) run in parallel.**
+> motor calibration (`left_invert=True`, `right_invert=True`). And now **milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP latched at 0.2815 m (< 0.30 m threshold) within ~50 ms; goal 'blocked'; latch persisted 76/76 polls; no reverse; grace fix (commit de48495) verified 18/18 at 15 Hz. **First floor drive ✅ PASSED 2026-07-17. `yalp see` ✅ PASSED 2026-07-17** (first-light: on-robot frame capture + accurate scene description, key via `.env`, independently verified — milestone C). **NEXT: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M) run in parallel.**
 
 **DONE — the laptop phase (run any of these today):**
 
@@ -98,13 +98,12 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 12 of 16 green — the entire laptop phase, all four Pi-hardware bring-up
-> rungs (F, G, H, I), milestone J (collision-stop), first floor drive, and milestone O are DONE.** Steps **0, A, B, C, D, E** are green
+> **Progress: 13 of 16 green — the entire laptop phase, all four Pi-hardware bring-up
+> rungs (F, G, H, I), milestone J (collision-stop), first floor drive, milestone C (vision, PASSED 2026-07-17 on hardware), and milestone O are DONE.** Steps **0, A, B, C, D, E** are green
 > (plus voice OUTPUT **and** INPUT and the full follow brain — the whole voice → follow →
 > voice-stop loop works end to end), all laptop-tested (**597+ tests passing**); and on the
 > **real Pi 5 ("Izzy")** — **GPIO first light (G)**, **HC-SR04 divider (I)**, **Gate E
-> power/brownout (F)**, **Hello Motors (H, PASSED 2026-07-15)**, **collision-stop reflex (J, PASSED 2026-07-15)**, and now **first floor drive (PASSED 2026-07-17)** are all green, with
-> **B (camera)** and **C (vision)** re-confirmed on Izzy. **Next target: `yalp see` (vision Q&A on hardware) → person-following → voice input; combined-load gate (K) → follow on hardware (M).** Update this line as each
+> power/brownout (F)**, **Hello Motors (H, PASSED 2026-07-15)**, **collision-stop reflex (J, PASSED 2026-07-15)**, **first floor drive (PASSED 2026-07-17)**, and **`yalp see` (C, PASSED 2026-07-17)** are all green. **Next target: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M).** Update this line as each
 > done-signal goes green.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
@@ -112,7 +111,7 @@ the Phase 1 hardware already in hand.
 | **0** | **Order Phase 2 parts now** ✅ ORDERED 2026-06-20 | Phase 2 order placed (motors, driver, ball caster, HC-SR04, divider resistors, battery + holder, breadboard/wiring, 470–1000 µF + 0.1 µF caps, glue/zip-ties) the day Step A starts; order/tracking numbers recorded. Parts ship in parallel with laptop work. | Laptop / none | |
 | **A** ✅ DONE | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | An agent stub and a fake reactive stub exchange **one hand-authored Intent and one RobotState over the REAL socket**, both printed to console. Documentation alone is **NOT** done. **Verify:** `python scripts/contract_demo.py` (prints the handshake and 'STEP A OK'); `pytest tests/test_contract.py`. | Laptop | |
 | **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
-| **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
+| **C** ✅ DONE *(Pi, 2026-07-17)* | **It sees and talks** | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). `yalp see` ran on-robot from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the C270 webcam captured a frame and the model returned an accurate scene description of the wall corner, baseboard, and floor Izzy faced — verified against the frame by an independent reviewer. Done-signal satisfied: photo → vision model → answer printed to console, all on real hardware. **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
 | **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (597+ passing). | Laptop | |
 | **F** ✅ DONE *(Pi, 2026-07-03)* | 🚦 **Gate E — Power / brownout bring-up** | **PASSED 2026-07-03** via the §6 staged bring-up on the assembled robot ("Izzy"). Stage 1 (Pi alone): `get_throttled` 0x0. Stage 2 (motor rail alone, logic disconnected): rail 5.55 V; both motors spun both directions via hand-jumpered inputs. Stage 3 (joined, stall-heavy): **two runs of 24 full-duty reversal cycles** (`GpiozeroMotorDriver`, `drv8833` kind) with repeated thumb-stalls including both motors at once — zero Pi resets, SSH session survived, `get_throttled` 0x0 on every cycle, motors never stuttered. Criterion 3 (rail above driver logic VIH under stall) was **verified behaviorally, not metered** — probe access was blocked by the assembled body; the driver never faltered under full both-motor stall, which bounds the sag above the DRV8833's logic/UVLO thresholds. Static rail 5.55 V; 1000 µF bulk installed preemptively. As-built wiring in `as-built-wiring.md` §3. | Pi 5 + Phase 2 | |
@@ -267,14 +266,13 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
 > (597+ tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
-> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **12 of 16 rungs green** — the entire
+> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **13 of 16 rungs green** — the entire
 > laptop phase (**0, A, B, C, D, E**), all four Pi bring-up rungs (**F** Gate E, **G** GPIO
-> first light, **H** Hello Motors, **I** HC-SR04 divider), **J** (collision-stop reflex), and now **first floor drive** (PASSED 2026-07-17), with **B (camera)** and
-> **C (vision)** re-confirmed on Izzy itself — plus voice OUTPUT *and* INPUT and the full
+> first light, **H** Hello Motors, **I** HC-SR04 divider), **J** (collision-stop reflex), **first floor drive** (PASSED 2026-07-17), and **`yalp see` (C, PASSED 2026-07-17)** on real hardware — plus voice OUTPUT *and* INPUT and the full
 > follow brain, so the whole **voice → follow → voice-stop loop works end to end** (milestone
 > O is functionally done on the laptop). **Milestone H (Hello Motors) PASSED 2026-07-15** on
 > the replacement Pi 5 — both drive wheels forward, in-place LEFT/RIGHT turns, driven through
-> `GpiozeroMotorDriver` and saved motor calibration. **Milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP at 0.2815 m (< 0.30 m threshold, ~50 ms halt), goal status 'blocked', sticky latch (76/76 polls), no reverse; grace fix (commit de48495) verified 18/18. **First floor drive PASSED 2026-07-17** — three moving laps on hardwood, ~2 m true displacement, sonar TRUE throughout, SAFE_STOP at 0.30 m, zero reverse, pre-flight gate refused retry. **Next targets: `yalp see` (vision Q&A on hardware) → person-following → voice input; combined-load gate (K) → follow on hardware (M). Laptop brain covers all
+> `GpiozeroMotorDriver` and saved motor calibration. **Milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP at 0.2815 m (< 0.30 m threshold, ~50 ms halt), goal status 'blocked', sticky latch (76/76 polls), no reverse; grace fix (commit de48495) verified 18/18. **First floor drive PASSED 2026-07-17** — three moving laps on hardwood, ~2 m true displacement, sonar TRUE throughout, SAFE_STOP at 0.30 m, zero reverse, pre-flight gate refused retry. **`yalp see` PASSED 2026-07-17** — on-robot frame capture + accurate scene description, independently verified, milestone C done on real hardware. **Next targets: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M). Laptop brain covers all
 > three headline behaviors:**
 > **see** (`yalp see` — webcam still → Claude → spoken-style description,
 > `--speak`/`--image`/free-text), **agent** (`yalp agent` — full deliberative loop D1–D3
@@ -319,11 +317,13 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 
 **DONE ✅ — first floor drive (off the stand, full reactive stack, collision-stop live) PASSED 2026-07-17** — three moving laps on hardwood (~2 m true displacement), sonar TRUE throughout, SAFE_STOP live at 0.30 m, pre-flight gate refused retry, zero reverse. See the §1 ladder rung for full pass record.
 
-**NEXT TARGET — `yalp see` (vision Q&A on hardware), then person-following, then voice input:**
+**DONE ✅ — `yalp see` first-light (2026-07-17, afternoon session).** `yalp see` ran on-robot from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the C270 webcam captured a frame and the model returned an accurate scene description of the wall corner, baseboard, and floor Izzy faced — verified against the frame by an independent reviewer. Milestone C done-signal fully satisfied on real hardware; **PASSED 2026-07-17** — see the §1 C rung for the pass record.
 
-1. **`yalp see` on hardware:** confirm `yalp see` (vision Q&A — webcam still → Claude → description) runs cleanly on Izzy end-to-end, including the `--speak` path.
-2. **Then person-following on hardware (M):** the laptop-proven track-by-detection pipeline drives Izzy in a bench loop — Gate K (combined-load latency) confirmed as part of this.
-3. **Then voice input on hardware (O / Pi):** push-to-talk STT (`yalp agent --listen`) on the Pi with mic attached.
+**NEXT TARGET — richer `yalp see` session, then person-following, then voice input:**
+
+1. **Richer `yalp see` session:** interactive Q&A, multiple scenes, `--speak` path; the road toward the camera + sonar + LLM first-moment vision loop.
+2. **Person-following on hardware (M):** the laptop-proven track-by-detection pipeline drives Izzy in a bench loop — Gate K (combined-load latency) confirmed as part of this.
+3. **Voice input on hardware (O / Pi):** push-to-talk STT (`yalp agent --listen`) on the Pi with mic attached.
 4. **`RealReactiveBackend`** (already fully implemented — tick loop, collision-stop,
    motor paths, `MotorWatchdog`) is floor-proven (first floor drive). No backend code remains to write.
 
