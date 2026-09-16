@@ -30,6 +30,7 @@ DOCS = [
     "technical/roadmap.md",
     "technical/hardware-runbook.md",
     "technical/as-built-wiring.md",
+    "technical/chassis-v2.md",
     "archive/initial-plan.md",
 ]
 

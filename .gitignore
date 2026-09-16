@@ -51,3 +51,4 @@ models/
 
 # --- OS / editor cruft ---
 .DS_Store
+.claude/worktrees/

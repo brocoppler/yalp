@@ -186,6 +186,7 @@
     <a class="doc" data-doc="roadmap.md">roadmap.md</a>
     <a class="doc" data-doc="hardware-runbook.md">hardware-runbook.md</a>
     <a class="doc" data-doc="as-built-wiring.md">as-built-wiring.md</a>
+    <a class="doc" data-doc="chassis-v2.md">chassis-v2.md</a>
 
     <div class="grp">Archive</div>
     <a class="doc" data-doc="initial-plan.md">initial-plan.md</a>
@@ -1129,6 +1130,52 @@ For a bot that *turns and follows* — and a future version near a 5–8-year-ol
 
 > **NOTE (as-built on Izzy) —** The HC-SR04 is **wired and working on the real Pi 5** (`yalp hwtest --check ultrasonic` returns real distances). The as-built divider uses **1 kΩ + 1.5 kΩ, not the 1 kΩ + 2 kΩ specced below** — the build kit had no 2 kΩ resistor. 1 kΩ + 1.5 kΩ yields **exactly 3.0 V at the tap** (5 V × 1.5 / (1 + 1.5) = 3.0 V), which is slightly *better*: lower total impedance → cleaner edges, and more margin under the 3.3 V GPIO limit while still a solid logic-HIGH for ECHO. This is a **purely physical substitution — software and pin assignments (TRIG = GPIO5, ECHO = GPIO6) are unchanged.** The full per-jumper, wire-color, physical-pin record (plus the loose-connection and gpiozero software-timing troubleshooting notes) lives in `as-built-wiring.md`.
 
+**Field findings (2026-07-15, Pi 5).** First full on-hardware session with Izzy running `real_backend.py` end-to-end. Three things that change the operational picture:
+
+1. **Poll rate — 15 Hz confirmed; slow-poll advice is obsolete.** Software-timed 15 Hz polling works cleanly on the Pi 5 in open-room conditions. Raw echo-timeout rate measured ~10–14% at *both* 6 Hz and 15 Hz — timeouts are per-ping phenomena (geometry, line-of-sight), not poll-rate overlap artifacts. Any advice to slow to 5–6 Hz is obsolete since the grace-window fix (commit `de48495`); below ~6.7 Hz the 150 ms coasting window is mathematically inert because the re-pulse interval already exceeds it, so the fix only helps at ≥15 Hz. Measured: at 15 Hz, 18/18 open-room timeouts coasted without issuing a phantom STOP; at 6 Hz stock config, 0/10 absorbed (all leaked as STOP); at 6 Hz with 400 ms / 4-miss bounds, 8/8 absorbed. **Run at 15 Hz.**
+
+2. **Prior-session ~20-consecutive-timeout bursts did not recur.** Across ~1 100 real pings the worst burst observed was 3 consecutive misses. The earlier bursts appear to have been a poll-rate / grace-window interaction, not a sensor instability.
+
+3. **Aim-geometry blind spot — critical for floor-drive operations.** With the sensor slightly downward-tilted, two real obstacles were invisible in the served data: a curved cat fountain at ~0.9 m (sensor confidently read a background echo at 3.04 m) and a solid obstacle at ~0.46 m (sensor returned a dead-stable background echo at 1.14 m, 100% valid). The beam locks onto strong background echoes and misses low, curved, or off-axis foreground objects. By contrast, a palm held dead-centre tracked cleanly (100% valid) all the way through the SAFE_STOP threshold — milestone-J bench demo tripped at 0.2815 m. Slight downward tilt also produced steady floor-graze echoes (~2.6 m in a >4 m open room). **Implication:** treat the HC-SR04 as a last-resort centred reflex, not obstacle perception; mount height, tilt, and the obstacle's acoustic profile determine what it can see. Keep a human brake (hand over sensor or pack switch) for all early floor-drive sessions.
+
+**Field findings (2026-07-16, Pi 5).** First floor-drive session — Izzy moving autonomously on hardwood under supervision. Four clusters of findings from the run:
+
+1. **AIM IS EVERYTHING — the yaw-misaim saga.** A hand-adjustment of the sensor bracket to "level" the pitch left the transducers rotated ~90–140° CCW off the nose axis. Symptom signature: 100%-valid, tight-spread readings of a surface that does not exist in front of the robot (a wall in the left-rear quadrant at ~2 m), while real frontal targets at 0.5–1 m returned nothing. Diagnosed by cross-referencing camera frames with sonar passes while pivoting the robot: readings tracked yaw and lateral displacement exactly as a flat off-axis wall would. **Procedure going forward:** after *any* physical adjustment of the sensor mount, verify both pitch and yaw axes — run a live read against a known frontal target at ~1 m (expect the true range) before trusting any drive. A confident, stable, plausible reading is **not** evidence the sensor points forward.
+
+2. **Acoustic materials matter — measured, not theoretical.**
+   - **Flat smooth surfaces** (glossy painted door, hardwood floor) are specular mirrors: square-on they return strongly; a few degrees off-axis they deflect the beam away entirely. Measured: transducer 11.4 cm from a door with slight down-tilt returned a rock-steady 44.5 cm multipath ghost (door → floor → door bounce, ~4× the true gap); the same door at ~1 m was completely invisible off-square.
+   - **Woven-fabric surfaces** (a black storage cube) are absorbers: they return no echo at any angle and are invisible to the sonar while still physically blocking the path — a collision-hazard class of their own. Vision or contact is the only defence.
+   - **Curved/soft scatterers** (a human palm or hand) return reliably at any angle — excellent calibration and test targets.
+   - **A human body moving through the beam path** corrupts readings into heavy timeout bursts: measured 38% raw miss rate with 1.1–1.2 s blind streaks during passes.
+
+3. **Motion improves echo quality — counterintuitive, measured.** A position that produced a 12% static raw-miss rate produced 0% misses while the robot was driving through it. Blind zones are position/geometry pathologies (grazing-angle nulls), not vibration artefacts. Do not assume driving degrades sensor quality.
+
+4. **Ops notes from the floor drives.**
+   - **Startup-blind latch.** A reactive stack started at a spot where the first reads are timeouts latches `SAFE_STOP` (reason `echo_timeout`, placeholder distance 4.0 m) from tick 1 and stays latched until the first adopted intent lifts it. Harmless (wheels idle), but clients and drivers must expect a blocked initial state and not treat it as fatal.
+   - **Timed goals are unverified.** `DRIVE_GOAL 'straight'` progress is a time fraction against calibrated speed (~0.15 m/s at `speed 0.3`); completion is timed, not position-confirmed. Measured open-loop travel ran ~20% short of commanded distance on hardwood.
+   - **Stiction asymmetry at duty 0.3 on hardwood.** Forward reliably breaks stiction; backward and right-pivot bursts often do not (caster/drivetrain asymmetry). Plan manoeuvres accordingly.
+   - **Supervised-experiment grace config.** `YALP_ULTRASONIC_GRACE_MS=20000` combined with `YALP_ULTRASONIC_GRACE_MAX_MISSES=100000` disables blindness-stops while keeping the valid-echo distance trigger live — used for a supervised floor drive with a human as backstop. **Never a default; env-only, per-run.**
+
+**Field findings (2026-07-16, late evening — root cause confirmed and gpiod driver shipped).**
+
+> **⚠️ SAFETY — the gpiozero ultrasonic backend must not be used as the Pi 5 collision reflex. `GpiodUltrasonicSensor` is now the auto-selected default when `python3-libgpiod` v2 is present.**
+
+**ROOT CAUSE of two days of ultrasonic anomalies: gpiozero Python-side echo timing on Pi 5 manufactures even-multiple range inflation.** Proven by simultaneous capture: kernel-timestamped `libgpiod` v2 edge events showed 50/50 clean single echo pulses at true range (29.0–29.6 cm on a 30 cm box) while gpiozero read 116–118 cm on the same scene — a 4× inflation at the ~0.30 m test distance and 2× at ~0.84 m. The inflation is even-multiple because Python on a non-realtime OS measures a second (or fourth) full round-trip instead of the first. **With the gpiozero backend on Pi 5, served distance is 2–4× true: `SAFE_STOP` at the served 0.30 m threshold fires at ~7–15 cm TRUE distance — at or after contact. The gpiozero ultrasonic backend must not be trusted as the collision reflex on Pi 5.** Exonerated: the HC-SR04 module, the 1 kΩ/1.5 kΩ level-shifter divider, and all wiring are clear — the defect is purely in gpiozero's Python-side echo timing. The new `GpiodUltrasonicSensor` driver (`src/yalp/reactive/hardware.py`) is auto-selected by `make_ultrasonic_sensor()` when `python3-libgpiod` v2 is importable and a chip is discoverable; `YALP_ULTRASONIC_BACKEND=gpiod|gpiozero` forces either; `YALP_GPIOCHIP` selects the chip by path, index, or label. Validation acceptance criterion: a rigid box at 30 cm must read ~29–31 cm; the field acceptance run measured 100/100 valid, median 29.0 cm, stdev 0.24 cm at 15 Hz.
+
+**RETRACTION — "sonar boresight ~40° left" (earlier session handoff).** The handoff conclusion that the transducer was physically misaimed ~35–45° left of the wheel axis was a gpiozero inflation artifact, not a real beam deflection. The pivot-sweep "left wall track" re-reads as 2× a shoe/kettlebell cluster dead ahead; the quilt/towel falsification test re-reads as the door at 2.08× true range. The HC-SR04 module and its mounting bracket are aimed correctly. Physical aperture hygiene (verify aim with live data against a known frontal target after any mount adjustment, keep cans clear of cardboard edges, maintain flat mounting) remains good practice — but was secondary, not the primary defect.
+
+**Correction — milestone-J bench demo distance.** The milestone-J bench demo's served trip distance (0.2815 m) was subject to the same gpiozero inflation — the true hand distance at trip was roughly half that (~0.14 m). The reflex logic (SAFE_STOP latching, goal → 'blocked', sticky latch, zero reverse commands) and all latch behavior remain fully validated; only the distance scale was wrong.
+
+**Field findings (2026-07-17, afternoon — drivetrain tuning session).**
+
+1. **Motor deadband confirmed under load on hardwood.** A 5.4 s commanded drive at duty 0.30 produced zero displacement — frame- and sonar-verified stall, no motion at all. Duty 0.45 is reliably above the stiction floor. Speed at duty 0.45: 0.155 m/s on fresh batteries, drooping to 0.114 m/s after ~28 runs (~26% sag across one session). This is the measured origin of the `duty_deadband` calibration field (field default 0.27, the stall/move midpoint) and `DRIVE_DUTY_DEADBAND` config constant added to the open-loop speed model in commit `ebbd727`.
+
+2. **Reverse asymmetry and pivot stiction.** Reverse is slower than forward and pulls the nose right. In-place pivots at duty 0.45 are stiction-dominated: commanded 30–60° delivered only 2–15° — `turn_rate_dps` (120 dps default) over-predicts actual rotation by 5–10×. Field data is insufficient for a full turn model; commit `ebbd727` adds `TURN_STICTION_DUTY` (0.5) and a reserved `turn_duty_deadband` calibration field for future tuning.
+
+3. **Field calibration committed to Izzy.** Post-tuning calibration written to `~/.config/yalp/calibration.json` (pre-tune backup at `calibration.json.bak-pretune`): `max_speed_mps 0.29`, `right_trim 0.90`. Verified post-tune: commanded 1.0 m delivered 0.94 m sonar-true; veer reduced to ~7 cm/m; SAFE_STOP re-verified at served 0.28 m. A fresh-battery confirmation run is still recommended before fully trusting the trim value.
+
+4. **Sonar: parked readings can lock onto a floor-graze constant.** With the robot stationary, the sensor can settle on a steady 0.35–0.51 m echo while the true wall is farther away. True surfaces track correctly during motion; the floor-graze echo stays constant. Candidate future filter: "constant-while-moving = graze, discount it." Backlog idea — not implemented.
+
 > **RISK —** A single front HC-SR04 leaves the robot blind to the sides, the rear, glass, and drop-offs. It validates the reflex but is not adequate collision coverage for autonomous turning/following, and definitely not for the kid version.
 
 > **OPEN —** Final sensor count and placement undecided. Leading candidate: 2–3 HC-SR04s (front + corners) for v1.x, with an IR cliff sensor considered before the bot is ever left running near stairs or a child. Decide once the chassis geometry is real.
@@ -1727,30 +1774,33 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 > **Phase 1 (the brain) is COMPLETE and laptop-tested — 597+ tests passing.** The full
 > two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
-> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **8 of 16
-> rungs are green (0, A, B, C, D, E + the first two Pi-hardware rungs G and I)** plus voice
+> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **13 of 16
+> rungs are green (0, A, B, C, D, E + Pi-hardware rungs F, G, H, I, J, first floor drive, and `yalp see` Pi-first-light)** plus voice
 > OUTPUT *and* INPUT (milestone O is now functionally done on the laptop); the remaining
-> hardware rungs (F, H, J–N) are **gated on the Pi 5 + Phase 2**. **Phase 2 / Wave 3
+> hardware rungs (K–N) are **gated on the Pi 5 + Phase 2**. **Phase 2 / Wave 3
 > hardware bring-up is UNDERWAY on the real robot — see the next note.** The full §3 status
 > and the §1 ladder have the detail; this is the skim.
 
-> **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, and the
-> ultrasonic sensor are DONE on real hardware; motors are next.** The physical robot —
-> named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with Raspberry Pi OS
-> Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp installed
-> from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
+> **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, ultrasonic,
+> drivetrain, Hello Motors, collision-stop reflex (J), and now first floor drive are ALL DONE on real hardware; milestones H and J PASSED 2026-07-15; first floor drive PASSED 2026-07-17.**
+> The physical robot — named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with
+> Raspberry Pi OS Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp
+> installed from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
 > `--system-site-packages` so the apt `python3-lgpio` is visible; swig + python3-dev
 > fallback; libgl1 + libglib2.0-0 so `import cv2` works on Lite — all committed). Green on
 > the real Pi: **GPIO stack verified** (gpiozero lgpio/native factory, no RPi.GPIO —
 > milestone **G**, `scripts/verify_gpio_stack.py` passes); **camera** (Logitech C270 USB —
 > `yalp hwtest --check camera` grabs a 640×480 frame, **B** Pi-confirmed); **vision** (`yalp
 > see` runs on Izzy — captures a frame and describes the scene via the Claude vision API,
-> key in `~/yalp/.env`, **C** Pi-confirmed); and the **HC-SR04 ultrasonic** (milestone **I**
-> — `yalp hwtest --check ultrasonic` returns real distances, a live 25-read stream tracked a
-> hand at ~22/25 good reads). The as-built divider is **1 kΩ + 1.5 kΩ → 3.0 V** (kit had no
-> 2 kΩ; pins/software unchanged) and the full as-built record is in `as-built-wiring.md`.
-> **NEXT: motors** — DRV8833 + 2× TT gear motors + 4×AA pack (Gate E **F** → Hello motors
-> **H**), not yet wired.
+> key in `~/yalp/.env`, **C** Pi-confirmed); the **HC-SR04 ultrasonic** (milestone **I** —
+> `yalp hwtest --check ultrasonic` returns real distances, a live 25-read stream tracked a
+> hand at ~22/25 good reads; as-built divider **1 kΩ + 1.5 kΩ → 3.0 V**); the
+> **DRV8833 drivetrain** — wired across two bench sessions (2026-07-02/03) and **Gate E
+> (power/brownout, milestone F) PASSED** — see the **F** rung for full pass record; and now
+> **milestone H (Hello Motors) PASSED 2026-07-15** on the replacement Pi 5 after a PMIC
+> hardware failure required a board swap — both drive wheels rolling forward together and
+> in-place LEFT/RIGHT turns confirmed, driven through `GpiozeroMotorDriver` and the saved
+> motor calibration (`left_invert=True`, `right_invert=True`). And now **milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP latched at 0.2815 m (< 0.30 m threshold) within ~50 ms; goal 'blocked'; latch persisted 76/76 polls; no reverse; grace fix (commit de48495) verified 18/18 at 15 Hz. **First floor drive ✅ PASSED 2026-07-17. `yalp see` ✅ PASSED 2026-07-17** (first-light: on-robot frame capture + accurate scene description, key via `.env`, independently verified — milestone C). **NEXT: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M) run in parallel.**
 
 **DONE — the laptop phase (run any of these today):**
 
@@ -1799,31 +1849,28 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 8 of 16 green — the entire laptop phase plus the first two Pi-hardware
-> rungs are DONE.** Steps **0, A, B, C, D, E** are green (plus voice OUTPUT **and** INPUT
-> and the full follow brain — the whole voice → follow → voice-stop loop works end to end),
-> all laptop-tested (**597+ tests passing**); and on the **real Pi 5 ("Izzy")** the
-> power-off bring-up rungs are now green too — **GPIO first light (G)** and the **HC-SR04
-> divider + first ranged read (I)** — with **B (camera)** and **C (vision)** re-confirmed on
-> the actual hardware (`yalp hwtest --check camera`, `yalp see` both run on Izzy). The
-> remaining hardware rungs (**F, H, J–N**) need the 4×AA pack + motors wired. **Next
-> target: motors** — the motor-spinning rungs (Gate E **F**, Hello motors **H**, reflex
-> **J**, fps gates **K/L**) are next now that the no-battery Pi-side steps are done. Update
-> this line as each done-signal goes green.
+> **Progress: 13 of 16 green — the entire laptop phase, all four Pi-hardware bring-up
+> rungs (F, G, H, I), milestone J (collision-stop), first floor drive, milestone C (vision, PASSED 2026-07-17 on hardware), and milestone O are DONE.** Steps **0, A, B, C, D, E** are green
+> (plus voice OUTPUT **and** INPUT and the full follow brain — the whole voice → follow →
+> voice-stop loop works end to end), all laptop-tested (**597+ tests passing**); and on the
+> **real Pi 5 ("Izzy")** — **GPIO first light (G)**, **HC-SR04 divider (I)**, **Gate E
+> power/brownout (F)**, **Hello Motors (H, PASSED 2026-07-15)**, **collision-stop reflex (J, PASSED 2026-07-15)**, **first floor drive (PASSED 2026-07-17)**, and **`yalp see` (C, PASSED 2026-07-17)** are all green. **Next target: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M).** Update this line as each
+> done-signal goes green.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
 |---|---|---|---|---|
 | **0** | **Order Phase 2 parts now** ✅ ORDERED 2026-06-20 | Phase 2 order placed (motors, driver, ball caster, HC-SR04, divider resistors, battery + holder, breadboard/wiring, 470–1000 µF + 0.1 µF caps, glue/zip-ties) the day Step A starts; order/tracking numbers recorded. Parts ship in parallel with laptop work. | Laptop / none | |
 | **A** ✅ DONE | **Loop-to-loop contract** (intent/mode schema, preemption, shared state) | An agent stub and a fake reactive stub exchange **one hand-authored Intent and one RobotState over the REAL socket**, both printed to console. Documentation alone is **NOT** done. **Verify:** `python scripts/contract_demo.py` (prints the handshake and 'STEP A OK'); `pytest tests/test_contract.py`. | Laptop | |
 | **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
-| **C** ✅ DONE *(Pi-confirmed)* | **It sees and talks** | Photo → vision model "what do you see?" → the answer prints to console. **Now also green on the real Pi 5 (Izzy):** `yalp see` captures a frame and describes the scene via the Claude vision API (key in `~/yalp/.env`). **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
+| **C** ✅ DONE *(Pi, 2026-07-17)* | **It sees and talks** | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). `yalp see` ran on-robot from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the C270 webcam captured a frame and the model returned an accurate scene description of the wall corner, baseboard, and floor Izzy faced — verified against the frame by an independent reviewer. Done-signal satisfied: photo → vision model → answer printed to console, all on real hardware. **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
 | **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (597+ passing). | Laptop | |
-| **F** | 🚦 **Gate E — Power / brownout bring-up** | PASS = **no Pi resets** AND `vcgencmd get_throttled` **stays 0x0** under a hard, stall-heavy motor drive script AND measured **motor-rail voltage stays above the driver's logic VIH**. NO-GO recovery (part of this milestone): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten motor leads, switch to NiMH cells, re-test. Motors do not move under Pi control until this passes. | Pi 5 + Phase 2 | |
+| **F** ✅ DONE *(Pi, 2026-07-03)* | 🚦 **Gate E — Power / brownout bring-up** | **PASSED 2026-07-03** via the §6 staged bring-up on the assembled robot ("Izzy"). Stage 1 (Pi alone): `get_throttled` 0x0. Stage 2 (motor rail alone, logic disconnected): rail 5.55 V; both motors spun both directions via hand-jumpered inputs. Stage 3 (joined, stall-heavy): **two runs of 24 full-duty reversal cycles** (`GpiozeroMotorDriver`, `drv8833` kind) with repeated thumb-stalls including both motors at once — zero Pi resets, SSH session survived, `get_throttled` 0x0 on every cycle, motors never stuttered. Criterion 3 (rail above driver logic VIH under stall) was **verified behaviorally, not metered** — probe access was blocked by the assembled body; the driver never faltered under full both-motor stall, which bounds the sag above the DRV8833's logic/UVLO thresholds. Static rail 5.55 V; 1000 µF bulk installed preemptively. As-built wiring in `as-built-wiring.md` §3. | Pi 5 + Phase 2 | |
 | **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
-| **H** | **Hello motors** *(NEXT)* | Drive the wheels from Python through the driver: forward, turn, stop. **Not yet wired** — DRV8833 + 2× TT motors + 4×AA pack is the next bench step (gated on Gate E **F**). | Pi 5 + Phase 2 + F + G | |
+| **H** ✅ DONE *(Pi, 2026-07-15)* | **Hello motors** | **PASSED 2026-07-15** on the replacement Pi 5 ("Izzy"). Both drive wheels confirmed rolling forward together; in-place LEFT and RIGHT turns confirmed (wheels counter-rotating via differential steering). Driven through yalp's own `GpiozeroMotorDriver` and the saved motor calibration. **Blocked path to sign-off (fully resolved):** in order — (1) failed SD card; (2) DRV8833 driver decay-mode bug (found and fixed in code, commit 9c43242 — the idle/opposite channel now stays truly still and `stop()` coasts; the pre-fix code spun an "idle" channel at full reverse); (3) "train" chassis (one motor per axle, rebuilt to one motor per side); (4) Raspberry Pi PMIC hardware failure requiring a board replacement. **Motor calibration as-built:** both wheels were wired with reversed polarity relative to the driver's forward convention (a symmetric consequence of mirror-mounting the two motors), corrected in software with `left_invert=True` and `right_invert=True`, persisted to `~/.config/yalp/calibration.json` on the Pi (machine-local, not committed). No re-soldering needed. | Pi 5 + Phase 2 + F + G | |
 | **I** ✅ DONE *(Pi)* | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. **Green on Izzy:** wired with an as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider (kit had no 2 kΩ; pins/software unchanged); `yalp hwtest --check ultrasonic` returns real distances (~22/25 good reads tracking a hand). Full as-built wiring: `as-built-wiring.md`. | Pi 5 + HC-SR04 + resistors | |
-| **J** | **Safety reflex** (collision-stop) | A fast local loop overrides any drive command when something's too close: commanded forward drive halts within the threshold distance on the bench. In *before* any autonomous driving. | Pi 5 + Phase 2 | |
+| **J** ✅ DONE *(Pi, 2026-07-15)* | **Safety reflex** (collision-stop) | **PASSED 2026-07-15** on the Pi 5 ("Izzy"), wheels-up on a stand. `DRIVE_GOAL {"kind":"straight","target":10,"speed":0.3}` through `RealReactiveBackend` (20 Hz tick, 15 Hz ultrasonic cap, stock config); motors drove at +0.3/+0.3 for ~10 s; an approaching hand produced a cleanly decreasing valid distance series. SAFE_STOP latched on a valid echo of 0.2815 m (< `SAFE_STOP_THRESHOLD_M` 0.30 m), reason 'obstacle'; motors zeroed within one 20 Hz tick (~50 ms); goal status 'blocked' with `{'reason':'obstacle','distance':0.2815}`. Zero reverse motor commands in the full run. Latch persisted 76/76 polls over 15 s after obstacle removed — only a fresh adopted intent lifts it; clean SIGINT shutdown, motors idle. Separately verified same day: phantom-stop grace fix (commit de48495, bounded coast-last-known grace) confirmed on hardware — 18/18 induced open-room echo timeouts coasted with zero phantom stops at 15 Hz stock config. *(The served trip distance 0.2815 m was later found inflated ~2× by a Pi 5 gpiozero timing artifact — true hand distance at trip ~0.14 m — corrected by the `GpiodUltrasonicSensor` driver now auto-selected on Pi 5; the reflex logic and latch behavior are fully validated.)* | Pi 5 + Phase 2 | |
+| **First floor drive** ✅ DONE *(Pi, 2026-07-17)* | **First floor drive** (off the stand, full reactive stack, collision-stop live) | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). Commanded forward drives on hardwood executed and frame-verified: three moving laps, ~2 m total true displacement, via the new `yalp drive` CLI through `RealReactiveBackend`, stock config, gpiod kernel-timestamped ultrasonic backend. Sonar tracked TRUE range throughout: monotone-decreasing wall tracks (e.g. 1.94 → 1.08 m at physical closing speed); ~5,000 reads across the session, 100% valid, zero raw misses. The reflex earned the rung: SAFE_STOP latched at served 0.30 m, reason 'obstacle', motors zeroed within one poll tick, exit 0; immediate retry REFUSED by the pre-flight gate (genuine obstacle latched); zero reverse commands in any timeline; post-lap frame shows ~a foot of physical clearance to the wall. Bonus live save: with the operator standing in the lane at 0.28 m, the drive CLI refused to start (no intent sent, exit 2) — twice. Known minor defects filed for the backlog (not blockers): open-loop timed distance over-reports ~1.8× vs actual travel (encoders or speed recalibration needed); slight leftward veer under way (motor trim) — **closed 2026-09-15 by the visual heading hold + slow-decay driver mode, see `as-built-wiring.md` §3.6**; goal timer can expire before reflex trips on long approaches (same calibration fix); benign ~0.6 m floor-graze mode until sensor is shimmed up 1–2 degrees. | Pi 5 + Phase 2 + J | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
 | **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. **→ DETECTOR-FPS CRITERION MEASURED GO (2026-07-01, real Pi 5 + C270, no motors):** `person` (MobileNet-SSD) ~26.6 Hz sustained (p99 25.5 Hz), `hog` ~55 Hz — vs the 3 Hz floor (~8.8× and ~18× margin). See [pi-validation-2026-07.md](./pi-validation-2026-07.md) §5. **Caveat:** this is the detector-fps criterion only; the motor-loaded flavor of Gate H (sustained fps under reactive loop + camera + motor-PWM stress) remains open until motors are wired. **Thermal note:** sustained detection drives the Pi to 80–83 °C with soft throttling (`0xe0000`/`0xe0008`); fps stays well above the gate but active cooling is recommended for prolonged FOLLOW. **Gate K fake-backend ceiling (§6 of validation doc):** tick p99 18.63 ms vs 33 ms budget — PASS as a fake-driver ceiling, NOT the real Gate K (real Gate K needs `--backend real` with live motor writes). | Pi 5 + Phase 2 | |
 | **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): the laptop-proven track-by-detection pipeline runs on the Pi — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): swap in the blob/color `Detector` behind the same pluggable interface — robot follows a colored target, collision-stop underneath, own bench demo. The follow *logic/steering* is already proven; only the Pi's detector fps is the open question Gate H answers. A NO-GO is a *different detector, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
@@ -1970,18 +2017,14 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 
 > **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
 > (597+ tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
-> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **8 of 16 rungs green** — the entire
-> laptop phase (**0, A, B, C, D, E**) plus the first two Pi-hardware rungs, **GPIO first
-> light (G)** and the **HC-SR04 divider (I)**, with **B (camera)** and **C (vision)**
-> re-confirmed on Izzy itself — plus voice OUTPUT *and* INPUT and the full follow brain, so
-> the whole **voice → follow → voice-stop loop works end to end** (milestone O is
-> functionally done on the laptop). **On the real Pi today:** Pi OS Lite headless over SSH,
-> yalp installed, GPIO stack verified (gpiozero lgpio/native, no RPi.GPIO), the C270 camera
-> grabs frames (`yalp hwtest --check camera`), `yalp see` describes the scene via Claude,
-> and the HC-SR04 returns real distances (`yalp hwtest --check ultrasonic`, as-built
-> 1 kΩ + 1.5 kΩ → 3.0 V divider — see `as-built-wiring.md`). **The next target is motors**
-> (DRV8833 + 2× TT + 4×AA): Gate E **F** → Hello motors **H** → reflex **J** → fps gates
-> **K/L**. **Laptop brain covers all three headline behaviors:**
+> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **13 of 16 rungs green** — the entire
+> laptop phase (**0, A, B, C, D, E**), all four Pi bring-up rungs (**F** Gate E, **G** GPIO
+> first light, **H** Hello Motors, **I** HC-SR04 divider), **J** (collision-stop reflex), **first floor drive** (PASSED 2026-07-17), and **`yalp see` (C, PASSED 2026-07-17)** on real hardware — plus voice OUTPUT *and* INPUT and the full
+> follow brain, so the whole **voice → follow → voice-stop loop works end to end** (milestone
+> O is functionally done on the laptop). **Milestone H (Hello Motors) PASSED 2026-07-15** on
+> the replacement Pi 5 — both drive wheels forward, in-place LEFT/RIGHT turns, driven through
+> `GpiozeroMotorDriver` and saved motor calibration. **Milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP at 0.2815 m (< 0.30 m threshold, ~50 ms halt), goal status 'blocked', sticky latch (76/76 polls), no reverse; grace fix (commit de48495) verified 18/18. **First floor drive PASSED 2026-07-17** — three moving laps on hardwood, ~2 m true displacement, sonar TRUE throughout, SAFE_STOP at 0.30 m, zero reverse, pre-flight gate refused retry. **`yalp see` PASSED 2026-07-17** — on-robot frame capture + accurate scene description, independently verified, milestone C done on real hardware. **Next targets: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M). Laptop brain covers all
+> three headline behaviors:**
 > **see** (`yalp see` — webcam still → Claude → spoken-style description,
 > `--speak`/`--image`/free-text), **agent** (`yalp agent` — full deliberative loop D1–D3
 > driving the fake reactive backend, with `--listen` push-to-talk voice input), and
@@ -2023,20 +2066,17 @@ number means you swap the detector — not redesign the follow loop. See `softwa
    and reading real distances (as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider — see
    `as-built-wiring.md`).
 
-**NEXT TARGET — motors on Izzy** (follow `hardware-runbook.md`): wire the drivetrain and
-prove it under power. The no-battery Pi-side steps (above) are done; what's left needs the
-4×AA pack + motors:
+**DONE ✅ — first floor drive (off the stand, full reactive stack, collision-stop live) PASSED 2026-07-17** — three moving laps on hardwood (~2 m true displacement), sonar TRUE throughout, SAFE_STOP live at 0.30 m, pre-flight gate refused retry, zero reverse. See the §1 ladder rung for full pass record.
 
-1. **The motor chain:** wire the **DRV8833 + 2× TT gear motors + 4×AA NiMH pack** (separate
-   VM rail, common ground), then **Gate E power/brownout (F)** → **Hello motors (H)** →
-   **safety reflex (J)** *before* any autonomous driving → the load/fps gates (**K**, **L**
-   — Gate H is now just a Pi fps confirmation of the already-built follow brain) → follow on
-   hardware (**M**) → the WiFi-degradation test (**N**) — anything where motors actually
-   spin. Record the as-built motor wiring in `as-built-wiring.md` (the §3 motor
-   as-built table) as it goes in.
-2. **Then:** bring `RealReactiveBackend` (already fully implemented — tick loop,
-   collision-stop, motor paths, `MotorWatchdog`) up on the real body and confirm the
-   same brain drives real wheels. No backend code remains to write.
+**DONE ✅ — `yalp see` first-light (2026-07-17, afternoon session).** `yalp see` ran on-robot from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the C270 webcam captured a frame and the model returned an accurate scene description of the wall corner, baseboard, and floor Izzy faced — verified against the frame by an independent reviewer. Milestone C done-signal fully satisfied on real hardware; **PASSED 2026-07-17** — see the §1 C rung for the pass record.
+
+**NEXT TARGET — richer `yalp see` session, then person-following, then voice input:**
+
+1. **Richer `yalp see` session:** interactive Q&A, multiple scenes, `--speak` path; the road toward the camera + sonar + LLM first-moment vision loop.
+2. **Person-following on hardware (M):** the laptop-proven track-by-detection pipeline drives Izzy in a bench loop — Gate K (combined-load latency) confirmed as part of this.
+3. **Voice input on hardware (O / Pi):** push-to-talk STT (`yalp agent --listen`) on the Pi with mic attached.
+4. **`RealReactiveBackend`** (already fully implemented — tick loop, collision-stop,
+   motor paths, `MotorWatchdog`) is floor-proven (first floor drive). No backend code remains to write.
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
@@ -2669,6 +2709,17 @@ milestone **F**). Run the power bring-up checklist in order; do not skip ahead.
    motors by briefly jumpering its inputs by hand. (This proves motors + driver +
    pack work on their own.)
 
+   > **How to hand-jumper a DRV8833 on a breadboard build (field-proven method):**
+   > Pack switch OFF to rig. Temporarily borrow the VM hole by pulling the small HF
+   > cap, then extend VM to an empty row with an M-M jumper to make a tap strip. Use
+   > the disconnected Pi-end FEMALE ends of the logic jumpers as per-input sockets —
+   > they dangle free with the Pi logic disconnected. Tie the STBY/nSLEEP female end
+   > to the VM tap to wake the chip. To spin a motor, briefly touch a VM "wand" jumper
+   > into a dangling input female end — the internal pulldowns mean untouched inputs
+   > are low (off); one input at a time = spin; two inputs on the same channel at once
+   > = brake. Restore the HF cap afterward. The DRV8833 inputs tolerate the ~5.5–6 V
+   > pack rail for brief hand tests.
+
 3. **Join common ground**, reconnect the logic GPIOs, and run a deliberately
    **hard, stall-heavy drive script** — rapid direction reversals with both motors
    stalled against your hand — while you **meter the motor rail** and re-check
@@ -2716,6 +2767,21 @@ watch -n 1 vcgencmd get_throttled
 ---
 
 ## 7. Hello motors — drive forward / turn / stop (milestone H)
+
+> ⚠️ **WARNING — the "train chassis" trap (proven by field data):** mounting **one
+> motor per axle** (front pair / rear pair, four wheels total) produces a robot that
+> can only drive straight — it will forward fine but **never turn**, and will shudder
+> or fight during turn commands as the two locked axles work against each other.
+> **Differential steering requires one motor per *side*** — a single driven wheel on
+> the left and a single driven wheel on the right, with a small ball caster as the
+> third contact point. The caster must be small; on a robot this light a large caster
+> adds enough drag to spoil the steering. If the robot exhibits "drives forward fine,
+> never turns, shudders during turn commands," the chassis layout is wrong, not the
+> code.
+>
+> **Before mounting:** identify which motor is channel A (AO1/AO2) by pulsing the
+> left channel only — that motor must end up on the robot's **LEFT** side. Do this
+> before bolting anything down.
 
 With Gate E (§6) and GPIO first light (§3) both green, drive the wheels from
 Python through the driver: forward, turn, stop.
@@ -2891,8 +2957,24 @@ recorded in `roadmap.md` §6 so it doesn't get re-litigated onto the critical pa
 | **`gpiozero` does nothing / pins dead, no error** | `RPi.GPIO` in the path — it **silently fails on Pi 5**. Re-run the §2 probes; ensure the **lgpio/native** factory is active and `RPi.GPIO` isn't imported. (`hardware.md` §5.) |
 | **Motors don't move** | Check **common ground** (NiMH GND ↔ Pi GND) first — the #1 omission. Confirm NiMH pack is charged and on VM; on TB6612FNG, **STBY must be high** (GPIO24); verify GPIO12/13/17/22 wiring against the §5 table. Motor spins backwards → swap that channel's two output leads. |
 | **Pi reboots / resets when motors move** | **Brownout** — motor stall spikes sagging the rail. This is **not** a software bug. Go to the **Gate E NO-GO recovery** (§6): add 470–1000 µF bulk + 0.1 µF ceramic across VM, twist/shorten leads, confirm NiMH (not alkaline), re-test. |
+| **Motor spins at full speed while "stopped" / an idle channel runs continuously** | **Driver decay-mode dialect mismatch** — the code was driving the DRV8833 (an **IN/IN** part) with phase/enable semantics, so a duty-0 channel with the direction pin latched HIGH became `IN1=0/IN2=1` = full-speed reverse (and `stop()` commanded full reverse). The wiring is correct; the fix is in software — see the **DRV8833 IN/IN truth table** in `src/yalp/reactive/hardware.py` (`GpiozeroMotorDriver._drive_channel`). **Fixed 2026-07-06.** |
 | **Sensor reads garbage / random distances** | Confirm the **divider tap meters ~3.3V** (§4) and ECHO is on GPIO6 *via the divider*, not direct. Check the HC-SR04 GND shares common ground. Don't poll faster than ~15 Hz (≥60 ms). A timed-out echo is **"unknown" → STOP**, not "clear" (§8). |
 | **Robot doesn't stop for obstacles** | Verify the reflex is in the tick (§8) and `SAFE_STOP_THRESHOLD_M` = 0.30 m; meter the divider; confirm the sensor faces forward and the obstacle is in its narrow ~15–30° cone (`hardware.md` §4 — side/low/glass objects are blind spots). |
+| **Robot phantom-STOPs every second or two in an open room and can't drive** (collision-stop "works" but is far too trigger-happy, worst at ~2–4 m range) | Expected on the Pi 5: gpiozero times the echo in **software** (`pigpio` unavailable), so isolated reads spuriously time out at long range, and each miss correctly biases to `SAFE_STOP`. **Not a wiring fault.** Mitigated by the **bounded "coast last-known" grace** in `GpiozeroUltrasonicSensor`: a single/brief-burst miss re-serves the last VALID distance instead of instantly declaring blindness, bounded by BOTH `ULTRASONIC_GRACE_MS` (default 150 ms) AND `ULTRASONIC_GRACE_MAX_MISSES` (default 2). Tradeoff: ≤ ~150 ms / 2 misses of coasting on the last good reading (≤ ~0.15 m blind travel at 1 m/s) — a bounded risk; **sustained** loss and **near obstacles** still STOP. Tune via `YALP_ULTRASONIC_GRACE_MS` / `YALP_ULTRASONIC_GRACE_MAX_MISSES` (miss budget `0` disables the grace). See `as-built-wiring.md` §2. |
+| **Pi powers on (green) but any OS boot overheats near the USB-C/PMIC area and drops to a single red LED within ~10 s — reproducible with multiple fresh cards + PSUs + boot media** | **Pi power-management IC (PMIC) hardware failure — not a card or software fault.** Confirmed by: bare board, two PSUs, two fresh microSD cards, both SD and USB boot all failing identically with the same overheat/drop pattern; critically the same Pi idles fine with NO boot media inserted (bare boot with no card shows no overheating). Rule out software and cards first (two brand-new clean flashes on two separate cards), then warranty-replace the board. Do not waste time re-flashing or swapping PSUs once the "fine with no boot media" test passes. |
+| **After a Pi board replacement, motors don't move and/or ultrasonic hangs with "no echo received"** | A new board means the 40-pin GPIO header is bare — **all GPIO jumpers must be re-seated onto the new board before any sensor or motor test.** Symptom if skipped: ultrasonic hangs with gpiozero `no echo received` (ECHO line not connected); motors are silent (all four motor-driver signal wires missing from the header). The camera still works because it is USB, not GPIO, and the GPIO-stack software check (`scripts/verify_gpio_stack.py`) still passes because it only verifies the gpiozero pin factory, not that physical wires are plugged in. Re-seat every motor-driver jumper (§3.1 in `as-built-wiring.md`) and all ultrasonic jumpers using the documented pin map and wire colors; the breadboard side can stay untouched. |
+
+> **SD card longevity — handling notes (field lessons):**
+> - **Power down before inserting or removing the microSD card.** Hot-swapping while the Pi
+>   is powered can corrupt the card's filesystem or wear the contacts.
+> - **Cards can be damaged by board flex, pressure, or ESD** during chassis work — if the Pi
+>   is mounted on a cardboard/plywood chassis, tighten-then-bend sessions or jostling can
+>   crack the card's controller. If the card dies and you don't know why, a session with the
+>   mounted board under stress is a plausible culprit.
+> - **Keep the 3V3 and 5V wires dressed apart on the 40-pin header.** Pin 1 is 3V3 and
+>   Pin 2 is 5V — adjacent pins. A slipped jumper can bridge 5V onto the 3V3 rail, which
+>   will kill GPIO peripherals and possibly the Pi's own 3V3 regulator. Use distinct wire
+>   colors for 3V3 vs. 5V and route them away from each other after seating.
 
 > **OPEN —** Coverage of a single front HC-SR04 is thin (narrow cone; no side/rear;
 > blind to glass and drop-offs — `hardware.md` §4). v1 brings up one front sensor to
@@ -2918,9 +3000,15 @@ you plug a jumper in.
 >
 > - **DONE & recorded:** HC-SR04 ultrasonic (1 kΩ / 1.5 kΩ divider on ECHO — §1),
 >   jumpers to the Pi, USB webcam (Logitech C270).
-> - **NEXT PHYSICAL STEP:** **solder the male header strips onto the DRV8833
->   breakout**, then wire it per **§3**.
-> - **NOT yet wired:** DRV8833 motor driver, 2× TT gear motors, 4×AA NiMH pack.
+> - **DONE & recorded:** DRV8833 drivetrain (§3) — headers soldered, wired,
+>   bench-tested, **Gate E (power/brownout) passed 2026-07-03**, and **milestone H
+>   (Hello Motors) PASSED 2026-07-15** on the replacement Pi 5 — both wheels forward,
+>   in-place LEFT/RIGHT turns confirmed.
+> - **DONE & recorded (§3.4):** motor direction calibration — both wheels wired
+>   reversed (mirror-mount, symmetric); corrected in software (`left_invert=True`,
+>   `right_invert=True`), persisted to `~/.config/yalp/calibration.json` on the Pi.
+> - **NEXT PHYSICAL STEP:** collision-stop reflex (J) — bring the reactive safety loop
+>   up on the real body with live HC-SR04 reads and the drivetrain.
 >
 > The board is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py`
 > default). It has **no STBY pin**; TB6612FNG is a fallback only if the DRV8833
@@ -2934,7 +3022,7 @@ you plug a jumper in.
 | Camera (Logitech C270, USB) | ✅ working | `yalp hwtest --check camera` (grabs a 640×480 frame) |
 | Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
 | **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
-| **Motors (DRV8833 + 2× TT + 4×AA)** | ⬜ **NOT yet wired — next step (solder DRV8833 headers first)** | see the §3 as-built table below |
+| **Motors (DRV8833 + 2× TT + 4×AA)** | ✅ **wired & Gate E PASSED (2026-07-03); milestone H PASSED (2026-07-15)** | `yalp hwtest --check motors`; `vcgencmd get_throttled` (want 0x0) |
 
 ---
 
@@ -3033,58 +3121,216 @@ Pi header pins used (physical → name): **Pin 2 = 5 V**, **Pin 6 = GND**,
 > "clear" (see `hardware.md` §4 and `pi-bringup.md`). So a stray timeout in the read
 > stream is normal, not a wiring fault — only a *sustained* timeout pattern (as in
 > the loose-connection case above) is a problem.
+>
+> **MITIGATION (bounded "coast last-known" grace) —** the software echo timing
+> above produces *isolated* timeouts often enough — **especially at longer range
+> (~2–4 m open room, where the return echo is weak)** — that, because every miss
+> correctly biases to `SAFE_STOP`, the robot would **phantom-STOP every second or
+> two during a `DRIVE_GOAL`** and never actually drive. `GpiozeroUltrasonicSensor`
+> (`src/yalp/reactive/hardware.py`) therefore applies a **bounded grace**: when a
+> read times out but a *recent VALID* reading exists, it briefly **re-serves that
+> last good distance** (coasts) instead of instantly declaring blindness. It is
+> bounded by **BOTH**:
+>
+> - `ULTRASONIC_GRACE_MS` (default **150 ms** — wall-clock window since the last
+>   valid read), and
+> - `ULTRASONIC_GRACE_MAX_MISSES` (default **2** — consecutive echo misses).
+>
+> Whichever bound trips **first** ends the grace, and the read reverts to
+> `known=False` → `SAFE_STOP` exactly as before; a single valid read resets both
+> bounds. **Tradeoff, stated plainly:** the grace coasts on the *last good* reading
+> for at most ~150 ms / 2 misses — a **bounded, deliberate risk** taken to stop the
+> phantom `SAFE_STOP`s. At ~1 m/s that is ≤ ~0.15 m of blind travel, well inside the
+> `SAFE_STOP_THRESHOLD_M` = 0.30 m margin. The grace **only ever re-serves the exact
+> last measured distance** — it never fabricates a larger/clear value — so a **near
+> obstacle is coasted as an obstacle (still STOP)** and **sustained sensor loss still
+> STOPs**. Both knobs are env-overridable (`YALP_ULTRASONIC_GRACE_MS`,
+> `YALP_ULTRASONIC_GRACE_MAX_MISSES`); set the miss budget to `0` to disable the
+> grace and get the pre-mitigation "any miss = instant STOP" behaviour.
 
 ---
 
-## 3. Motors (DRV8833) — as-built fill-in table
+## 3. Motors (DRV8833) — as built (wired 2026-07-02/03, Gate E passed 2026-07-03)
 
-> **NOT YET WIRED — this is the next bench step.** First **solder the male header
-> strips onto the DRV8833 breakout**, then wire it per this table. **New to
-> soldering?** Follow the step-by-step **"Soldering the DRV8833 header pins
-> (first-timer guide)"** section in `hardware-runbook.md` — it's the prerequisite for
-> everything in this §3. The board is the
-> **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py` default) — it has **no
-> STBY pin**; TB6612FNG is a fallback only if the DRV8833 runs hot. **Do not wire
-> motor power until Gate E** (power/brownout, `roadmap.md` milestone **F**) **and GPIO
-> first light** (**G**, already green) are both satisfied per the runbook.
+**Module:** DRV8833 clone breakout (chip marking verified DRV8833; clone silkscreen
+calls nSLEEP **"STBY"**). Seated on the drivetrain breadboard straddling the trench.
+Module pin rows 1–8: **left pins in column C**, **right pins in column G**.
 
-The **Driver pin / Signal / To / Expected Pi pin** columns below are pre-filled from
-the canonical map in `config.py` (cited by constant — the numbers live there, not
-here). **Fill the _Wire color_ and _breadboard hole_ columns at the bench** as each
-jumper actually goes in, exactly as in §1. Expected Pi pins are shown *physical / BCM*;
-**verify each against the real header** before trusting it.
+**Silkscreen readout (as installed):**
 
-### 3.1 Logic / signal wiring (DRV8833 ↔ Pi)
+| Column C (left row) | Column G (right row) |
+|---|---|
+| C1 NC | G1 VM |
+| C2 AIN2 | G2 NC |
+| C3 AIN1 | G3 GND |
+| C4 STBY (= nSLEEP) | G4 AO1 |
+| C5 BIN1 | G5 AO2 |
+| C6 BIN2 | G6 BO2 |
+| C7 NC | G7 BO1 |
+| C8 GND | G8 GND (spare, unused) |
 
-| # | DRV8833 pin | Signal | To (Pi / rail) | Expected Pi pin (physical / BCM) — config constant | Wire color | Breadboard hole |
-|---|---|---|---|---|---|---|
-| 1 | **AIN1** | left speed / PWM (hardware PWM0) | Pi GPIO12 | Pin 32 / GPIO12 — `MOTOR_LEFT_PWM_PIN` | | |
-| 2 | **AIN2** | left direction | Pi GPIO17 | Pin 11 / GPIO17 — `MOTOR_LEFT_DIR_PIN` | | |
-| 3 | **BIN1** | right speed / PWM (hardware PWM1) | Pi GPIO13 | Pin 33 / GPIO13 — `MOTOR_RIGHT_PWM_PIN` | | |
-| 4 | **BIN2** | right direction | Pi GPIO22 | Pin 15 / GPIO22 — `MOTOR_RIGHT_DIR_PIN` | | |
-| 5 | **nSLEEP** | enable — **tie HIGH to Pi 3V3** (not GPIO-controlled) | Pi 3V3 | Pin 1 (or 17) / 3V3 | | |
-| — | ~~STBY~~ | **DRV8833 has no STBY** — `MOTOR_STBY_PIN` (GPIO24) is inert / **left unwired** here; only driven when `MOTOR_DRIVER_KIND=="tb6612fng"` | — | (GPIO24 unused) | — | — |
+> **Note:** the output row order is **BO2 (row 6) above BO1 (row 7)** on this board —
+> the reverse of the labeling order on many datasheets.
 
-### 3.2 Motor outputs (DRV8833 ↔ TT motors)
+> **2026-07-06 field session:** the DRV8833 is an **IN/IN** part, but the driver code
+> was treating it as **phase/enable** — a decay-mode dialect mismatch that drove an
+> "idle" channel (and `stop()`) at full reverse. **The wiring was and is correct;**
+> the bug was fixed in code (`GpiozeroMotorDriver._drive_channel`, DRV8833 IN/IN truth
+> table). No re-wiring required.
 
-| # | DRV8833 pin | Signal | To | Wire color | Terminal |
+### 3.1 Logic / signal wiring (DRV8833 ↔ Pi) — as built
+
+Jumpers are male-to-female (female end on the Pi header). The "breadboard hole"
+column is the A-row hole (opposite side of the trench from the C/G module pin).
+
+| # | Silkscreen label | Breadboard hole | Wire color | Pi physical pin / BCM | Signal |
 |---|---|---|---|---|---|
-| 6 | **AOUT1** | left motor drive | left TT motor terminal 1 | | |
-| 7 | **AOUT2** | left motor drive | left TT motor terminal 2 | | |
-| 8 | **BOUT1** | right motor drive | right TT motor terminal 1 | | |
-| 9 | **BOUT2** | right motor drive | right TT motor terminal 2 | | |
+| 1 | **AIN2** | A2 | yellow | **Pin 11 / GPIO17** | left direction (`MOTOR_LEFT_DIR_PIN`) |
+| 2 | **AIN1** | A3 | blue | **Pin 32 / GPIO12** | left speed / HW PWM0 (`MOTOR_LEFT_PWM_PIN`) |
+| 3 | **STBY** (= nSLEEP) | A4 | white | **Pin 1 / 3V3** | enable — tie-high to 3V3; **not GPIO-controlled** |
+| 4 | **BIN1** | A5 | orange | **Pin 33 / GPIO13** | right speed / HW PWM1 (`MOTOR_RIGHT_PWM_PIN`) |
+| 5 | **BIN2** | A6 | green | **Pin 15 / GPIO22** | right direction (`MOTOR_RIGHT_DIR_PIN`) |
+| 6 | **GND** | A8 | black | **Pin 9 / GND** | common ground, Pi side |
+| — | ~~GPIO24~~ | — | — | Pin 18 / GPIO24 — **left empty** | TB6612-only STBY; inert for DRV8833 per `config.py` |
 
-### 3.3 Power rail & decoupling (VM / GND)
+### 3.2 Motor outputs (DRV8833 ↔ TT motors) — as built
 
-| # | DRV8833 pin | Signal | To | Wire color | Hole |
-|---|---|---|---|---|---|
-| 10 | **VM** | motor supply + | 4×AA NiMH pack **(+)** | | |
-| 11 | **GND** | common ground | pack **(−)** *and* a Pi **GND** pin (both — required; logic inputs are referenced to Pi ground) | | |
-| 12 | across **VM ↔ GND** | bulk decoupling | **470–1000 µF electrolytic** (observe polarity) | | |
-| 13 | across **VM ↔ GND** | HF decoupling | **0.1 µF ceramic** | | |
+Motor lead polarity is intentionally arbitrary at this stage; forward/reverse
+direction polarity will be set via `yalp calibrate` after the chassis rebuild.
 
-> **Note —** the VM rail (4×AA) is **separate** from the Pi's USB-C supply; only the
-> **GND is common** (pack − ↔ DRV8833 GND ↔ Pi GND). Never run pack + into the Pi.
+| Channel | Breadboard holes | Motor |
+|---|---|---|
+| **Left** (A channel) | **H4** (AO1) + **H5** (AO2) | Left TT motor leads |
+| **Right** (B channel) | **H6** (BO2) + **H7** (BO1) | Right TT motor leads |
+
+> **Important for chassis mount:** the motor wired to channel A (AO1/AO2) must be
+> mounted on the robot's **LEFT** side. Identify it before mounting by pulsing the left
+> channel only (see the chassis WARNING in `hardware-runbook.md` §7).
+
+### 3.3 Motor power & decoupling — as built
+
+**Pack:** 4×AA NiMH WITH integral on/off switch (the switch is the bench master
+cutoff — "batteries out" now means switch off, not physically removing cells).
+Measured rail: **5.55 V** (~1.39 V/cell, freshly charged).
+
+| Connection | Breadboard hole | Detail |
+|---|---|---|
+| Pack red (+) | **J1** (VM) | Motor supply positive |
+| Pack black (−) | **J3** (GND, G3 net) | Motor supply negative |
+| Common ground | — | Achieved through the module's internal GND net: Pi GND is at the C8 net (A8), pack − is at the G3 net (J3); the module ties all GND pins internally |
+
+**Decoupling as built:**
+
+| Cap | Value | Placement |
+|---|---|---|
+| Bulk electrolytic | **1000 µF 16 V** | + leg **I1** (VM net), stripe/− leg **I3** (GND net) |
+| HF cap — **substitution** | **0.1 µF 50 V ELECTROLYTIC** (4×7 mm body) — **not** the specced ceramic | + leg **H1**, stripe/− leg **H3** |
+
+> **HF cap substitution note:** A 0.1 µF 50 V *electrolytic* (4×7 mm) was installed
+> in place of the specced 0.1 µF ceramic because the kit had no ceramic disc. It is
+> polarized (unlike a ceramic), is electrically safe at this DC rail voltage, and the
+> clone module carries its own onboard ceramic caps. A **"104" ceramic disc** remains
+> the recommended drop-in if noise gremlins ever appear.
+
+### 3.4 Motor direction calibration — as built (2026-07-15)
+
+> **As-built finding:** both drive wheels were wired with **reversed polarity** relative to
+> the DRV8833 channel's forward convention — i.e., what the driver considers "forward" spun
+> each wheel backward. This is a **symmetric** consequence of mirror-mounting the two TT
+> motors on opposite sides of the chassis: the left motor's "correct" forward lead becomes
+> its natural reverse lead when flipped to face the other direction, and the same is true
+> of the right. No re-soldering was needed or performed.
+
+**Correction:** applied entirely in software using yalp's motor calibration layer:
+
+| Parameter | Value | Effect |
+|---|---|---|
+| `left_invert` | `True` | Swaps the logic sense of the left channel forward/reverse |
+| `right_invert` | `True` | Swaps the logic sense of the right channel forward/reverse |
+
+Persisted to **`~/.config/yalp/calibration.json` on the Pi** (machine-local, per-robot
+state under `~/.config` — **not committed to the repo**). This is exactly the use-case the
+calibration layer exists for: wiring polarity that is correct for one physical build but may
+differ on another.
+
+**Verified at milestone H (2026-07-15):** both wheels roll forward together when commanded
+forward; in-place LEFT turn (left wheel back, right wheel forward) and RIGHT turn (right
+wheel back, left wheel forward) confirmed, all via `GpiozeroMotorDriver` through the saved
+calibration.
+
+### 3.5 Pi 5 board replacement and header re-seat (2026-07-15)
+
+> **PMIC hardware failure:** the original Pi 5 suffered a power-management IC failure —
+> reproducible overheating near the USB-C/PMIC area with any OS boot media, on multiple
+> PSUs and fresh SD cards (see `hardware-runbook.md` §11 for the diagnostic pattern). The
+> board was replaced under warranty.
+
+**Re-seat procedure (2026-07-15):** the drivetrain header wiring (5 motor-driver jumpers:
+AIN2 → Pin 11, AIN1 → Pin 32, STBY → Pin 1, BIN1 → Pin 33, BIN2 → Pin 15, GND → Pin 9)
+was re-seated onto the **new Pi's 40-pin header using the documented pin map above (§3.1)
+and the same wire colors and holes**. The breadboard side was untouched throughout the swap.
+The ultrasonic jumpers (§1) were re-seated identically. The USB camera required no
+re-seating (USB). After re-seat, `yalp hwtest --check motors` and the full milestone H
+drive test were run to confirm correct operation on the new board.
+
+### 3.6 Left motor leads swapped, decay-mode asymmetry, and the visual heading hold (2026-09-15)
+
+> **As-built finding (2026-09-15):** on power-up after the summer, a forward
+> command spun Izzy **in place to the LEFT** (right wheel forward, left wheel
+> backward). The left TT motor's two leads at **H4/H5** had been swapped relative
+> to the July build (the breadboard was handled during storage/charging). Both
+> wheels still moved in both directions when pulsed alone, so this was purely a
+> polarity change. **Corrected in software:** `left_invert=false` in
+> `~/.config/yalp/calibration.json` on the Pi (backup of the July file:
+> `calibration.json.bak-2026-09-15`). `right_invert` stays `true`. §3.4 above
+> describes the July state ("both wheels inverted"); the live file is now
+> **left `false`, right `true`**.
+
+**Why she still would not drive straight after that fix — the DRV8833 decay-mode
+asymmetry.** Only xIN1 (GPIO12/13) was being PWMed. In that "mixed" dialect a
+channel's *forward* is fast decay (xIN2 low, PWM on xIN1) and its *reverse* is
+slow decay (xIN2 high, PWM at 1-duty). With one wheel inverted and the other not,
+the same "forward" command therefore drove the two wheels in **different decay
+modes**, and slow decay produces much more torque at a given duty. Measured with
+the camera (single-wheel pulses, |yaw rate| in deg/s, no trims):
+
+| Mode (duty) | LEFT fwd | RIGHT fwd | LEFT rev | RIGHT rev |
+|---|---|---|---|---|
+| mixed (0.45) | 48 | **77** | **115** | 44 |
+| mixed (0.60) | **117** | 100 | **124** | 90 |
+| **slow (0.45)** | 104 | 66 | 111 | 76 |
+| **slow (0.60)** | 121 | 89 | 81 | 102 |
+
+The strong wheel in "mixed" is always the slow-decay one and the gap **flips sign
+between duty 0.45 and 0.60** — no static trim can fix that. **Fix (software, no
+re-wiring):** `config.MOTOR_DECAY_MODE = "slow"` (default since 2026-09-15) —
+both channels, both directions use slow decay (one input held HIGH, the other
+PWMed at 1-duty). This needs PWM on the DIR pins (GPIO17/22) too; the lgpio pin
+factory software-times PWM on any GPIO, so **no wiring change**. The July
+`right_trim 0.90` was tuned for the mixed dialect and is now wrong; the live file
+has both trims at `1.0`.
+
+**What handles the residual imbalance (~20–35% left-stronger in slow mode) and
+any future surface change:** the **visual heading hold** — `ReactiveTickCore`
+integrates the camera's frame-to-frame yaw (phase correlation on a 160x120 copy,
+left/right halves averaged to cancel looming; `yalp/reactive/visual_odometry.py`)
+and biases the left/right duty split during every straight `DRIVE_GOAL`
+(`config.HEADING_HOLD_*`). Rotate goals close the loop on the same estimate
+(`yalp drive --turn 90` turned +96 deg then +91 deg with a stop lead; the old
+open-loop timer delivered 2–15 deg for 30–60 deg). After each straight drive the
+mean correction is learned into `straight_bias_fwd` / `straight_bias_rev` in the
+calibration file (`config.TRIM_LEARNING_*`), so the next drive starts straighter
+without a manual recalibration. Verified 2026-09-15: heading held within ~±5 deg
+over 0.3–1.0 m legs forward AND reverse (was 14 deg / 42 deg of veer before).
+
+**Camera warm-up matters:** the C270 publishes black frames for ~1 s after
+opening; the reactive server's heading estimate is blind until then
+(`camera.WARMUP_MAX_SECONDS` raised to 3 s). Give the server ~4 s after its port
+comes up before sending a drive.
+
+**Optional physical tidy-up:** swapping the left leads back at H4/H5 and setting
+`left_invert=true` again restores the July wiring, but it is no longer needed —
+slow-decay mode makes the inversion pattern irrelevant to symmetry.
 
 ---
 
@@ -3097,6 +3343,524 @@ jumper actually goes in, exactly as in §1. Expected Pi pins are shown *physical
 - `pi-bringup.md` — the software bring-up (install, GPIO-stack proof, `yalp hwtest`).
 - `roadmap.md` — build sequencing and the go/no-go gates; the live status of each
   milestone (camera/vision/ultrasonic done on hardware, motors next).
+
+</script>
+<script type="text/markdown" data-name="chassis-v2.md">
+# Chassis v2 — the rebuild spec
+
+> Why the cardboard body is now the limiting factor, what the replacement must do, and the staged plan to swap it without losing the known-good baseline. `hardware.md` is the v1 design; `as-built-wiring.md` is what is physically on Izzy today; this is the body that replaces it.
+
+---
+
+## 1. Why now
+
+The v1 cardboard body did its job. It got the whole stack from parts-in-a-box to a
+floor-driving robot: Gate E, milestone H, milestone J, the first floor drive, and
+`yalp see` on-robot are all green on it. Nothing here retracts that.
+
+What changed is that the body is now the thing standing between us and the next
+milestone. The wheels are pressed into cardboard slots, the third contact point is a
+small hard metal ball, and the power and signal paths run through solderless
+breadboards on a moving platform. None of those hold a dimension.
+
+> **THESIS —** Every calibration constant in the software is a fit to a physical
+> object. The v1 body is not a fixed physical object — its geometry changes with load,
+> with handling, and over time. That is why tuning does not stick, and why the fix for
+> each new drive defect has been another fudge factor rather than a closed defect.
+
+---
+
+## 2. The evidence — the defect backlog is a body backlog
+
+The `next-session-handoff.md` backlog lists six open defects. Five are mechanical:
+
+| # | Filed as | Actual root cause |
+|---|---|---|
+| 1 | Open-loop timed distance over-reports ~1.8× | No encoders — nothing measures travel |
+| 2 | Veer ~7 cm/m after `right_trim 0.90` | Axle alignment + caster, not motor mismatch |
+| 3 | Floor-graze mode ~0.6 m | Sensor mount is not rigid |
+| 4 | Battery sag ~26% per session | Open-loop drive cannot compensate for it |
+| 5 | Rotation model over-predicts 5–10× | Caster swivel drag + pivot scrub |
+
+The software has absorbed these as `right_trim`, `duty_deadband`, `turn_duty_deadband`,
+and `TURN_STICTION_DUTY` — four constants that exist to describe a body that will not
+hold still.
+
+### 2.1 Rotation-vs-translation isolates the caster
+
+The 2026-07-17 tuning data separates the two failure modes cleanly:
+
+- **Translation**, after recalibrating `max_speed_mps` to 0.29: commanded 1.0 m
+  delivered **0.94 m** sonar-true.
+- **Rotation**, same session, same duty: commanded 30–60° delivered **2–15°**.
+
+If the loss were motor-side — weak motors, a sagging pack, a driver limit — translation
+and rotation would degrade *together*. They do not. Rotation is 5–10× worse than
+translation at the same duty, which means the loss is **specific to rotation**. Only two
+things resist rotation but not translation: the caster's swivel friction, and wheel
+scrub from pivoting about a point that is not the wheel-axis midpoint.
+
+### 2.2 Direction-dependence isolates the mounts
+
+Measured on hardwood: forward reliably breaks stiction; backward and right-pivot bursts
+often do not. Reverse is slower than forward and pulls the nose right.
+
+> **DECISION —** Stop trying to trim the veer away. A per-wheel scalar multiplier
+> (`left_trim` / `right_trim`) is **mathematically incapable** of correcting a
+> direction-dependent error — it applies the same factor whichever way the wheel turns.
+> That is why `right_trim 0.90` left ~7 cm/m of residual veer and why reverse still pulls
+> right. Direction-dependent asymmetry comes from a trailing caster that must flip 180°
+> on reversal, and from motors that settle at a different resting angle in a compliant
+> mount depending on torque direction. Both are fixed in the body or not at all.
+
+### 2.3 The connection failures are already costed
+
+Two multi-hour losses are on the record, both purely mechanical:
+
+- Ultrasonic reads degrading over minutes, traced to a loose breadboard leg at the
+  divider TAP column (`as-built-wiring.md` §2).
+- A morning lost to total immobility, traced to the pack's red VM lead pulling out of
+  breadboard J1 during charging (`next-session-handoff.md`).
+
+Neither was a software bug. Both are structural consequences of running power and
+signal through friction-fit breadboard holes on a vehicle that moves and gets picked up.
+
+---
+
+## 3. This is not a violation of the v1 non-goals
+
+`product-vision.md` §5.1 makes "a nice-looking or durable body" an explicit v1 non-goal,
+and §3 warns specifically against merging the kid-version horizon into v1. This rebuild
+does neither.
+
+> **DECISION —** Chassis v2 buys **dimensional repeatability**, not aesthetics and not
+> child-durability. Those two remain out of scope and remain the post-v1 pet's problem.
+> Repeatability is a different axis, and it is a prerequisite for the *current*
+> milestone — not an anticipation of a later one.
+
+**It is on the critical path.** The next milestone is **M**, person-following: a
+continuous closed-loop steering behavior that issues a stream of small turn corrections.
+With pivots delivering 2–15° of a commanded 30–60°, every small correction lands inside
+the dead zone — the controller commands, nothing moves, the error grows, it commands
+harder. That body makes the follow controller untunable. Fixing it unblocks M rather
+than delaying it.
+
+---
+
+## 4. Keep the architecture — rebuild the execution
+
+> **DECISION —** v2 stays **2WD differential drive with a passive third contact point**.
+> This is the correct architecture for a light indoor robot on hard floors: the simplest
+> kinematics, the most predictable turn behavior, and it is already what the code models.
+> 4WD adds turn scrub, which would make the worst measured defect worse. Tracks are worse
+> for odometry. **The design is right; the execution failed.** Do not redesign — rebuild.
+
+The v1 build also already burned the "train chassis" trap (one motor per axle → drives
+straight, never turns; `hardware-runbook.md` §7). One driven wheel per *side* is settled
+and carries forward unchanged.
+
+---
+
+## 5. What the body must do — the spec
+
+1. **Hold both drive axles collinear and fixed, permanently.** This is what makes a
+   calibration value mean something a week later.
+2. **Put ~70–80% of the weight on the drive wheels**, with the caster lightly loaded.
+   Traction is what breaks stiction — this attacks the duty-0.45 deadband directly.
+3. **Place the drive axle at or near the CG**, so a pivot is a true in-place rotation
+   rather than dragging the body through an arc.
+4. **Provide a near-frictionless, direction-independent third contact point.**
+5. **Run quietly enough to want to run it.** See §5.1 — this is a real requirement, not a
+   polish item.
+6. **Hold every sensor in a rigid, verifiable pose.** A hand adjustment must not be able
+   to change the sonar's aim.
+7. **Mechanically retain every electrical connection.** No load-bearing friction fits.
+8. **Be serviceable** — charge and swap the pack without disturbing any wiring.
+9. **Be encoder-ready**, even though the encoder code lands later.
+
+### 5.1 Acoustics is a requirement, not polish
+
+The v1 caster is **loud** on hardwood — a constant rattling buzz under way. This was not
+previously written down anywhere, and it belongs in the spec for two reasons.
+
+> **THESIS —** A robot that is unpleasant to run is a robot that gets run less, and
+> session count is the actual rate limiter on this project. Noise is not an aesthetic
+> concern like looks are — it directly suppresses the experiment loop. Separately,
+> `product-vision.md` §3 has this becoming a kid's robot pet: a clattering pet is a failed
+> pet regardless of how well it drives.
+
+Note this is **not** the v1 "looks and durability" non-goal creeping back in (§3). Noise
+is a functional property of the drivetrain, and its causes are the same mechanical
+compliance and contact geometry this whole rebuild is about.
+
+**Three sources, in likely order of contribution:**
+
+1. **Surface-following.** A small ball tracks every bit of floor texture and every plank
+   chamfer; a large ball rides over them. **Ball diameter acts as a low-pass filter on the
+   floor profile.** This is a size variable, not a material one.
+2. **Cage rattle.** A small ball loose in a plain plastic socket is excited by that same
+   vibration and bounces inside its housing — a constant metallic buzz, usually louder than
+   the floor contact itself. The *constant* character of the v1 noise points here.
+3. **The deck as a soundboard.** A large, light, flat cardboard panel is an effective
+   radiator; the body amplifies whatever the caster generates. **This one is fixed for free
+   by the rigid kit deck** (§6.1) — heavier and stiffer radiates far less.
+
+---
+
+## 6. Decisions
+
+### 6.1 Deck — a 2WD chassis kit
+
+> **DECISION —** The deck is a **bought 2WD robot chassis kit** (acrylic or aluminum
+> plate, pre-drilled, with proper TT motor brackets, hardware, and standoffs). ~$15–20.
+> Rationale: the precision-critical part of this build is holding the two motor axles
+> square and parallel, and a purpose-made bracket on a pre-drilled rigid plate does that
+> by construction. The remaining learning in this project is in behavior and control, not
+> in chassis fabrication — spend the evening on the swap, not on cutting and drilling.
+
+**What to check when buying:** it must be a **2-wheel** chassis (one motor per side), not
+a 4WD plate; it must include or accept **TT motor brackets**; and the plate should have
+open hole grids or slots so the Pi, pack, and driver board can be placed where §7 needs
+them rather than where the kit assumed.
+
+**Discard from the kit:** the tiny ball caster it ships with (see §6.2), and its battery
+box if it is a bare friction-contact holder.
+
+### 6.2 Third contact point — a large, light, polymer ball caster
+
+The v1 caster fails on **two** axes, and the noise one (§5.1) is the one that actually
+prompted this rebuild:
+
+- **Noise** — small diameter follows floor texture, and the ball rattles loose in its
+  plain socket.
+- **Pivot drag** — contributes to the rotation deficit measured in §2.1.
+
+> **DECISION —** Replace it with a **large-diameter ball caster, ~25–40 mm, with a
+> POM/nylon ball rather than steel, bearing-supported rather than a plain socket** (~$5–10).
+> This is the one part that addresses both axes at once: large enough to ride over floor
+> texture instead of tracking it, polymer contact instead of ringing metal, preloaded
+> against bearings so there is no cage rattle, and omnidirectional so it introduces no
+> reverse-flip asymmetry.
+
+**Plus two measures that attack the noise *path* rather than its source:** a rubber or
+foam washer between the caster housing and the deck to break the structure-borne route
+into the panel, and the rigid deck itself (§6.1), which radiates far less than cardboard.
+
+**On mass — "a light version of a lacrosse ball" is the right target.** The diameter
+instinct is correct; the mass is the trap. A real lacrosse ball is ~145 g sitting at the
+far end from the drive axle, which drags the CG toward the caster — exactly backwards from
+the weight-on-the-drive-wheels requirement (§5 item 2, §7) that is the lever on the
+duty-0.45 deadband. Specify **lacrosse-ball diameter, hollow-plastic mass.**
+
+> **CORRECTION —** An earlier draft of this spec argued against a rubber ball on friction
+> grounds. That objection does not survive the load numbers. With the CG placed per §7 the
+> caster carries roughly 20–30% of a ~700 g–1 kg robot — a couple of newtons — and a ball
+> caster **rolls** along the pivot arc rather than sliding, so material affects mainly
+> contact-patch spin friction, which is small at that load. Rubber at the contact was never
+> the pivot problem. **Diameter and cage fit are what matter**; contact material is chosen
+> for noise, not for drag.
+
+**Fallback if it is still audible:** a **rubber-tread swivel caster** — the quietest option
+available (large diameter, damped tread, real axle bearing). The cost is that it is a
+*trailing* caster and must flip 180° on reversal, reintroducing one of the contributors to
+"reverse pulls the nose right" (§2.2). That is a measurable trade, not a guess: take it if
+quiet is worth more than open-loop reverse accuracy, and note that closed-loop control
+would later absorb the disturbance anyway.
+
+### 6.3 Motors — encoder TT motors, wired but unread
+
+> **DECISION —** Fit **TT gear motors with integral quadrature encoders** (~$10 each) in
+> place of the plain TT motors. They are a physical drop-in — same gearbox, same body,
+> same shaft — plus encoder power and two channel wires per motor. **Mount them, run the
+> encoder wires to free GPIO, and leave them unread.** No code changes in this rebuild.
+
+**Rationale.** This is the one decision that determines whether the drivetrain gets built
+once or twice. When the encoder code does land it retires backlog items **1, 2, 4, and 5**
+outright: closed-loop speed matching kills veer with no trim at all, real odometry kills
+the 1.8× distance error, real angles replace the broken rotation model, and speed control
+makes battery sag invisible to behavior. `hardware.md` §3 already flags encoders as the
+answer if open-loop drift ever becomes the limiting factor. It has.
+
+**GPIO budget — confirmed available.** In use today: **5, 6, 12, 13, 17, 22** (plus 24
+reserved and inert for the TB6612 fallback). Four encoder channels fit comfortably; 16,
+18–21, 23, 25–27 are all free. Pin assignment is deferred to whoever writes the encoder
+code — this rebuild only has to route the wires and leave them accessible.
+
+> **RISK —** Encoder wires terminated and abandoned invite the assumption that encoders
+> are live. They are not. Label the harness, and leave a note in `as-built-wiring.md`
+> stating the channels are physically present and software-unread.
+
+---
+
+## 7. Layout requirements
+
+These are the parts the kit will not decide for you, and they are where the measured
+defects actually get fixed.
+
+| Requirement | Why | How to check |
+|---|---|---|
+| Drive axle at/near the CG, fore-aft | Makes a pivot a rotation rather than a drag; minimizes caster scrub radius | Balance the assembled deck on a pencil across the axle line — it should sit close to neutral |
+| ~70–80% of mass on the drive wheels | Traction breaks stiction; this is the lever on the duty deadband | Lift the caster end — it should feel light |
+| Caster as close to the axle as the footprint allows | Shortens the arc the caster traces during a pivot | Layout |
+| Heavy items (pack, Pi) placed to satisfy the two rows above | The pack is the single biggest mass — it is the CG trim tool | Layout |
+
+**Sonar geometry.** With a ~15° beam half-angle, a level sensor at height *h* first grazes
+the floor at roughly **3.7 h**. Mount as high as the layout practically allows, **level or
+1–2° upward** (never nosed down), on a screwed bracket square to the drive axis. Record
+the transducer-face offset from the front bumper so served distance can be related to
+actual clearance.
+
+**Pre-cut the corner-sensor mounts.** `hardware.md` §4 already calls for growing to 2–3
+sensors (front + angled front-corners) because one forward cone cannot cover a robot that
+turns and follows. Establish those mounting points now even if only the centre sensor is
+populated — it costs nothing during this build and avoids a third rebuild.
+
+**Camera.** The C270's clip base has a tripod thread — screw it to a fixed bracket rather
+than clipping it to an edge. Follow-mode steering assumes the camera looks along the drive
+axis; a camera that rotates when bumped puts a standing bias into the centering error that
+no amount of controller tuning will find.
+
+---
+
+## 8. Electrical hardening
+
+The pin map does **not** change. What changes is how each connection is retained.
+
+| v1 (as-built) | v2 | Kills |
+|---|---|---|
+| DRV8833 on a solderless breadboard | Soldered to perfboard, **screw terminals** for VM and motor outputs | The J1 VM-lead pull-out class |
+| ECHO divider on a mini breadboard | Two resistors soldered to perfboard | The degrading-reads class |
+| Pack leads into breadboard holes | **JST/XT30 connector** + strain relief | Charging disturbing the wiring |
+| Loose jumper bundles | Bundled and strain-relieved at both ends | Vibration-induced intermittents |
+
+> **DECISION —** Keep the two-supply / one-common-ground topology and the pin map exactly
+> as `hardware.md` §5 and `as-built-wiring.md` §3.1 record them. v2 changes **retention
+> only**, not topology and not pin assignment. This is what keeps the rebuild a
+> zero-code-change operation.
+
+**Cells.** Stay on 4×AA NiMH per the existing `hardware.md` §1 decision — the no-lithium
+call is deliberate. Upgrade to high-capacity, low-internal-resistance cells (Eneloop
+class) and a holder with solid contacts: part of the measured 26% session sag is
+spring-contact resistance in a cheap holder, not cell depletion.
+
+**Bulk capacitance.** The 1000 µF bulk and the 0.1 µF HF cap carry over. This is also the
+natural moment to replace the substituted 0.1 µF *electrolytic* with the specced **"104"
+ceramic disc** (`as-built-wiring.md` §3.3).
+
+---
+
+## 9. No code changes
+
+Verified against the source, not assumed:
+
+- There are **no wheel-diameter or track-width constants anywhere** in the codebase. The
+  entire motion model is empirical.
+- The pin map is unchanged, so `config.py` needs no edit.
+- Everything the rebuild invalidates lives in `~/.config/yalp/calibration.json` and is
+  re-derived by **`yalp calibrate`** — an interactive bring-up that catches a backwards
+  miswire, drives a fixed straight to measure forward speed, and spins in place to measure
+  turn rate.
+
+> **DECISION —** The rebuild costs **one calibration run, not a line of code.** Expect
+> `left_invert` / `right_invert` to change when the motors are remounted — `yalp calibrate`
+> handles it. Back up the current `calibration.json` before starting; the pre-tune backup
+> at `calibration.json.bak-pretune` should be left alone.
+
+---
+
+## 10. Staged plan
+
+> **RISK —** The failure pattern in this project's history is **compounded debugging** —
+> the train chassis, the PMIC failure, and the gpiozero timing defect all overlapped, and
+> each made the others harder to see. The mitigation is the same one that eventually
+> untangled them: change one class of thing at a time and re-verify with the tooling that
+> already exists.
+
+### Stage 0 — Measure the current body first (no purchases)
+
+~45 minutes on the existing robot. This converts opinion into a spec and produces a
+*before* number to beat.
+
+- Narrow the true minimum-moving duty, forward and reverse, on hardwood. (Known: 0.30
+  fails, 0.45 works.)
+- Repeat with the caster shimmed clear of the floor. **If the deadband collapses, the
+  caster is confirmed as the dominant loss** and the size of the win is on paper.
+- Check axle parallelism with a square; spin each wheel by hand and watch for wobble.
+
+**Noise source triage (~5 min, settles §5.1).** Push the robot by hand across hardwood,
+then a rug, then a smooth table:
+
+| Observation | Dominant source | Fix |
+|---|---|---|
+| Loud on hardwood, quiet on rug | Surface-following | Diameter (§6.2) |
+| Loud on every surface | Cage rattle | Bearing-supported caster (§6.2) |
+| Buzz stops when a finger holds the ball still in its socket | Cage rattle, confirmed | Bearing-supported caster |
+
+### Stage 1 — Mechanical
+
+Assemble the kit deck with the encoder motors on proper brackets and the ball transfer
+unit. Lay out to §7 (axle at CG, weight on the drive wheels). Move the electronics across
+using `as-built-wiring.md` as the map. **Do not change the pin map.**
+
+### Stage 2 — Electrical
+
+Driver and divider onto soldered perfboard with screw terminals; connectorize the pack;
+strain-relieve every bundle. Route and label the encoder harness, unread.
+
+### Stage 3 — Sensors
+
+Rigid, square sonar bracket per §7 geometry. Screwed camera mount. Corner-sensor mount
+points established.
+
+### Stage 4 — Re-verify, in the original order
+
+Use the tooling already built for exactly this. Nothing here is new work.
+
+| Step | Command | Gate |
+|---|---|---|
+| GPIO stack | `python scripts/verify_gpio_stack.py` | lgpio factory, no RPi.GPIO |
+| Motor channels | `yalp hwtest --check motors --matrix` | all 6 steps correct |
+| Sonar | `yalp hwtest --check ultrasonic --seconds N --hz 15` | rigid box at 30 cm reads ~29–31 cm |
+| **Gate E** | stall-heavy drive + `vcgencmd get_throttled` | **mandatory re-run** — the power path was rebuilt |
+| Motion | frame-verified motion gate | one visible pivot burst in camera frames |
+| Floor | `yalp drive` | a clean lap with collision-stop live |
+| Calibration | `yalp calibrate` | new `calibration.json` written |
+
+> **DECISION —** **Gate E is re-run, not inherited.** The 2026-07-03 pass certified a
+> power and decoupling path that this rebuild physically replaces. Re-running it is not
+> ceremony — the caps, the connector, and the pack contacts are all new.
+
+### Stage 5 — Resume the roadmap at M
+
+Person-following, on a body whose small turn commands actually produce small turns.
+
+---
+
+## 11. What this invalidates
+
+- **`as-built-wiring.md` §3 becomes stale on Stage 1.** Its breadboard node references are
+  cross-referenced elsewhere — notably the "red = VM = breadboard J1" note in
+  `next-session-handoff.md` under *"Motor power path — do not re-diagnose."* That note
+  must be rewritten, not just deleted, or the next session will chase a node that no
+  longer exists.
+- **`calibration.json` is invalidated.** Back it up; re-derive via `yalp calibrate`.
+- **Backlog items 2, 3, and 5** should be re-measured after Stage 4 rather than carried
+  forward — their numbers describe the old body.
+- **Backlog items 1 and 4** stay open until the encoder code lands; the hardware for them
+  will be physically present and waiting.
+
+---
+
+## 12. Bill of materials — what to buy
+
+Prices and stock checked 2026-07-31. Vendors: **Pololu**, **DigiKey**, **Amazon**.
+
+### 12.1 Spec-critical — buy exactly these
+
+These two are the parts where the specific model matters. Both were checked against the
+§6 spec directly.
+
+| # | Part | Link | Price | Why this exact one |
+|---|---|---|---|---|
+| 1 | **Pololu Ball Caster, 1″ plastic ball + ball bearings** | [pololu.com/product/2692](https://www.pololu.com/product/2692) | **$9.95** | Exact match to §6.2. 1″ (25.4 mm) **POM/acetal** ball — polymer, not steel. Rides on **three 3×7×3 mm ball bearings**, not a plain socket, so there is no cage rattle (§5.1 source 2). 29 mm overall height, three M3/#4 mounting holes. Rated for differential-drive robots up to ~10 lb. |
+| 2 | **DFRobot FIT0450 — TT Motor with Encoder, 6 V 160 RPM 120:1** ×2 | [digikey.com FIT0450](https://www.digikey.com/en/products/detail/dfrobot/FIT0450/7597205) | **$7.40 ea → $14.80** | §6.3. **Integrated quadrature** encoder (A + B phase) — gives direction, unlike slotted code-wheel kits. 3–7.5 V motor / 4.5–7.5 V encoder, so it runs on the existing ~5.55 V pack. In US stock at DigiKey. |
+
+> **DECISION —** Take the **ball-bearing** caster (2692), not the plastic-roller version
+> (2691). Same dimensions, ~$3 more, and the bearings are precisely what §5.1 identifies as
+> the fix for cage rattle. This is the single part the noise complaint is about — do not
+> economise here.
+
+> **DECISION —** Take an **integrated quadrature** encoder over the cheap alternatives.
+> Both the Adafruit TT Motor Encoder (`3782`) and the slotted code wheels bundled into most
+> chassis kits are **single-channel photo-interrupters — they count ticks but cannot tell
+> direction**, and they need a separately-mounted sensor held in alignment with a slotted
+> disc. Given that this entire rebuild exists because alignment-sensitive mounts keep
+> failing (§2.3), adding another one would be self-defeating. The FIT0450's encoder is
+> sealed inside the motor with no alignment to lose.
+
+### 12.2 Standard parts — brand doesn't matter, spec does
+
+| # | Part | Example | ~Price | What to check |
+|---|---|---|---|---|
+| 3 | **2WD chassis kit** — acrylic plate, TT motor brackets, wheels, hardware | [Amazon B0G5N62L4W](https://www.amazon.com/2WD-Robot-Chassis-Platform-Raspberry/dp/B0G5N62L4W) · [RobotShop equivalent](https://www.robotshop.com/products/xiaor-geek-2wd-robot-car-chassis-kit-with-tt-motor-battery-box-acrylic-chassis-and-2-wheels-diy-project-smart-robot-chassis-robots-car-platform-arduino-raspberry-pi) | $15–20 | Must be **2WD** (one motor per side — §4), must include **TT motor brackets**, and the plate should have an open hole grid so §7 layout is free. Discard its caster and its code wheels. |
+| 4 | **GPIO screw-terminal HAT** for the Pi 5 | [Adafruit Pi-EzConnect 2711](https://www.adafruit.com/product/2711) · [GeeekPi (Amazon)](https://www.amazon.com/GeeekPi-Screw-Terminal-Raspberry-Extension/dp/B08GKQMC72) | $10–15 | **Verify Pi 5 compatibility and clearance against the CanaKit fan case before buying** (§12.3). |
+| 5 | **Eneloop AA ×4** | [Panasonic BK-3MCCA4BA](https://www.amazon.com/Eneloop-Rechargeable-Batteries-Controller-Flashlight/dp/B00JHKSN76) | $15 | 2000 mAh, 2100 cycles, low internal resistance. **Eneloop Pro** ([BK-3HCCA4BA](https://www.amazon.com/Panasonic-BK-3HCCA4BA-eneloop-Pre-Charged-Rechargeable/dp/B00JHKSL28), 2600 mAh) if the ~26% session sag still bites. |
+| 6 | **M3 standoff / screw / nut assortment** | [Amazon B06Y4Y4DNW](https://www.amazon.com/Fastening-Standoff-Assortment-Installation-Raspberry/dp/B06Y4Y4DNW) | $12 | Nylon or brass. Mounts the Pi, the caster, and the sensor bracket. |
+| 7 | Perfboard + 2- and 3-pos screw terminals + header strip | any electronics supplier | $8 | Driver-side hardening (§8). |
+| 8 | JST-XH or XT30 pair + strain-relief / cable clamps | any electronics supplier | $6 | Pack connectorisation (§8). |
+| 9 | "104" 0.1 µF ceramic disc | any electronics supplier | $1 | Replaces the substituted electrolytic (§8). |
+| 10 | Rubber or foam washers, M3 | hardware store | $1 | Caster mount isolation (§5.1, §6.2). |
+
+**Total: ~$92–107.**
+
+> **THESIS —** Against a ~$335 project — and against the two multi-hour debugging sessions
+> already spent on a loose divider leg and a pulled VM lead — this is the cheapest line item
+> in the build. The v1 body was the right call for getting started and is the wrong call for
+> continuing.
+
+### 12.3 Check before you commit — two unverified fits
+
+Neither of these is a reason to delay the order; both have clean fallbacks. But they are
+**not** confirmed, and should not be treated as settled.
+
+> **RISK —** **FIT0450 mechanical compatibility with the chassis kit is unverified.** Two
+> specific unknowns: whether the encoder-equipped body seats in the kit's TT bracket (the
+> encoder adds length at the rear), and whether its output shaft takes the kit's wheels
+> (DFRobot describes a "copper output shaft with embedded thread" — this may not be the
+> standard TT D-profile). The dimension drawing is on the DFRobot product page; check it
+> against the kit before assembly.
+> **FALLBACK:** the chassis kit ships with plain TT motors. If the FIT0450s do not fit,
+> **build with the kit's motors** — the encoders are wired-but-unread in this rebuild
+> anyway (§6.3), so nothing in Stages 1–5 is blocked. The encoder swap simply becomes its
+> own later task alongside the encoder code.
+
+> **RISK —** **GPIO terminal HAT clearance against the CanaKit active-cooler case is
+> unverified.** The HAT occupies the 40-pin header, which that case encloses.
+> **FALLBACK:** skip the HAT and terminate the Pi side on the same soldered perfboard as
+> the driver (§8). The HAT is a convenience that removes soldering, not a requirement.
+
+### 12.4 Order sequencing
+
+> **DECISION —** Order in two waves. **Wave 1 — the chassis kit, the Pololu caster, the M3
+> kit, and the washers.** These are what actually fix the noise (§5.1) and the geometry
+> (§7), which is the entire point of the rebuild, and they have no compatibility unknowns.
+> **Wave 2 — the FIT0450s and the electrical-hardening parts.** The encoders are unread
+> until the encoder code lands, so they are not on the critical path and a fit problem
+> (§12.3) costs nothing in schedule.
+
+---
+
+## 13. Open questions
+
+> **OPEN —** Encoder GPIO pin assignment and the closed-loop control code are deferred.
+> The wires will be physically present and labelled from Stage 2; nothing reads them.
+> Decide the pin map when the code is written, not before.
+
+> **OPEN —** Whether the new caster alone clears the pivot deficit, or whether pivot
+> performance also needs the CG/axle placement of §7 to be tight. Stage 0's caster-lifted
+> measurement should predict this; Stage 4's calibration will settle it.
+
+> **OPEN —** Whether the §6.2 primary (large polymer ball, bearing-supported) is quiet
+> enough, or whether the rubber-tread swivel fallback is needed — and if so, whether its
+> reverse-flip asymmetry is acceptable pre-encoders. Decide by ear at Stage 4, against the
+> Stage 0 noise triage as the baseline.
+
+> **OPEN —** Corner sonar count and angle (`hardware.md` §4 leaves this open pending real
+> chassis geometry). v2 establishes the mounting points; the decision can now finally be
+> made against a real, fixed footprint.
+
+---
+
+## Cross-references
+
+- `hardware.md` — the v1 design: BOM, power architecture, drivetrain honesty (§3), sensing
+  limits (§4), and the pin map (§5) that v2 preserves unchanged.
+- `as-built-wiring.md` — what is physically on Izzy today; the map for the Stage 1 move,
+  and the doc that Stage 1 obsoletes.
+- `hardware-runbook.md` — the bench procedures, including the "train chassis" warning (§7)
+  and the Gate E staged bring-up that Stage 4 re-runs.
+- `roadmap.md` — the gate ledger; milestone **M** is what this rebuild unblocks.
+- `next-session-handoff.md` — the defect backlog §2 re-reads as a body backlog.
 
 </script>
 <script type="text/markdown" data-name="initial-plan.md">
