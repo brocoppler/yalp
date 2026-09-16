@@ -539,6 +539,85 @@ TURN_STICTION_DUTY: float = _env_float("YALP_TURN_STICTION_DUTY", 0.5)
 # hook for future field tuning of the stiction-dominated turn behavior above.
 TURN_DUTY_DEADBAND: float = _env_float("YALP_TURN_DUTY_DEADBAND", 0.0)
 
+# --- Visual heading hold (2026-09-15 field session) ---------------------------
+# Izzy has no encoders and no IMU, so the ONLY heading sensor she has is the
+# camera. ReactiveTickCore estimates yaw per tick from the horizontal image shift
+# between consecutive frames (yalp.reactive.visual_odometry — phase correlation on
+# a small grayscale copy, sub-millisecond) and, during a straight DRIVE_GOAL,
+# biases the left/right duty split to hold the heading she had when the goal was
+# adopted. Why this exists: on 2026-09-15 a per-wheel camera measurement showed the
+# two channels differ by up to ~60% at duty 0.45 and the imbalance FLIPS SIGN
+# between duty 0.45 and 0.60 (DRV8833 decay-mode asymmetry, see MOTOR_DECAY_MODE),
+# so no single static trim can make her drive straight — a closed loop can.
+#
+# Horizontal field of view of the camera in degrees: converts an image shift in
+# pixels to a yaw angle (deg = px * HFOV / frame_width). The Logitech C270 is
+# ~55 deg horizontal at 640x480 (its quoted 60 deg is diagonal). A wrong value
+# scales the yaw estimate (and therefore the controller gain) proportionally.
+CAMERA_HFOV_DEG: float = _env_float("YALP_CAMERA_HFOV_DEG", 55.0)
+
+# Master switch for the heading hold on the REAL backend (the fake/simulation
+# backend never engages it — a synthetic frame is not a heading). Set to 0 to get
+# the old pure open-loop (drive, drive) split back.
+HEADING_HOLD_ENABLED: bool = _env_bool("YALP_HEADING_HOLD", True)
+
+# Proportional gain: duty of correction per DEGREE of heading error. The
+# correction c is ADDED to the left wheel and SUBTRACTED from the right, so a
+# heading error of +5 deg (nose drifted LEFT) at gain 0.01 speeds the left wheel
+# up by 0.05 and slows the right by 0.05 -> the robot turns back RIGHT. (0.02
+# oscillated on the robot; 0.01 with the damping below held +-3 deg.)
+HEADING_HOLD_GAIN: float = _env_float("YALP_HEADING_HOLD_GAIN", 0.01)
+
+# Damping gain: duty of correction per DEGREE/SECOND of yaw rate. Opposes the
+# turn that is happening right now so the P term does not overshoot/oscillate
+# (the camera runs ~15 fps and the tick 20 Hz — there is real latency to damp).
+HEADING_HOLD_KD: float = _env_float("YALP_HEADING_HOLD_KD", 0.004)
+
+# Clamp on the magnitude of the closed-loop correction (duty). Bounds the
+# authority of the controller so a bad yaw estimate can never spin her in place.
+HEADING_HOLD_MAX: float = _env_float("YALP_HEADING_HOLD_MAX", 0.20)
+
+# Minimum phase-correlation response for a frame pair to count as a valid yaw
+# sample (0..1; a textureless wall or a black frame scores near 0). Below it the
+# tick is "blind": the integrator holds, and after HEADING_HOLD_BLIND_TICKS blind
+# ticks in a row the closed-loop term is dropped (feed-forward bias only).
+HEADING_HOLD_MIN_RESPONSE: float = _env_float("YALP_HEADING_HOLD_MIN_RESPONSE", 0.10)
+HEADING_HOLD_BLIND_TICKS: int = _env_int("YALP_HEADING_HOLD_BLIND_TICKS", 10)
+
+# Closed-loop ROTATE goals: complete a `turn` when the integrated visual yaw
+# reaches the target instead of when the open-loop timer (turn_rate_dps) says
+# so. The timer stays as an upper bound (ROTATE_TIMEOUT_FACTOR x the timed
+# estimate) so a blind estimator can never hang a goal.
+ROTATE_CLOSED_LOOP: bool = _env_bool("YALP_ROTATE_CLOSED_LOOP", True)
+ROTATE_TIMEOUT_FACTOR: float = _env_float("YALP_ROTATE_TIMEOUT_FACTOR", 3.0)
+# Stop a closed-loop turn this many seconds EARLY, predicted from the current
+# yaw rate (heading + rate * lead >= target): covers the camera latency (~1
+# frame at 15 fps) plus the wheels' coast-down, which together overshot a 90 deg
+# turn by ~6 deg at 100 deg/s on 2026-09-15. 0 = stop exactly at the target.
+ROTATE_STOP_LEAD_S: float = _env_float("YALP_ROTATE_STOP_LEAD_S", 0.06)
+
+# Trim learning: after every straight drive that COMPLETES with a live heading
+# estimate, the mean closed-loop correction it needed is folded (EMA, this rate)
+# into a persisted feed-forward bias (MotorCalibration.straight_bias_fwd / _rev),
+# so the NEXT drive starts out nearly straight and the closed loop only has to
+# mop up the residual. This is what adapts her to a new floor without anyone
+# re-running `yalp calibrate`. 0 disables learning (the bias is still applied).
+TRIM_LEARNING_ENABLED: bool = _env_bool("YALP_TRIM_LEARNING", True)
+TRIM_LEARNING_RATE: float = _env_float("YALP_TRIM_LEARNING_RATE", 0.3)
+
+# DRV8833 PWM decay mode — 'mixed' (the historical dialect) or 'slow'.
+# 'mixed': forward = xIN2 LOW + PWM on xIN1 (FAST decay); reverse = xIN2 HIGH +
+#   PWM(1-duty) on xIN1 (SLOW decay). Torque at a given duty differs a LOT between
+#   the two modes, so with one wheel inverted and the other not, the two wheels run
+#   in DIFFERENT modes for the same command and pull unequally (measured
+#   2026-09-15: left 48 deg/s vs right 77 deg/s at duty 0.45, sign flipped at 0.60).
+# 'slow': BOTH directions on BOTH channels use slow decay (one input held HIGH, the
+#   other PWMed at 1-duty), regardless of inversion — symmetric wheels, more torque
+#   near the stall floor, and a meaningful trim in both directions. Needs PWM on the
+#   direction pins too, which the lgpio pin factory provides (software PWM on any
+#   GPIO). Validated on the robot 2026-09-15.
+MOTOR_DECAY_MODE: str = _env_str("YALP_MOTOR_DECAY", "slow")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -621,6 +700,19 @@ class Config:
     drive_duty_deadband: float = DRIVE_DUTY_DEADBAND
     turn_stiction_duty: float = TURN_STICTION_DUTY
     turn_duty_deadband: float = TURN_DUTY_DEADBAND
+    camera_hfov_deg: float = CAMERA_HFOV_DEG
+    heading_hold_enabled: bool = HEADING_HOLD_ENABLED
+    heading_hold_gain: float = HEADING_HOLD_GAIN
+    heading_hold_kd: float = HEADING_HOLD_KD
+    heading_hold_max: float = HEADING_HOLD_MAX
+    heading_hold_min_response: float = HEADING_HOLD_MIN_RESPONSE
+    heading_hold_blind_ticks: int = HEADING_HOLD_BLIND_TICKS
+    rotate_closed_loop: bool = ROTATE_CLOSED_LOOP
+    rotate_timeout_factor: float = ROTATE_TIMEOUT_FACTOR
+    rotate_stop_lead_s: float = ROTATE_STOP_LEAD_S
+    trim_learning_enabled: bool = TRIM_LEARNING_ENABLED
+    trim_learning_rate: float = TRIM_LEARNING_RATE
+    motor_decay_mode: str = MOTOR_DECAY_MODE
 
 
 def get_api_key() -> str | None:
@@ -723,6 +815,19 @@ __all__ = [
     "DRIVE_DUTY_DEADBAND",
     "TURN_STICTION_DUTY",
     "TURN_DUTY_DEADBAND",
+    "CAMERA_HFOV_DEG",
+    "HEADING_HOLD_ENABLED",
+    "HEADING_HOLD_GAIN",
+    "HEADING_HOLD_KD",
+    "HEADING_HOLD_MAX",
+    "HEADING_HOLD_MIN_RESPONSE",
+    "HEADING_HOLD_BLIND_TICKS",
+    "ROTATE_CLOSED_LOOP",
+    "ROTATE_TIMEOUT_FACTOR",
+    "ROTATE_STOP_LEAD_S",
+    "TRIM_LEARNING_ENABLED",
+    "TRIM_LEARNING_RATE",
+    "MOTOR_DECAY_MODE",
     "Config",
     "get_api_key",
     "require_api_key",

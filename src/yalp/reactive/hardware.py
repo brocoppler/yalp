@@ -249,6 +249,7 @@ class GpiozeroMotorDriver:
         right_invert: bool = config.MOTOR_RIGHT_INVERT,
         left_trim: float = 1.0,
         right_trim: float = 1.0,
+        decay_mode: str = config.MOTOR_DECAY_MODE,
     ) -> None:
         # --- Lazy hardware imports (keep the module laptop-importable) --------
         try:
@@ -270,13 +271,28 @@ class GpiozeroMotorDriver:
         self._left_trim = float(left_trim)
         self._right_trim = float(right_trim)
         self._driver_kind = str(driver_kind).strip().lower()
+        decay = str(decay_mode).strip().lower()
+        if decay not in ("mixed", "slow"):
+            raise ValueError(
+                f"decay_mode must be 'mixed' or 'slow', got {decay_mode!r}"
+            )
+        # Uniform slow decay only means anything on the IN/IN DRV8833.
+        self._slow_decay = decay == "slow" and self._driver_kind == "drv8833"
         self._closed = False
 
-        # Speed pins: hardware PWM (GPIO12/13). Direction pins: plain GPIO.
+        # Speed pins (xIN1): PWM on GPIO12/13. Direction pins (xIN2): plain GPIO
+        # in the historical 'mixed' dialect, but ALSO PWM in uniform-slow-decay
+        # mode, where forward holds xIN1 HIGH and PWMs xIN2 (see _drive_channel).
+        # The lgpio pin factory software-times PWM on any GPIO, so this needs no
+        # special pins.
         self._left_pwm = PWMOutputDevice(left_pwm_pin, frequency=pwm_frequency)
         self._right_pwm = PWMOutputDevice(right_pwm_pin, frequency=pwm_frequency)
-        self._left_dir = DigitalOutputDevice(left_dir_pin)
-        self._right_dir = DigitalOutputDevice(right_dir_pin)
+        if self._slow_decay:
+            self._left_dir = PWMOutputDevice(left_dir_pin, frequency=pwm_frequency)
+            self._right_dir = PWMOutputDevice(right_dir_pin, frequency=pwm_frequency)
+        else:
+            self._left_dir = DigitalOutputDevice(left_dir_pin)
+            self._right_dir = DigitalOutputDevice(right_dir_pin)
 
         # STBY/nSLEEP: only the TB6612FNG has a software STBY we must drive HIGH
         # to enable the outputs. The DRV8833 ties nSLEEP HIGH in hardware, so we
@@ -388,6 +404,29 @@ class GpiozeroMotorDriver:
         if invert:
             throttle = -throttle
 
+        if self._slow_decay:
+            # UNIFORM SLOW DECAY (config.MOTOR_DECAY_MODE == 'slow'): one input is
+            # held HIGH and the other PWMs at (1 - duty) so the off-time is a
+            # BRAKE (both inputs HIGH), never a coast — the same decay mode in
+            # both directions on both channels, whatever the inversion. Truth
+            # table (DRV8833): xIN1=1/xIN2=0 fwd, xIN1=0/xIN2=1 rev, 1/1 brake,
+            # 0/0 coast.
+            #   forward:  xIN1 = 1,           xIN2 = PWM(1 - duty)
+            #   reverse:  xIN1 = PWM(1 - duty), xIN2 = 1
+            #   zero:     xIN1 = 0,           xIN2 = 0   (true coast)
+            # Order matters: raise the held-HIGH input FIRST so the channel never
+            # passes through 0/1 or 1/0 at full duty on its way in.
+            if throttle > 0:
+                pwm.value = 1.0
+                dir_dev.value = 1.0 - throttle
+            elif throttle < 0:
+                dir_dev.value = 1.0
+                pwm.value = 1.0 - abs(throttle)
+            else:
+                pwm.value = 0.0
+                dir_dev.value = 0.0
+            return
+
         if self._driver_kind == "drv8833":
             # IN/IN decay-mode dialect (see truth table above).
             if throttle > 0:
@@ -443,7 +482,10 @@ class GpiozeroMotorDriver:
                 pass
         for dir_dev in (self._left_dir, self._right_dir):
             try:
-                dir_dev.off()
+                if self._slow_decay:
+                    dir_dev.value = 0.0  # a PWM device in uniform-slow-decay mode
+                else:
+                    dir_dev.off()
             except Exception:  # pragma: no cover - best effort during a safety stop
                 pass
 

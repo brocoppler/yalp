@@ -141,6 +141,10 @@ class RealReactiveBackend(ReactiveTickCore):
         watchdog: Optional[MotorWatchdog] = None,
         observer: Optional[object] = None,
         close_observer: bool = False,
+        heading_hold: Optional[bool] = None,
+        rotate_closed_loop: Optional[bool] = None,
+        trim_learning: Optional[bool] = None,
+        yaw_estimator: Optional[object] = None,
     ) -> None:
         # Observer seam (telemetry / any recorder). Injected so tests and library
         # users can pass their own or leave it None. ``close_observer`` = this
@@ -160,6 +164,9 @@ class RealReactiveBackend(ReactiveTickCore):
         if calibration is None:
             calibration = load_if_present(calibration_path)
         self.calibration = calibration
+        # Remembered so a LEARNED steering bias is written back to the SAME file
+        # the calibration was read from (see on_bias_learned).
+        self._calibration_path = calibration_path
         cal_speed = calibration.max_speed_mps if calibration is not None else 0.5
         cal_turn = calibration.turn_rate_dps if calibration is not None else 120.0
         self.max_speed_mps = max(
@@ -206,15 +213,17 @@ class RealReactiveBackend(ReactiveTickCore):
 
             if motor_driver is None:
                 # Honor the calibration's miswire fixes on the real driver too.
+                # The PWM decay mode comes from config (MOTOR_DECAY_MODE).
                 if calibration is not None:
                     motor_driver = GpiozeroMotorDriver(
                         left_invert=calibration.left_invert,
                         right_invert=calibration.right_invert,
                         left_trim=calibration.left_trim,
                         right_trim=calibration.right_trim,
+                        decay_mode=config.MOTOR_DECAY_MODE,
                     )
                 else:
-                    motor_driver = GpiozeroMotorDriver()
+                    motor_driver = GpiozeroMotorDriver(decay_mode=config.MOTOR_DECAY_MODE)
             if range_sensor is None:
                 # Backend selection (Pi 5 collision-stop safety): PREFER the
                 # libgpiod v2 kernel-timestamped driver and fall back to gpiozero
@@ -243,6 +252,54 @@ class RealReactiveBackend(ReactiveTickCore):
         # The reactive layer owns ONE camera for the run (exactly like the fake).
         self._camera = camera if camera is not None else Camera(source=camera_source)
         self._camera_started = False
+
+        # --- Visual heading hold / closed-loop turns / trim learning ------------
+        # Config-driven (HEADING_HOLD_ENABLED etc.), explicit kwargs win. A
+        # SYNTHETIC camera is never a heading source (its test pattern scrolls
+        # sideways every frame, which would read as a permanent yaw), so the hold
+        # and closed-loop turns are forced OFF for it — the pure open-loop
+        # (drive, drive) split of old. The estimator is only built when something
+        # can use it, so a headless/CI backend pays nothing.
+        synthetic = getattr(self._camera, "source", None) == "synthetic"
+        want_hold = config.HEADING_HOLD_ENABLED if heading_hold is None else bool(heading_hold)
+        want_rotate = (
+            config.ROTATE_CLOSED_LOOP if rotate_closed_loop is None else bool(rotate_closed_loop)
+        )
+        want_learn = (
+            config.TRIM_LEARNING_ENABLED if trim_learning is None else bool(trim_learning)
+        )
+        if synthetic and heading_hold is None:
+            want_hold = False
+        if synthetic and rotate_closed_loop is None:
+            want_rotate = False
+        self.heading_hold_enabled = want_hold
+        self.rotate_closed_loop = want_rotate
+        self.trim_learning_enabled = want_learn and want_hold
+        self.heading_hold_gain = config.HEADING_HOLD_GAIN
+        self.heading_hold_kd = config.HEADING_HOLD_KD
+        self.heading_hold_max = config.HEADING_HOLD_MAX
+        self.heading_hold_min_response = config.HEADING_HOLD_MIN_RESPONSE
+        self.heading_hold_blind_ticks = config.HEADING_HOLD_BLIND_TICKS
+        self.rotate_timeout_factor = config.ROTATE_TIMEOUT_FACTOR
+        self.trim_learning_rate = config.TRIM_LEARNING_RATE
+        if calibration is not None:
+            self.straight_bias_fwd = float(getattr(calibration, "straight_bias_fwd", 0.0))
+            self.straight_bias_rev = float(getattr(calibration, "straight_bias_rev", 0.0))
+        if yaw_estimator is not None:
+            self._yaw = yaw_estimator
+        elif want_hold or want_rotate:
+            from .visual_odometry import YawEstimator
+
+            self._yaw = YawEstimator(hfov_deg=config.CAMERA_HFOV_DEG)
+        else:
+            self._yaw = None
+        self._heading_deg = 0.0
+        self._yaw_rate_dps = 0.0
+        self._heading_blind_ticks = 10**9
+        self._heading_last_fid = None
+        self._heading_last_ts = 0.0
+        self._heading_corr_sum = 0.0
+        self._heading_corr_n = 0
 
         self._state = RobotState(mode=Mode.IDLE, goal_status=GoalStatus.NONE)
         self._goal_duration_s = 0.0
@@ -282,6 +339,36 @@ class RealReactiveBackend(ReactiveTickCore):
             return stats()
         except Exception:  # pragma: no cover - observability must never break a tick
             return None
+
+    def on_bias_learned(self, forward: bool, bias: float) -> None:
+        """Persist a learned straight-drive steering bias to the calibration file.
+
+        Called from the tick (via ``_safe_notify``, so it can never break a tick)
+        when a completed straight drive moved the bias. Writes the SAME file the
+        calibration was loaded from (``calibration_path`` / the default path).
+        Best-effort: a robot without a calibration file never invents one, and
+        any I/O error is logged and dropped — the bias still lives in memory for
+        the rest of the session. The write is ~300 bytes; on the Pi it is far
+        under a millisecond, inside the tick budget.
+        """
+        cal = self.calibration
+        if cal is None:
+            return
+        if forward:
+            cal.straight_bias_fwd = float(bias)
+        else:
+            cal.straight_bias_rev = float(bias)
+        try:
+            written = cal.save(self._calibration_path)
+        except Exception as exc:  # pragma: no cover - filesystem trouble
+            logger.warning("could not persist learned steering bias: %r", exc)
+            return
+        logger.info(
+            "learned steering bias persisted: %s=%.4f -> %s",
+            "straight_bias_fwd" if forward else "straight_bias_rev",
+            float(bias),
+            written,
+        )
 
     def command_motors(self, left: float, right: float) -> None:
         """Write signed ``(left, right)`` throttles to the real motor driver."""

@@ -1,16 +1,57 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-07-17, afternoon session (driving tuned + deadband code
-landed + first `yalp see` on-robot run).
-**One-line status:** Drivetrain tuned under load — deadband at duty 0.30 confirmed,
-duty 0.45 reliable, calibration committed. Deadband code landed (commit `ebbd727`).
-First `yalp see` run on Izzy: frame captured, accurate scene description returned,
-independently verified — milestone C done on real hardware. Road: richer `yalp see`
-session and the path to person-following.
+**Last updated:** 2026-09-15 (first session after the summer: wiring regression
+found and fixed, DRV8833 decay-mode asymmetry found and fixed, **visual heading
+hold + closed-loop turns + trim learning landed and verified on the robot**).
+**One-line status:** Izzy drives straight and turns to a commanded angle without
+encoders — the camera is her heading sensor. Straight legs hold heading within
+~±5° forward and reverse (was 14°–42° of veer); `yalp drive --turn 90` turns
++96° / −91° (old open-loop timer: 2–15°). Calibration on the Pi: `left_invert=false`,
+`right_invert=true`, trims 1.0, learned `straight_bias_*` ≈ +0.01.
+Road: decide the SAFE_STOP escape rule (below), then longer lanes / person-following.
 
 ---
 
-## Where we are
+## 2026-09-15 session — what happened, in order
+
+1. **Motor pack was switched off** at first (no motion, exit 0 — the drive CLI's
+   open-loop "complete" proves nothing; the sonar not moving did). Switched on.
+2. **She spun left instead of driving straight.** The left TT motor's leads at
+   H4/H5 are swapped relative to July. Fixed in the calibration file:
+   `left_invert=false` (backup `calibration.json.bak-2026-09-15`).
+3. **Still veered, and the veer flipped sign with duty** (+14° left at 0.45,
+   −42° right at 0.60, ~100° left in reverse). Per-wheel camera measurement
+   (`as-built-wiring.md` §3.6 table) showed the DRV8833 "mixed" PWM dialect put the
+   two wheels in different decay modes once only one was inverted. **Fix:**
+   `config.MOTOR_DECAY_MODE="slow"` — uniform slow decay on both channels/both
+   directions (DIR pins are software-PWMed too). No re-wiring.
+4. **Visual heading hold** (`yalp/reactive/visual_odometry.py` + `ReactiveTickCore`):
+   frame-to-frame yaw from phase correlation (left/right halves averaged to
+   cancel looming), P+D correction on the straight-drive duty split, learned
+   feed-forward bias persisted to the calibration file after every straight drive
+   (also on SAFE_STOP / preemption). Closed-loop rotate goals with a predictive
+   stop lead. `yalp drive --turn DEG` added; the timeline prints `hdg=`.
+   Config knobs: `HEADING_HOLD_*`, `ROTATE_*`, `TRIM_LEARNING_*`, `CAMERA_HFOV_DEG`.
+5. **Camera warm-up** (`camera.WARMUP_MAX_SECONDS` 1.5 → 3 s): the C270 publishes
+   black frames for ~1 s after open; the heading estimate is blind until then.
+   Give the server ~4 s after its port comes up before the first drive.
+
+**Open design decision — SAFE_STOP has no escape.** Once the reflex latches at
+<0.30 m, the tick halts *every* goal, and the drive CLI pre-flight refuses
+reverse and rotate too. On a small floor she strands herself after every forward
+leg and after any pivot that sweeps the sonar across furniture (happened twice
+this session). Recommendation: allow `rotate` goals and NEGATIVE straight drives
+while the obstacle latch is active (neither moves the nose forward; the reflex
+still halts any forward motion), and have the pre-flight pass them. This changes
+software-spec.md §2.3 — operator's call, not made unilaterally.
+
+**Measured this session (slow decay, single-wheel |yaw rate| deg/s, no trims):**
+duty 0.45 → L fwd 104 / R fwd 66 / L rev 111 / R rev 76; duty 0.60 → 121 / 89 /
+81 / 102. Left is ~20–35% stronger forward; the heading hold + learned bias absorb it.
+
+---
+
+## Where we are (as of 2026-07-17 — still accurate unless noted above)
 
 - **Floor-drive milestone: EARNED.** Four drives (A–D) across the session
   closed the rung:
@@ -145,9 +186,14 @@ camera + LLM seam is live. What's next is deepening it.
   `red = VM = breadboard J1`, `black = J3`, caps' + legs on the VM column.
   See `as-built-wiring.md` §3.3 before touching anything in J1.
 
-- **Calibration state (post 2026-07-17 tuning):** `~/.config/yalp/calibration.json`
-  has `left_invert=true, right_invert=true, max_speed_mps=0.29,
-  right_trim=0.90`. Pre-tune backup at `calibration.json.bak-pretune`.
+- **Calibration state (2026-09-15):** `~/.config/yalp/calibration.json` has
+  `left_invert=false, right_invert=true, left_trim=1.0, right_trim=1.0,
+  max_speed_mps=0.29, turn_rate_dps=120` plus the LEARNED `straight_bias_fwd` /
+  `straight_bias_rev` (≈ +0.01; rewritten by the reactive layer after straight
+  drives). Backups: `calibration.json.bak-pretune` (July) and
+  `calibration.json.bak-2026-09-15` (pre-session). The July line below is history:
+  ~~`left_invert=true, right_invert=true, right_trim=0.90`~~ — `right_trim 0.90`
+  was tuned for the old mixed decay dialect and is WRONG under slow decay.
   The `duty_deadband` key is NOT in the live calibration file (pre-deadband
   file: from_dict defaults it to 0.0, preserving the measured linear
   behavior — see below).

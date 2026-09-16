@@ -288,6 +288,65 @@ The ultrasonic jumpers (§1) were re-seated identically. The USB camera required
 re-seating (USB). After re-seat, `yalp hwtest --check motors` and the full milestone H
 drive test were run to confirm correct operation on the new board.
 
+### 3.6 Left motor leads swapped, decay-mode asymmetry, and the visual heading hold (2026-09-15)
+
+> **As-built finding (2026-09-15):** on power-up after the summer, a forward
+> command spun Izzy **in place to the LEFT** (right wheel forward, left wheel
+> backward). The left TT motor's two leads at **H4/H5** had been swapped relative
+> to the July build (the breadboard was handled during storage/charging). Both
+> wheels still moved in both directions when pulsed alone, so this was purely a
+> polarity change. **Corrected in software:** `left_invert=false` in
+> `~/.config/yalp/calibration.json` on the Pi (backup of the July file:
+> `calibration.json.bak-2026-09-15`). `right_invert` stays `true`. §3.4 above
+> describes the July state ("both wheels inverted"); the live file is now
+> **left `false`, right `true`**.
+
+**Why she still would not drive straight after that fix — the DRV8833 decay-mode
+asymmetry.** Only xIN1 (GPIO12/13) was being PWMed. In that "mixed" dialect a
+channel's *forward* is fast decay (xIN2 low, PWM on xIN1) and its *reverse* is
+slow decay (xIN2 high, PWM at 1-duty). With one wheel inverted and the other not,
+the same "forward" command therefore drove the two wheels in **different decay
+modes**, and slow decay produces much more torque at a given duty. Measured with
+the camera (single-wheel pulses, |yaw rate| in deg/s, no trims):
+
+| Mode (duty) | LEFT fwd | RIGHT fwd | LEFT rev | RIGHT rev |
+|---|---|---|---|---|
+| mixed (0.45) | 48 | **77** | **115** | 44 |
+| mixed (0.60) | **117** | 100 | **124** | 90 |
+| **slow (0.45)** | 104 | 66 | 111 | 76 |
+| **slow (0.60)** | 121 | 89 | 81 | 102 |
+
+The strong wheel in "mixed" is always the slow-decay one and the gap **flips sign
+between duty 0.45 and 0.60** — no static trim can fix that. **Fix (software, no
+re-wiring):** `config.MOTOR_DECAY_MODE = "slow"` (default since 2026-09-15) —
+both channels, both directions use slow decay (one input held HIGH, the other
+PWMed at 1-duty). This needs PWM on the DIR pins (GPIO17/22) too; the lgpio pin
+factory software-times PWM on any GPIO, so **no wiring change**. The July
+`right_trim 0.90` was tuned for the mixed dialect and is now wrong; the live file
+has both trims at `1.0`.
+
+**What handles the residual imbalance (~20–35% left-stronger in slow mode) and
+any future surface change:** the **visual heading hold** — `ReactiveTickCore`
+integrates the camera's frame-to-frame yaw (phase correlation on a 160x120 copy,
+left/right halves averaged to cancel looming; `yalp/reactive/visual_odometry.py`)
+and biases the left/right duty split during every straight `DRIVE_GOAL`
+(`config.HEADING_HOLD_*`). Rotate goals close the loop on the same estimate
+(`yalp drive --turn 90` turned +96 deg then +91 deg with a stop lead; the old
+open-loop timer delivered 2–15 deg for 30–60 deg). After each straight drive the
+mean correction is learned into `straight_bias_fwd` / `straight_bias_rev` in the
+calibration file (`config.TRIM_LEARNING_*`), so the next drive starts straighter
+without a manual recalibration. Verified 2026-09-15: heading held within ~±5 deg
+over 0.3–1.0 m legs forward AND reverse (was 14 deg / 42 deg of veer before).
+
+**Camera warm-up matters:** the C270 publishes black frames for ~1 s after
+opening; the reactive server's heading estimate is blind until then
+(`camera.WARMUP_MAX_SECONDS` raised to 3 s). Give the server ~4 s after its port
+comes up before sending a drive.
+
+**Optional physical tidy-up:** swapping the left leads back at H4/H5 and setting
+`left_invert=true` again restores the July wiring, but it is no longer needed —
+slow-decay mode makes the inversion pattern irrelevant to symmetry.
+
 ---
 
 ## Cross-references

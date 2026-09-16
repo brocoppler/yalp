@@ -97,6 +97,14 @@ class MotorCalibration:
     turn_duty_deadband:
         Reserved measured turn deadband for future tuning (``0.0`` = not yet
         modeled; the rotation timing is unchanged).
+    straight_bias_fwd / straight_bias_rev:
+        LEARNED feed-forward steering bias (duty) for straight drives, forward and
+        reverse: added to the left wheel and subtracted from the right before the
+        closed-loop heading hold acts (``ReactiveTickCore._heading_correction``).
+        Written by the reactive layer itself after each completed straight drive
+        with a live camera heading estimate (``config.TRIM_LEARNING_*``), so the
+        robot adapts to a new floor without a manual recalibration. ``0.0`` = no
+        bias (the default and the pre-2026-09-15 behaviour).
     """
 
     left_invert: bool = False
@@ -107,6 +115,8 @@ class MotorCalibration:
     turn_rate_dps: float = 120.0
     duty_deadband: float = 0.27
     turn_duty_deadband: float = 0.0
+    straight_bias_fwd: float = 0.0
+    straight_bias_rev: float = 0.0
 
     def to_dict(self) -> dict:
         """Return a JSON-ready dict with normalised (bool/float) values."""
@@ -119,6 +129,8 @@ class MotorCalibration:
             "turn_rate_dps": float(self.turn_rate_dps),
             "duty_deadband": float(self.duty_deadband),
             "turn_duty_deadband": float(self.turn_duty_deadband),
+            "straight_bias_fwd": float(self.straight_bias_fwd),
+            "straight_bias_rev": float(self.straight_bias_rev),
         }
 
     @classmethod

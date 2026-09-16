@@ -85,6 +85,7 @@ from ..contract.messages import (
 from .backend import ReactiveBackend
 from .follow import FollowDecision, frame_brightness
 from .perception import PerceptionWorker
+from .visual_odometry import YawEstimator
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .person_tracker import TrackResult
@@ -132,6 +133,37 @@ class ReactiveTickCore(ReactiveBackend):
     duty_deadband: float = config.DRIVE_DUTY_DEADBAND
     turn_duty_deadband: float = config.TURN_DUTY_DEADBAND
 
+    #: Visual heading hold (camera yaw estimate; see visual_odometry.py and the
+    #: HEADING_HOLD_* notes in :mod:`yalp.config`). Class-level defaults are
+    #: DISABLED / no estimator so every existing subclass and test double keeps
+    #: the pure open-loop ``(drive, drive)`` split unless it opts in. The real
+    #: backend opts in from config when it has a real camera.
+    heading_hold_enabled: bool = False
+    heading_hold_gain: float = config.HEADING_HOLD_GAIN
+    heading_hold_kd: float = config.HEADING_HOLD_KD
+    heading_hold_max: float = config.HEADING_HOLD_MAX
+    heading_hold_min_response: float = config.HEADING_HOLD_MIN_RESPONSE
+    heading_hold_blind_ticks: int = config.HEADING_HOLD_BLIND_TICKS
+    rotate_closed_loop: bool = False
+    rotate_timeout_factor: float = config.ROTATE_TIMEOUT_FACTOR
+    rotate_stop_lead_s: float = config.ROTATE_STOP_LEAD_S
+    #: Learned feed-forward steering bias (duty; + = push left wheel harder),
+    #: forward and reverse. Mirrors MotorCalibration.straight_bias_*.
+    straight_bias_fwd: float = 0.0
+    straight_bias_rev: float = 0.0
+    trim_learning_enabled: bool = False
+    trim_learning_rate: float = config.TRIM_LEARNING_RATE
+    _yaw: Optional[YawEstimator] = None
+    #: Integrated visual heading since the current goal was adopted (deg, + = LEFT).
+    _heading_deg: float = 0.0
+    #: Latest visual yaw rate (deg/s, + = LEFT); 0.0 while blind.
+    _yaw_rate_dps: float = 0.0
+    _heading_blind_ticks: int = 10**9  # blind until the first accepted sample
+    _heading_last_fid: Optional[int] = None
+    _heading_last_ts: float = 0.0
+    _heading_corr_sum: float = 0.0
+    _heading_corr_n: int = 0
+
     # -- backend-specific hooks ---------------------------------------------
     @abstractmethod
     def read_range(self) -> Tuple[float, bool]:
@@ -163,6 +195,14 @@ class ReactiveTickCore(ReactiveBackend):
         Default: a no-op (pure simulation has no wheels). The real backend maps
         this onto its motor driver.
         """
+
+    def on_bias_learned(self, forward: bool, bias: float) -> None:
+        """Hook: a straight drive completed and the learned bias moved.
+
+        The real backend persists it to the calibration file; the default is a
+        no-op (pure simulation has nothing to remember).
+        """
+        return None
 
     def stop_motors(self) -> None:
         """Halt the wheels. Default: a no-op (pure simulation)."""
@@ -357,11 +397,15 @@ class ReactiveTickCore(ReactiveBackend):
             s.ultrasonic = self.read_range_stats()
 
             # Refresh the latest-frame handle (a stale frame is fine).
-            frame = self._latest_frame()
+            frame, capture_id = self._frame_with_id()
             if frame is not None:
                 self._frame_id += 1
                 s.last_frame_id = f"f-{self._frame_id}"
             s.ts = time.monotonic()
+            # Visual heading (camera yaw) — runs every tick, on every path, so
+            # the estimate is live the moment a goal needs it (no-op when there is
+            # no estimator / no frame). Cheap (small-frame phase correlation).
+            self._update_heading(frame, capture_id, s.ts)
 
             # 2. SAFETY OVERRIDE — beats everything, every tick. HALT the motors
             #    FIRST (never open-loop reverse — no rear sensor), then latch
@@ -370,6 +414,11 @@ class ReactiveTickCore(ReactiveBackend):
             #    blocked (sticky).
             if s.obstacle:
                 self._halt_motors()
+                # A straight drive cut short by the reflex still taught us how
+                # much steering it needed: fold that in (no-op below the sample
+                # floor / when learning is off) BEFORE the goal dict is replaced.
+                if s.mode == Mode.DRIVE_GOAL and s.goal_status == GoalStatus.RUNNING:
+                    self._learn_straight_bias(s.goal or {})
                 s.mode = Mode.SAFE_STOP
                 s.goal_status = GoalStatus.BLOCKED
                 # A KNOWN close reading is an ``obstacle``. An UNKNOWN reading is a
@@ -413,6 +462,8 @@ class ReactiveTickCore(ReactiveBackend):
                 and s.goal_status == GoalStatus.RUNNING
             ):
                 self._halt_motors()
+                if s.mode == Mode.DRIVE_GOAL:
+                    self._learn_straight_bias(s.goal or {})  # partial drive still teaches
                 s.goal_status = GoalStatus.PREEMPTED
                 s.goal = {
                     **(s.goal or {}),
@@ -468,6 +519,20 @@ class ReactiveTickCore(ReactiveBackend):
             self._warn_if_below_deadband(s.goal)
             s.goal["progress"] = 0.0
             s.goal["elapsed_s"] = 0.0
+            # Heading is measured RELATIVE to the pose at adoption: zero the
+            # integrator here (the estimator keeps its reference frame so the
+            # very next frame pair already yields a sample).
+            self._heading_deg = 0.0
+            self._heading_corr_sum = 0.0
+            self._heading_corr_n = 0
+            s.goal["closure"] = "timed"
+            if self._rotate_is_closed_loop(s.goal):
+                # Closed-loop turn: the visual yaw integral ends the goal; the
+                # timer becomes a generous upper bound so a blind estimator can
+                # never hang it (the open-loop turn model is documented as being
+                # wrong by 5-10x below duty 0.5, so a tight bound would cut real
+                # turns short).
+                self._goal_duration_s *= max(1.0, float(self.rotate_timeout_factor))
         self._safe_notify(self.on_intent_adopted, intent)
 
     def _model_speed_mps(self, duty: float) -> float:
@@ -572,18 +637,37 @@ class ReactiveTickCore(ReactiveBackend):
         s = self._state
         s.goal_elapsed_s += dt
         duration = self._goal_duration_s
-        if s.goal is not None:
+        goal = s.goal
+        visual_done = False
+        if goal is not None:
             progress = 1.0 if duration <= 0 else min(1.0, s.goal_elapsed_s / duration)
-            s.goal["progress"] = progress
-            s.goal["elapsed_s"] = s.goal_elapsed_s
-        if s.goal_elapsed_s >= duration:
-            # Never a bare "completed": open-loop, timed, unverified (§2.3).
+            if self._rotate_is_closed_loop(goal) and self._heading_live():
+                target = abs(float(goal.get("target", 0.0)))
+                turned = abs(self._heading_deg)
+                if target > 0:
+                    progress = max(progress, min(1.0, turned / target))
+                # Predictive stop: where the heading will be after the sensing
+                # latency + coast-down, only counting rate in the turn's direction.
+                sign = 1.0 if float(goal.get("target", 0.0)) >= 0 else -1.0
+                ahead = max(0.0, sign * self._yaw_rate_dps) * max(0.0, float(self.rotate_stop_lead_s))
+                visual_done = target > 0 and (turned + ahead) >= target
+            goal["progress"] = progress
+            goal["elapsed_s"] = s.goal_elapsed_s
+            self._publish_heading(goal)
+        if visual_done or s.goal_elapsed_s >= duration:
+            # Never a bare "completed": open-loop, timed, unverified (§2.3). A
+            # closed-loop turn keeps the SAME contract string (clients match on
+            # it) and says how it closed in the additive ``closure`` field.
+            if goal is not None:
+                goal["closure"] = "visual" if visual_done else "timed"
             s.goal_status = GoalStatus.COMPLETED
             s.mode = Mode.IDLE
             self._halt_motors()
+            if goal is not None and not visual_done:
+                self._learn_straight_bias(goal)
         else:
             s.goal_status = GoalStatus.RUNNING
-            left, right = self._drive_throttles(s.goal)
+            left, right = self._drive_throttles(goal)
             self._drive_motors(left, right)
 
     # -- FOLLOW --------------------------------------------------------------
@@ -749,7 +833,128 @@ class ReactiveTickCore(ReactiveBackend):
 
         if kind == "rotate":
             return (-drive, drive)  # spin in place (left=-turn, right=+turn)
-        return (drive, drive)  # straight: both wheels the same direction
+        # Straight: both wheels the same direction, plus the heading-hold
+        # correction (0.0 unless enabled AND the camera estimate is live) — added
+        # to the left wheel and subtracted from the right, so a positive
+        # correction steers RIGHT. Skipped entirely for a zero drive.
+        if direction == 0.0:
+            return (0.0, 0.0)
+        corr = self._heading_correction(direction > 0)
+        if corr == 0.0:
+            return (drive, drive)
+        return (self._clamp_to_limit(drive + corr), self._clamp_to_limit(drive - corr))
+
+    # -- visual heading hold ---------------------------------------------------
+    def _update_heading(self, frame, capture_id: Optional[int], now: float) -> None:
+        """Integrate the camera yaw estimate for this tick (blind-safe).
+
+        A tick is *blind* (no new sample) when there is no estimator, no frame,
+        the same capture id as last tick (the camera runs slower than the tick,
+        so most ticks see a repeat), an unusable frame, or a low-confidence
+        correlation. Blind ticks leave the heading integral untouched — "no new
+        information" is NOT "no rotation" — and count up ``_heading_blind_ticks``
+        so the controller can drop its closed-loop term after a sustained
+        dropout. ``_yaw_rate_dps`` is measured between ACCEPTED frames.
+        """
+        est = self._yaw
+        if est is None or frame is None:
+            self._heading_blind_ticks += 1
+            self._yaw_rate_dps = 0.0
+            return
+        if capture_id is not None and capture_id == self._heading_last_fid:
+            # Same frame as last tick: nothing new to measure, not a dropout.
+            return
+        self._heading_last_fid = capture_id
+        sample = est.update(frame)
+        if sample is None or sample.response < float(self.heading_hold_min_response):
+            self._heading_blind_ticks += 1
+            self._yaw_rate_dps = 0.0
+            return
+        self._heading_deg += float(sample.delta_deg)
+        gap = now - self._heading_last_ts
+        self._heading_last_ts = now
+        if self._heading_blind_ticks == 0 and 1e-3 < gap < 1.0:
+            self._yaw_rate_dps = float(sample.delta_deg) / gap
+        else:
+            self._yaw_rate_dps = 0.0  # first sample after a gap: no rate yet
+        self._heading_blind_ticks = 0
+
+    def _heading_live(self) -> bool:
+        """Whether the visual heading is trustworthy right now."""
+        return (
+            self._yaw is not None
+            and self._heading_blind_ticks <= int(self.heading_hold_blind_ticks)
+        )
+
+    def _rotate_is_closed_loop(self, goal: Optional[dict]) -> bool:
+        return (
+            bool(self.rotate_closed_loop)
+            and self._yaw is not None
+            and goal is not None
+            and str(goal.get("kind", "straight")) == "rotate"
+        )
+
+    def _heading_correction(self, forward: bool) -> float:
+        """Steering correction (duty, + = steer RIGHT) for a straight drive.
+
+        ``bias + Kp * heading + Kd * yaw_rate``, where ``heading`` is the
+        integrated visual yaw since adoption (deg, + = drifted LEFT) and the
+        closed-loop part is clamped to ``±heading_hold_max``. The learned
+        feed-forward ``bias`` is always applied (it costs nothing and encodes
+        the last drives' mean correction); the closed-loop part only while the
+        estimate is live and the hold is enabled. Also accumulates the closed-
+        loop part for trim learning.
+        """
+        bias = float(self.straight_bias_fwd if forward else self.straight_bias_rev)
+        if not self.heading_hold_enabled or not self._heading_live():
+            return bias
+        loop = (
+            float(self.heading_hold_gain) * self._heading_deg
+            + float(self.heading_hold_kd) * self._yaw_rate_dps
+        )
+        cap = abs(float(self.heading_hold_max))
+        loop = max(-cap, min(cap, loop))
+        self._heading_corr_sum += loop
+        self._heading_corr_n += 1
+        return bias + loop
+
+    def _publish_heading(self, goal: dict) -> None:
+        """Additive, wire-compatible heading fields on the goal dict."""
+        if self._yaw is None:
+            return
+        goal["heading_deg"] = round(self._heading_deg, 2)
+        goal["yaw_rate_dps"] = round(self._yaw_rate_dps, 1)
+        goal["heading_live"] = self._heading_live()
+
+    def _learn_straight_bias(self, goal: dict) -> None:
+        """Fold this completed straight drive's mean correction into the bias.
+
+        Only for straight drives that ran with a live heading estimate for a
+        meaningful number of ticks; EMA at ``trim_learning_rate``, clamped to
+        ``±heading_hold_max``. Fires :meth:`on_bias_learned` so the real backend
+        can persist it. Learning a bias that is already applied is stable: the
+        closed-loop part converges towards zero as the bias absorbs it.
+        """
+        if not self.trim_learning_enabled or not self.heading_hold_enabled:
+            return
+        if str(goal.get("kind", "straight")) != "straight":
+            return
+        n = self._heading_corr_n
+        if n < 10:
+            return
+        mean = self._heading_corr_sum / n
+        forward = float(goal.get("target", 0.0)) >= 0
+        old = float(self.straight_bias_fwd if forward else self.straight_bias_rev)
+        rate = max(0.0, min(1.0, float(self.trim_learning_rate)))
+        cap = abs(float(self.heading_hold_max))
+        new = max(-cap, min(cap, old + rate * mean))
+        if forward:
+            self.straight_bias_fwd = new
+        else:
+            self.straight_bias_rev = new
+        goal["learned_bias"] = round(new, 4)
+        if abs(new - old) > 1e-4:
+            self._safe_notify(self.on_bias_learned, forward, new)
 
     def _follow_throttles(self, decision: FollowDecision) -> Tuple[float, float]:
         """Mix a FOLLOW decision into clamped signed ``(left, right)`` throttles.

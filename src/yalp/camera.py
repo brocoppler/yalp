@@ -53,8 +53,8 @@ DEFAULT_MAX_FPS = 15.0
 # the warm-up budget (time or frame count) elapses (then we publish the best
 # frame seen anyway, so we never hang). This applies ONLY to the real webcam
 # source; the image-file and synthetic sources publish immediately.
-WARMUP_MAX_SECONDS = 1.5
-WARMUP_MAX_FRAMES = 30
+WARMUP_MAX_SECONDS = 3.0
+WARMUP_MAX_FRAMES = 60
 WARMUP_BRIGHTNESS_THRESHOLD = 16.0
 
 # How long ``wait_for_frame`` blocks by default — generous enough to cover the

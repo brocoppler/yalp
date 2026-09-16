@@ -92,6 +92,10 @@ class FakeReactiveBackend(ReactiveTickCore):
         follow_controller: Optional[FollowController] = None,
         observer: Optional[object] = None,
         close_observer: bool = False,
+        heading_hold: bool = False,
+        rotate_closed_loop: bool = False,
+        trim_learning: bool = False,
+        yaw_estimator: Optional[object] = None,
     ) -> None:
         # Observer seam (telemetry / any recorder). Injected so tests and library
         # users can pass their own or leave it None. ``close_observer`` = this
@@ -143,6 +147,21 @@ class FakeReactiveBackend(ReactiveTickCore):
         # Simulated ultrasonic reading (clear by default).
         self._sensor_distance_m = 10.0
         self._sensor_known = True
+
+        # Visual heading hold: OFF by default in simulation (a synthetic frame is
+        # not a heading). Tests opt in with an injected estimator/camera double
+        # to exercise the shared controller math without hardware.
+        self.heading_hold_enabled = bool(heading_hold)
+        self.rotate_closed_loop = bool(rotate_closed_loop)
+        self.trim_learning_enabled = bool(trim_learning) and bool(heading_hold)
+        self._yaw = yaw_estimator
+        self._heading_deg = 0.0
+        self._yaw_rate_dps = 0.0
+        self._heading_blind_ticks = 10**9
+        self._heading_last_fid = None
+        self._heading_last_ts = 0.0
+        self._heading_corr_sum = 0.0
+        self._heading_corr_n = 0
 
     # -- shared-core hook: the simulated range read --------------------------
     def read_range(self) -> Tuple[float, bool]:

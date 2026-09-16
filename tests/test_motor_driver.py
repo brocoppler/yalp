@@ -135,7 +135,7 @@ def fake_gpiozero(monkeypatch):
 def test_init_sets_lgpio_pin_factory_and_creates_devices(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
 
     # lgpio factory installed.
     from gpiozero.pins.lgpio import LGPIOFactory
@@ -172,7 +172,7 @@ def test_init_satisfies_motordriver_protocol(fake_gpiozero):
 def test_set_motors_forward(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(0.6, 0.75)
 
     # Forward = xIN2 (dir pin) LOW, duty = throttle.
@@ -185,7 +185,7 @@ def test_set_motors_forward(fake_gpiozero):
 def test_set_motors_reverse(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(-0.6, -0.9)
 
     # Reverse = xIN2 (dir pin) HIGH, slow-decay duty = 1 - abs(throttle).
@@ -198,7 +198,7 @@ def test_set_motors_reverse(fake_gpiozero):
 def test_set_motors_zero_is_coast(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(0.0, 0.0)
 
     # Zero throttle = true coast: xIN2 LOW + duty 0 (NOT dir HIGH + duty 0, which
@@ -215,7 +215,7 @@ def test_set_motors_zero_is_coast(fake_gpiozero):
 def test_set_motors_clamps_out_of_range(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(5.0, -5.0)
 
     # Left clamps to +1.0 (full forward): xIN2 LOW, duty 1.0.
@@ -233,7 +233,7 @@ def test_set_motors_clamps_out_of_range(fake_gpiozero):
 def test_set_motors_left_invert(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, right_invert=False)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, right_invert=False, decay_mode="mixed")
     drv.set_motors(0.6, 0.6)
 
     # Left inverted: +0.6 -> -0.6 -> reverse: xIN2 HIGH, duty 1 - 0.6 = 0.4.
@@ -247,7 +247,7 @@ def test_set_motors_left_invert(fake_gpiozero):
 def test_set_motors_right_invert_reverse_command(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833", right_invert=True)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", right_invert=True, decay_mode="mixed")
     drv.set_motors(0.0, -0.3)
 
     # Right inverted: -0.3 -> +0.3 -> forward: xIN2 LOW, duty 0.3.
@@ -270,7 +270,7 @@ def test_idle_channel_never_energized(fake_gpiozero):
     """
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(0.0, 0.6)
 
     # Left (idle) channel: true coast, NOT full reverse.
@@ -289,7 +289,7 @@ def test_full_forward_is_full_duty(fake_gpiozero):
     """
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(1.0, 1.0)
 
     assert drv._left_dir.value == 0
@@ -320,7 +320,7 @@ def test_tb6612fng_without_stby_pin(fake_gpiozero):
 def test_drv8833_ignores_stby_pin(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833", stby_pin=24)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", stby_pin=24, decay_mode="mixed")
     assert drv._stby is None
 
 
@@ -336,7 +336,7 @@ def test_stop_after_forward_is_coast(fake_gpiozero):
     """
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(0.7, 0.7)
 
     drv.stop()
@@ -351,7 +351,7 @@ def test_stop_after_reverse_is_coast(fake_gpiozero):
     """stop() after a reverse command (dir pins already HIGH) also coasts."""
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(-0.8, -0.8)
     assert drv._left_dir.value == 1  # reverse latched the dir pins HIGH
 
@@ -378,7 +378,7 @@ def test_watchdog_stop_is_safe(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
     from yalp.reactive.watchdog import MotorWatchdog
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="mixed")
     drv.set_motors(0.9, 0.9)
 
     # Build a watchdog around the real driver and invoke the exact stop path a
@@ -447,3 +447,114 @@ def test_fails_loudly_when_lgpio_unavailable(monkeypatch):
 
     with pytest.raises(RuntimeError, match="lgpio"):
         GpiozeroMotorDriver()
+
+
+# --------------------------------------------------------------------------- #
+# 8. Uniform SLOW-decay mode (config.MOTOR_DECAY_MODE == 'slow', the default
+#    since 2026-09-15). Both channels, both directions: one input held HIGH, the
+#    other PWMed at (1 - duty), so the PWM off-time is a BRAKE (1/1) rather than
+#    a coast — the same decay mode for every wheel/direction regardless of
+#    inversion. Asserted against the DRV8833 truth table (1/0 fwd, 0/1 rev,
+#    1/1 brake, 0/0 coast), not the driver's convention.
+# --------------------------------------------------------------------------- #
+def test_slow_decay_direction_pins_are_pwm_devices(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="slow")
+    # xIN2 must be PWM-capable in this mode (software PWM via lgpio on any GPIO).
+    assert isinstance(drv._left_dir, _FakePWMOutputDevice)
+    assert isinstance(drv._right_dir, _FakePWMOutputDevice)
+    assert drv._left_dir.pin == 17 and drv._right_dir.pin == 22
+    assert drv._left_dir.frequency == 1000
+
+
+def test_slow_decay_is_the_default_mode(fake_gpiozero, monkeypatch):
+    from yalp import config
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    assert config.MOTOR_DECAY_MODE == "slow"
+    drv = GpiozeroMotorDriver(driver_kind="drv8833")
+    assert drv._slow_decay is True
+
+
+def test_slow_decay_forward_holds_xin1_high_and_pwms_xin2(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="slow")
+    drv.set_motors(0.6, 0.75)
+    # forward: xIN1 = 1 (held), xIN2 = PWM(1 - duty) -> 1/0 fwd for `duty` of
+    # the period, 1/1 brake for the rest (slow decay).
+    assert drv._left_pwm.value == pytest.approx(1.0)
+    assert drv._left_dir.value == pytest.approx(0.4)
+    assert drv._right_pwm.value == pytest.approx(1.0)
+    assert drv._right_dir.value == pytest.approx(0.25)
+
+
+def test_slow_decay_reverse_holds_xin2_high_and_pwms_xin1(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="slow")
+    drv.set_motors(-0.6, -0.9)
+    assert drv._left_dir.value == pytest.approx(1.0)
+    assert drv._left_pwm.value == pytest.approx(0.4)
+    assert drv._right_dir.value == pytest.approx(1.0)
+    assert drv._right_pwm.value == pytest.approx(0.1)
+
+
+def test_slow_decay_inverted_wheel_uses_same_mode_as_uninverted(fake_gpiozero):
+    """The whole point: an inverted and an un-inverted wheel commanded the same
+    way must land in the SAME decay mode (mirror-image pins), so they pull
+    equally. In the mixed dialect they did not (fast vs slow decay)."""
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(
+        driver_kind="drv8833", decay_mode="slow", left_invert=False, right_invert=True
+    )
+    drv.set_motors(0.6, 0.6)
+    # Left (not inverted): xIN1 held HIGH, xIN2 PWM 0.4.
+    assert drv._left_pwm.value == pytest.approx(1.0)
+    assert drv._left_dir.value == pytest.approx(0.4)
+    # Right (inverted -> physically reverse): xIN2 held HIGH, xIN1 PWM 0.4 —
+    # the exact mirror, same held-HIGH/PWM(1-duty) structure = same decay.
+    assert drv._right_dir.value == pytest.approx(1.0)
+    assert drv._right_pwm.value == pytest.approx(0.4)
+
+
+def test_slow_decay_zero_and_stop_are_true_coast(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="slow")
+    drv.set_motors(0.7, -0.7)
+    drv.set_motors(0.0, 0.0)
+    for dev in (drv._left_pwm, drv._left_dir, drv._right_pwm, drv._right_dir):
+        assert dev.value == pytest.approx(0.0)
+    drv.set_motors(0.7, -0.7)
+    drv.stop()  # the watchdog / collision-stop path must land in 0/0 coast
+    for dev in (drv._left_pwm, drv._left_dir, drv._right_pwm, drv._right_dir):
+        assert dev.value == pytest.approx(0.0)
+
+
+def test_slow_decay_full_throttle_is_solid_drive(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="slow")
+    drv.set_motors(1.0, -1.0)
+    assert drv._left_pwm.value == pytest.approx(1.0)
+    assert drv._left_dir.value == pytest.approx(0.0)  # 1/0 = forward, no brake time
+    assert drv._right_dir.value == pytest.approx(1.0)
+    assert drv._right_pwm.value == pytest.approx(0.0)  # 0/1 = reverse
+
+
+def test_slow_decay_rejects_unknown_mode(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    with pytest.raises(ValueError):
+        GpiozeroMotorDriver(driver_kind="drv8833", decay_mode="fast")
+
+
+def test_slow_decay_ignored_for_tb6612fng(fake_gpiozero):
+    from yalp.reactive.hardware import GpiozeroMotorDriver
+
+    drv = GpiozeroMotorDriver(driver_kind="tb6612fng", stby_pin=24, decay_mode="slow")
+    assert drv._slow_decay is False
+    assert isinstance(drv._left_dir, _FakeDigitalOutputDevice)

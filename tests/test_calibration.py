@@ -53,6 +53,8 @@ def test_calibration_round_trip(tmp_path):
         "turn_rate_dps": 137.0,
         "duty_deadband": 0.27,
         "turn_duty_deadband": 0.0,
+        "straight_bias_fwd": 0.0,
+        "straight_bias_rev": 0.0,
     }
 
     loaded = MotorCalibration.load(path)
@@ -142,6 +144,8 @@ def test_dry_run_calibrate_writes_file(tmp_path, capsys):
         "turn_rate_dps",
         "duty_deadband",
         "turn_duty_deadband",
+        "straight_bias_fwd",
+        "straight_bias_rev",
     }
     # ...with the deterministic values derived from the scripted answers
     # ("y" -> no invert; 1.0 m over 2.0 s -> 0.5 m/s; 360° over 2.0 s -> 180 °/s).
@@ -342,7 +346,7 @@ def fake_gpiozero(monkeypatch):
 def test_set_motors_applies_trim(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_trim=0.5, right_trim=0.8)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_trim=0.5, right_trim=0.8, decay_mode="mixed")
     drv.set_motors(0.8, 1.0)
     # DRV8833 IN/IN forward = dir (xIN2) LOW, duty = trimmed throttle.
     # left: 0.8 * 0.5 = 0.4 duty, forward; right: 1.0 * 0.8 = 0.8 duty, forward.
@@ -355,7 +359,7 @@ def test_set_motors_applies_trim(fake_gpiozero):
 def test_set_motors_trim_default_is_noop(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver()  # trims default to 1.0
+    drv = GpiozeroMotorDriver(decay_mode="mixed")  # trims default to 1.0
     drv.set_motors(0.6, 0.3)
     assert drv._left_pwm.value == pytest.approx(0.6)
     assert drv._right_pwm.value == pytest.approx(0.3)
@@ -364,7 +368,7 @@ def test_set_motors_trim_default_is_noop(fake_gpiozero):
 def test_set_motors_invert_flips_direction(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, right_invert=False)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, right_invert=False, decay_mode="mixed")
     drv.set_motors(0.6, 0.6)
     # Left inverted: +0.6 -> -0.6 -> DRV8833 reverse: dir (xIN2) HIGH, slow-decay
     # duty = 1 - 0.6 = 0.4.
@@ -378,7 +382,7 @@ def test_set_motors_invert_flips_direction(fake_gpiozero):
 def test_set_motors_trim_and_invert_together(fake_gpiozero):
     from yalp.reactive.hardware import GpiozeroMotorDriver
 
-    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, left_trim=0.5)
+    drv = GpiozeroMotorDriver(driver_kind="drv8833", left_invert=True, left_trim=0.5, decay_mode="mixed")
     drv.set_motors(1.0, 0.0)
     # Left: 1.0 * 0.5 = 0.5, inverted -> -0.5 -> DRV8833 reverse: dir (xIN2) HIGH,
     # slow-decay duty = 1 - 0.5 = 0.5.

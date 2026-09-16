@@ -79,6 +79,18 @@ def add_parser(subparsers) -> None:
         ),
     )
     parser.add_argument(
+        "--turn",
+        type=float,
+        default=None,
+        metavar="DEGREES",
+        help=(
+            "Instead of a straight drive, spin in place by this many degrees "
+            "(positive = LEFT/CCW, negative = RIGHT). Closed-loop on the camera "
+            "heading estimate when the reactive server has it (goal closure "
+            "'visual'), else open-loop timed. --target is ignored."
+        ),
+    )
+    parser.add_argument(
         "--host",
         default=config.IPC_HOST,
         metavar="HOST",
@@ -190,6 +202,9 @@ def _timeline_line(elapsed: float, state) -> str:
         detail = f"reason={goal['reason']}"
     else:
         detail = "-"
+    if "heading_deg" in goal:
+        live = "" if goal.get("heading_live", True) else " (blind)"
+        detail += f"  hdg={float(goal['heading_deg']):+6.1f}°{live}"
     return (
         f"[{elapsed:6.1f}s] dist={state.distance_m:5.2f}m ({known:^7})  "
         f"mode={state.mode.value:<10}  status={state.goal_status:<24}  {detail}"
@@ -283,11 +298,27 @@ def _poll_loop(client, base_seq: int, timeout: float, poll_interval: float) -> i
                 adopted = True
 
             if adopted and state.goal_status == GoalStatus.COMPLETED:
+                goal = state.goal or {}
+                closure = goal.get("closure", "timed")
+                if closure == "visual":
+                    how = (
+                        "closed-loop on the camera heading estimate — turned "
+                        f"{float(goal.get('heading_deg', 0.0)):+.1f}°"
+                    )
+                else:
+                    how = "open-loop, timed, UNVERIFIED — no encoders"
                 print(
                     f"\nVERDICT: COMPLETE — drive reported {state.goal_status!r} "
-                    f"after {elapsed:.1f}s (open-loop, timed, UNVERIFIED — no "
-                    "encoders). Wheels are stopped (mode dropped to IDLE)."
+                    f"after {elapsed:.1f}s ({how}). Wheels are stopped (mode "
+                    "dropped to IDLE)."
                 )
+                if "heading_deg" in goal and closure != "visual":
+                    print(
+                        f"  heading drift over the drive: {float(goal['heading_deg']):+.1f}° "
+                        "(camera estimate, + = left)"
+                    )
+                if "learned_bias" in goal:
+                    print(f"  learned steering bias updated: {float(goal['learned_bias']):+.4f}")
                 print(_ultrasonic_line("end", state))
                 return 0
 
@@ -329,6 +360,8 @@ def run(args) -> int:
 
     target = float(getattr(args, "target", 1.6))
     speed = min(1.0, max(0.0, float(getattr(args, "speed", 0.45))))
+    turn = getattr(args, "turn", None)
+    turn = None if turn is None else float(turn)
     host = getattr(args, "host", None) or config.IPC_HOST
     port = int(getattr(args, "port", None) or config.IPC_PORT)
     timeout = max(0.1, float(getattr(args, "timeout", 45.0)))
@@ -349,7 +382,12 @@ def run(args) -> int:
         "yalp drive — one-command straight drive against the reactive server\n"
         f"  endpoint : {host}:{port}"
         f"{' (remote — fail-fast reconnect)' if remote else ' (loopback)'}\n"
-        f"  goal     : straight  target={target:+.2f} m  speed={speed:.2f}\n"
+        + (
+            f"  goal     : rotate    target={turn:+.1f} deg  speed={speed:.2f}\n"
+            if turn is not None
+            else f"  goal     : straight  target={target:+.2f} m  speed={speed:.2f}\n"
+        )
+        + 
         f"  limits   : timeout={timeout:.1f}s  poll={poll_hz:g} Hz  "
         f"SAFE_STOP<{threshold:.2f} m\n"
         f"  intent   : Intent(DRIVE_GOAL, kind=straight, seq={seq})"
@@ -388,13 +426,11 @@ def run(args) -> int:
                 return 2
 
             # 2. Send the canonical drive intent (abilities.intent_for('drive')).
-            client.send_intent(
-                Intent(
-                    Mode.DRIVE_GOAL,
-                    {"kind": "straight", "target": target, "speed": speed},
-                    seq,
-                )
-            )
+            if turn is not None:
+                goal = {"kind": "rotate", "target": turn, "speed": speed}
+            else:
+                goal = {"kind": "straight", "target": target, "speed": speed}
+            client.send_intent(Intent(Mode.DRIVE_GOAL, goal, seq))
             print(f"sent drive intent (seq={seq}); watching the timeline...\n")
 
             # 3. Poll + terminate on the first event.
