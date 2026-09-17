@@ -1,14 +1,67 @@
 # Next-session handoff — resume here
 
-**Last updated:** 2026-09-15 (first session after the summer: wiring regression
-found and fixed, DRV8833 decay-mode asymmetry found and fixed, **visual heading
-hold + closed-loop turns + trim learning landed and verified on the robot**).
+**Last updated:** 2026-09-16 (overnight build: escape moves, floor diagnostics in
+`hwtest`, heading ground-truth, `yalp session`, IMU / encoder / pack-monitor drivers
+with closed-loop odometry, telemetry tooling, shopping list). Robot was powered
+down at the end of 2026-09-15 and has NOT run the 2026-09-16 code yet — see
+"First thing next session" below.
 **One-line status:** Izzy drives straight and turns to a commanded angle without
 encoders — the camera is her heading sensor. Straight legs hold heading within
 ~±5° forward and reverse (was 14°–42° of veer); `yalp drive --turn 90` turns
 +96° / −91° (old open-loop timer: 2–15°). Calibration on the Pi: `left_invert=false`,
 `right_invert=true`, trims 1.0, learned `straight_bias_*` ≈ +0.01.
 Road: decide the SAFE_STOP escape rule (below), then longer lanes / person-following.
+
+---
+
+## First thing next session (2026-09-16 code is on origin, not yet on the Pi)
+
+```
+ssh izzy
+cd ~/yalp && git pull --ff-only && .venv/bin/pip install -e . -q && .venv/bin/pip install smbus2 -q
+bash scripts/install_reactive_service.sh        # optional: systemd user unit + ~/.config/yalp/reactive.env
+.venv/bin/yalp session start                    # or: systemctl --user start yalp-reactive
+.venv/bin/yalp session wait --camera            # READY when the port answers AND the camera is warm
+.venv/bin/yalp drive --target 0.6               # drives; the timeline shows hdg=[camera] and pack= once the INA219 exists
+.venv/bin/yalp drive --turn 90                  # closed-loop turn; allowed even inside the 0.30 m latch (escape move)
+.venv/bin/yalp hwtest --check wheels            # the per-wheel matrix, now a first-class check
+.venv/bin/yalp hwtest --check straight --seconds 3 --reverse-first 2 --save /tmp/s.csv
+.venv/bin/yalp calibrate --heading              # ground-truth the camera HFOV against a floor mark (do this once)
+.venv/bin/yalp telemetry summary                # per-goal summary of the newest flight-recorder file
+```
+
+Then, as the parts from `shopping-list-2026-09.md` arrive: `yalp hwtest --check imu`,
+`--check power`, `--check encoders`; everything auto-detects at server start
+(`YALP_IMU` / `YALP_POWER_MONITOR` / `YALP_ENCODERS` = auto|1|0).
+
+## 2026-09-16 overnight build — what landed (all on `main`, tests 1008+ passing)
+
+- **Escape moves (spec §2.3 amendment):** a rotate or a NEGATIVE straight goal is
+  adopted and runs while a KNOWN obstacle is latched; a forward intent stays refused;
+  a blind sensor still latches everything. `yalp drive --turn` / negative `--target`
+  pass the pre-flight as an ESCAPE. She no longer strands herself at 0.25 m.
+- **`yalp hwtest --check wheels` / `--check straight`:** the camera-measured per-wheel
+  yaw-rate matrix (verdicts: weak/dead/wrong-sign wheel, the sign-flipping-gap
+  decay-mode signature) and the straight-drive recorder (veer character, CSV).
+- **`yalp calibrate --heading`:** closed-loop 90° spins L and R read against a floor
+  mark → `camera_hfov_deg` in the calibration file. Every heading number scales
+  with it; it has never been ground-truthed — do it.
+- **`yalp session`:** start/wait/status/stop/restart/logs for the reactive server;
+  systemd user unit + installer. Server output is line-buffered now.
+- **Sensors (drivers + fakes + tests, hardware not yet fitted):** MPU-6050 IMU is
+  the primary heading source when present (camera = fallback); FIT0450 quadrature
+  encoders close the distance loop (goal `closure: "odometry"`); INA219 pack monitor
+  publishes `pack_voltage_v` / `pack_state` in the new `RobotState.sensors` sub-map.
+  Pin plan in `hardware.md` §5; wiring notes in the module docstrings.
+- **`yalp telemetry list|summary|export|plot`:** the flight-recorder reader —
+  per-goal heading/distance/motor traces as an SVG for tuning the hold.
+- **Docs:** `shopping-list-2026-09.md`, `as-built-wiring.md` §0 (the two-deck body)
+  and §3.6, `hardware.md` §5 additions, spec §2.3 amendment.
+
+**Open questions (2026-09-16):** heading-hold gains (0.01 / 0.004) were tuned on one
+floor in ~10 legs — re-tune with `yalp telemetry plot` once the IMU is in; the
+FIT0450 16-pulse figure (x4 = 7680 ticks/rev) is from the datasheet, verify by
+hand-spinning; `ENCODER_TRACK_WIDTH_M` (0.14) must be measured.
 
 ---
 
