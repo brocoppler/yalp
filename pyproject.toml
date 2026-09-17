@@ -30,7 +30,7 @@ dev = ["pytest"]
 voice = ["sounddevice", "faster-whisper"]
 # Optional Raspberry Pi hardware drivers. NOT installed on Mac/dev machines.
 # Install with: pip install yalp[pi]
-pi = ["gpiozero", "lgpio"]
+pi = ["gpiozero", "lgpio", "smbus2"]
 
 [project.scripts]
 yalp = "yalp.cli:main"

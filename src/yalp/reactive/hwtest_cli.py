@@ -49,9 +49,10 @@ def add_parser(subparsers) -> None:
     )
     parser.add_argument(
         "--check",
-        choices=("all", "gpio", "motors", "ultrasonic", "camera", "wheels", "straight"),
+        choices=("all", "gpio", "motors", "ultrasonic", "camera", "wheels", "straight",
+                 "encoders", "imu", "power"),
         default="all",
-        metavar="{all,gpio,motors,ultrasonic,camera,wheels,straight}",
+        metavar="{all,gpio,motors,ultrasonic,camera,wheels,straight,encoders,imu,power}",
         help=(
             "Which subsystem to test: "
             "'gpio' — toggle left-DIR pin (GPIO17, LED blink); "
@@ -63,8 +64,13 @@ def add_parser(subparsers) -> None:
             "decay-mode signature; "
             "'straight' — drive straight at --duty for --seconds recording yaw + "
             "sonar per frame (the veer diagnostic); "
+            "'encoders' — live wheel-encoder tick counts for --seconds (spin the "
+            "wheels by hand; ON A STAND); "
+            "'imu' — MPU-6050 gyro: bias calibration, then live yaw rate / integrated "
+            "heading for --seconds (turn her by hand); "
+            "'power' — INA219 pack voltage/current/state; "
             "'all' — run gpio/motors/ultrasonic/camera in sequence (default; the "
-            "floor checks are never part of 'all')."
+            "floor and optional-sensor checks are never part of 'all')."
         ),
     )
     # --- Floor diagnostics (wheels / straight) --------------------------------
@@ -171,6 +177,9 @@ def run(args) -> int:
             "camera": _check_camera,
             "wheels": _check_wheels,
             "straight": _check_straight,
+            "encoders": _check_encoders,
+            "imu": _check_imu,
+            "power": _check_power,
         }[name]
         kwargs = dict(
             dry_run=dry_run,
@@ -698,4 +707,202 @@ def _check_straight(
             print(f"  per-frame CSV written -> {save}")
         except Exception as exc:
             print(f"  WARNING: could not write CSV to {save!r} ({exc})")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Optional closed-loop sensors (2026-09-16): encoders / IMU / pack monitor
+# ---------------------------------------------------------------------------
+def _check_encoders(
+    *,
+    dry_run: bool,
+    camera_source: str,
+    seconds: Optional[float] = None,
+    hz: float = 3.0,
+    matrix: bool = False,
+    save: Optional[str] = None,
+) -> int:
+    """Live wheel-encoder counts: spin each wheel by hand and watch the ticks."""
+    from .. import config
+
+    secs = float(seconds) if seconds is not None else 8.0
+    print(f"Encoder test: printing tick counts for {secs:.0f} s at ~5 Hz.")
+    print("  ON A STAND: spin the LEFT wheel forward by hand, then the RIGHT.")
+    print("  Forward must count UP; backward DOWN. One full turn = "
+          f"{config.ENCODER_TICKS_PER_WHEEL_REV} ticks (x4 decoding) = "
+          f"{3.14159 * config.ENCODER_WHEEL_DIAMETER_M:.3f} m.")
+    print()
+    if dry_run:
+        from .encoders import FakeWheelEncoders
+
+        enc = FakeWheelEncoders()
+        enc.set_speeds(0.10, -0.05)
+        note = "  [DRY RUN — FakeWheelEncoders, left +0.10 m/s, right -0.05 m/s]"
+        sleeper = lambda s: enc.step(s)  # noqa: E731 - advance the fake instead of waiting
+        n = 6
+    else:
+        try:
+            from .encoders import GpiodWheelEncoders
+
+            enc = GpiodWheelEncoders(
+                left_a_pin=config.ENCODER_LEFT_A_PIN, left_b_pin=config.ENCODER_LEFT_B_PIN,
+                right_a_pin=config.ENCODER_RIGHT_A_PIN, right_b_pin=config.ENCODER_RIGHT_B_PIN,
+                ticks_per_wheel_rev=config.ENCODER_TICKS_PER_WHEEL_REV,
+                wheel_diameter_m=config.ENCODER_WHEEL_DIAMETER_M,
+                track_width_m=config.ENCODER_TRACK_WIDTH_M,
+                left_invert=config.ENCODER_LEFT_INVERT, right_invert=config.ENCODER_RIGHT_INVERT,
+            )
+        except Exception as exc:
+            print(f"  ERROR: could not open the encoders — {exc}")
+            print("  (pins left A/B GPIO16/26, right A/B GPIO20/21; encoder VCC on 3V3)")
+            return 1
+        note = "  [REAL GPIO — GpiodWheelEncoders]"
+        sleeper = time.sleep
+        n = max(1, int(secs * 5))
+    print(note)
+    try:
+        for i in range(n):
+            smp = enc.read()
+            print(
+                f"  t={i/5:4.1f}s  L {smp.left_ticks:+7d} ticks {smp.left_m:+.3f} m {smp.left_mps:+.2f} m/s   "
+                f"R {smp.right_ticks:+7d} ticks {smp.right_m:+.3f} m {smp.right_mps:+.2f} m/s   "
+                f"hdg {smp.heading_delta_deg:+6.1f} deg  ok={smp.ok}"
+            )
+            sleeper(0.2)
+        stats = enc.stats() if hasattr(enc, "stats") else {}
+        if stats:
+            print(f"  stats: {stats}")
+        smp = enc.read()
+        if not dry_run and smp.left_ticks == 0 and smp.right_ticks == 0:
+            print("  !! no ticks at all — check encoder VCC (3V3), GND, and the A/B pins.")
+            return 1
+    finally:
+        try:
+            enc.close()
+        except Exception:
+            pass
+    return 0
+
+
+def _check_imu(
+    *,
+    dry_run: bool,
+    camera_source: str,
+    seconds: Optional[float] = None,
+    hz: float = 3.0,
+    matrix: bool = False,
+    save: Optional[str] = None,
+) -> int:
+    """MPU-6050: gyro bias calibration, then live yaw rate + integrated heading."""
+    from .. import config
+
+    secs = float(seconds) if seconds is not None else 8.0
+    print(f"IMU test: calibrating the gyro bias (hold her STILL), then {secs:.0f} s of live yaw.")
+    print("  Turn her LEFT by hand: the heading must go POSITIVE (+ = LEFT/CCW).")
+    print("  If it goes negative, set YALP_IMU_YAW_SIGN=-1 (or YALP_IMU_YAW_AXIS if mounted on its side).")
+    print()
+    if dry_run:
+        from .imu import FakeImu
+
+        clock = {"t": 0.0}
+
+        def _clock() -> float:
+            return clock["t"]
+
+        imu = FakeImu(yaw_rates=[0.0] * 5 + [30.0] * 20 + [0.0] * 5, monotonic=_clock)
+        note = "  [DRY RUN — FakeImu, scripted +30 deg/s burst]"
+
+        def sleeper(s: float) -> None:  # advance the fake clock instead of waiting
+            clock["t"] += s
+
+        n = 30
+    else:
+        try:
+            from .imu import Mpu6050Imu
+
+            imu = Mpu6050Imu(
+                bus=config.IMU_I2C_BUS, address=config.IMU_I2C_ADDRESS,
+                yaw_axis=config.IMU_YAW_AXIS, yaw_sign=config.IMU_YAW_SIGN,
+            )
+        except Exception as exc:
+            print(f"  ERROR: could not open the MPU-6050 — {exc}")
+            print("  (I2C-1: SDA pin 3, SCL pin 5, 3V3, GND; `sudo raspi-config nonint do_i2c 0`; "
+                  "`i2cdetect -y 1` should show 68; pip install smbus2 in the venv)")
+            return 1
+        note = "  [REAL I2C — Mpu6050Imu]"
+        sleeper = time.sleep
+        n = max(1, int(secs * 10))
+    print(note)
+    try:
+        try:
+            bias = imu.calibrate_gyro(samples=config.IMU_CALIBRATION_SAMPLES if not dry_run else 10)
+            print(f"  gyro bias (deg/s): {bias}")
+        except Exception as exc:
+            print(f"  WARNING: bias calibration failed — {exc}")
+        heading = 0.0
+        last_ts = None
+        for i in range(n):
+            smp = imu.read()
+            if last_ts is not None and smp.ts > last_ts:
+                heading += smp.yaw_rate_dps * (smp.ts - last_ts)
+            last_ts = smp.ts
+            if i % 5 == 0:
+                print(f"  t={i/10:4.1f}s  yaw rate {smp.yaw_rate_dps:+7.1f} deg/s  heading {heading:+7.1f} deg  ok={smp.ok}")
+            sleeper(0.1)
+    finally:
+        try:
+            imu.close()
+        except Exception:
+            pass
+    return 0
+
+
+def _check_power(
+    *,
+    dry_run: bool,
+    camera_source: str,
+    seconds: Optional[float] = None,
+    hz: float = 3.0,
+    matrix: bool = False,
+    save: Optional[str] = None,
+) -> int:
+    """INA219: pack voltage / current / a rough NiMH state."""
+    from .. import config
+
+    print("Power test: reading the INA219 pack monitor 5 times.")
+    if dry_run:
+        from .power_monitor import FakePowerMonitor
+
+        mon = FakePowerMonitor(voltage_v=5.4, current_a=0.35)
+        note = "  [DRY RUN — FakePowerMonitor]"
+    else:
+        try:
+            from .power_monitor import Ina219PowerMonitor
+
+            mon = Ina219PowerMonitor(
+                bus=config.IMU_I2C_BUS, address=config.POWER_MONITOR_I2C_ADDRESS,
+                shunt_ohms=config.POWER_MONITOR_SHUNT_OHMS,
+            )
+        except Exception as exc:
+            print(f"  ERROR: could not open the INA219 — {exc}")
+            print("  (I2C-1 shared with the IMU; addr 0x40; pack + -> VIN+, VIN- -> VM/J1)")
+            return 1
+        note = "  [REAL I2C — Ina219PowerMonitor]"
+    print(note)
+    try:
+        from .power_monitor import nimh_pack_state
+
+        for i in range(5):
+            smp = mon.read()
+            state = nimh_pack_state(smp.bus_voltage_v)
+            print(f"  read {i+1}: {smp.bus_voltage_v:5.2f} V  {smp.current_a:+6.2f} A  {smp.power_w:5.2f} W  pack={state}  ok={smp.ok}")
+            if not dry_run:
+                time.sleep(0.2)
+        if not dry_run and not smp.ok:
+            return 1
+    finally:
+        try:
+            mon.close()
+        except Exception:
+            pass
     return 0

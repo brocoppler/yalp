@@ -164,6 +164,30 @@ class ReactiveTickCore(ReactiveBackend):
     _heading_corr_sum: float = 0.0
     _heading_corr_n: int = 0
 
+    #: Optional closed-loop sensors (2026-09-16). ``_imu`` (read() -> sample with
+    #: ``yaw_rate_dps``/``ok``/``ts``) is the PRIMARY heading source when live —
+    #: no camera latency, works in the dark and with people in frame; the camera
+    #: estimator stays the fallback. ``_encoders`` (read() -> sample with
+    #: ``distance_m``/``left_mps``/``right_mps``/``ok``) closes the DISTANCE loop
+    #: on straight goals. ``_power`` (read() -> ``bus_voltage_v``/``current_a``/
+    #: ``ok``) is sampled slowly into the published ``sensors`` sub-map.
+    _imu: Optional[object] = None
+    _imu_last_ts: Optional[float] = None
+    _imu_ok: bool = False
+    _encoders: Optional[object] = None
+    _odometry_m: float = 0.0
+    _odometry_ok: bool = False
+    _odometry_start_m: float = 0.0
+    odometry_closed_loop: bool = False
+    odometry_timeout_factor: float = config.ODOMETRY_TIMEOUT_FACTOR
+    _power: Optional[object] = None
+    _power_next_ts: float = 0.0
+    _power_sample: Optional[dict] = None
+    _pack_warned: bool = False
+    power_sample_hz: float = config.POWER_MONITOR_SAMPLE_HZ
+    pack_low_voltage_v: float = config.PACK_LOW_VOLTAGE_V
+    heading_source: str = "none"
+
     # -- backend-specific hooks ---------------------------------------------
     @abstractmethod
     def read_range(self) -> Tuple[float, bool]:
@@ -402,10 +426,15 @@ class ReactiveTickCore(ReactiveBackend):
                 self._frame_id += 1
                 s.last_frame_id = f"f-{self._frame_id}"
             s.ts = time.monotonic()
-            # Visual heading (camera yaw) — runs every tick, on every path, so
-            # the estimate is live the moment a goal needs it (no-op when there is
-            # no estimator / no frame). Cheap (small-frame phase correlation).
+            # Heading — the IMU when fitted and answering, else the camera yaw
+            # (phase correlation on a small frame) — runs every tick, on every
+            # path, so the estimate is live the moment a goal needs it. Then the
+            # wheel odometry and the (slow) pack monitor, and the published
+            # ``sensors`` sub-map.
             self._update_heading(frame, capture_id, s.ts)
+            self._update_odometry()
+            self._update_power(s.ts)
+            s.sensors = self._sensors_snapshot()
 
             # 2. SAFETY OVERRIDE — beats everything, every tick. HALT the motors
             #    FIRST (never open-loop reverse — no rear sensor), then latch
@@ -580,6 +609,11 @@ class ReactiveTickCore(ReactiveBackend):
             self._heading_corr_sum = 0.0
             self._heading_corr_n = 0
             s.goal["closure"] = "timed"
+            self._odometry_start_m = self._odometry_m
+            if self._straight_is_closed_loop(s.goal):
+                # Closed-loop DISTANCE: the encoders end the goal; the timer is a
+                # generous upper bound (the open-loop speed model has been ~2x off).
+                self._goal_duration_s *= max(1.0, float(self.odometry_timeout_factor))
             if self._rotate_is_closed_loop(s.goal):
                 # Closed-loop turn: the visual yaw integral ends the goal; the
                 # timer becomes a generous upper bound so a blind estimator can
@@ -695,6 +729,14 @@ class ReactiveTickCore(ReactiveBackend):
         visual_done = False
         if goal is not None:
             progress = 1.0 if duration <= 0 else min(1.0, s.goal_elapsed_s / duration)
+            odom_done = False
+            if self._straight_is_closed_loop(goal) and self._odometry_live():
+                target = abs(float(goal.get("target", 0.0)))
+                gone = abs(self._odometry_m - self._odometry_start_m)
+                if target > 0:
+                    progress = max(progress, min(1.0, gone / target))
+                odom_done = target > 0 and gone >= target
+                goal["odometry_m"] = round(gone, 3)
             if self._rotate_is_closed_loop(goal) and self._heading_live():
                 target = abs(float(goal.get("target", 0.0)))
                 turned = abs(self._heading_deg)
@@ -708,12 +750,12 @@ class ReactiveTickCore(ReactiveBackend):
             goal["progress"] = progress
             goal["elapsed_s"] = s.goal_elapsed_s
             self._publish_heading(goal)
-        if visual_done or s.goal_elapsed_s >= duration:
+        if visual_done or odom_done or s.goal_elapsed_s >= duration:
             # Never a bare "completed": open-loop, timed, unverified (§2.3). A
-            # closed-loop turn keeps the SAME contract string (clients match on
-            # it) and says how it closed in the additive ``closure`` field.
+            # closed-loop turn/drive keeps the SAME contract string (clients
+            # match on it) and says how it closed in the additive ``closure``.
             if goal is not None:
-                goal["closure"] = "visual" if visual_done else "timed"
+                goal["closure"] = "visual" if visual_done else ("odometry" if odom_done else "timed")
             s.goal_status = GoalStatus.COMPLETED
             s.mode = Mode.IDLE
             self._halt_motors()
@@ -910,10 +952,13 @@ class ReactiveTickCore(ReactiveBackend):
         so the controller can drop its closed-loop term after a sustained
         dropout. ``_yaw_rate_dps`` is measured between ACCEPTED frames.
         """
+        if self._update_heading_imu(now):
+            return
         est = self._yaw
         if est is None or frame is None:
             self._heading_blind_ticks += 1
             self._yaw_rate_dps = 0.0
+            self.heading_source = "none"
             return
         if capture_id is not None and capture_id == self._heading_last_fid:
             # Same frame as last tick: nothing new to measure, not a dropout.
@@ -932,18 +977,133 @@ class ReactiveTickCore(ReactiveBackend):
         else:
             self._yaw_rate_dps = 0.0  # first sample after a gap: no rate yet
         self._heading_blind_ticks = 0
+        self.heading_source = "camera"
+
+    def _update_heading_imu(self, now: float) -> bool:
+        """Integrate the gyro if an IMU is fitted and answering. True = applied.
+
+        ``heading += yaw_rate * dt`` between consecutive OK samples (dt capped at
+        0.25 s so a stall in the bus cannot inject a huge step). A sample that is
+        not OK — or a missing IMU — returns False so the camera path runs. The
+        IMU beats the camera whenever it answers: it has no frame latency, no
+        looming, and does not care about the light or a person in the frame.
+        """
+        imu = self._imu
+        if imu is None:
+            return False
+        try:
+            smp = imu.read()
+        except Exception:
+            smp = None
+        if smp is None or not getattr(smp, "ok", False):
+            self._imu_ok = False
+            self._imu_last_ts = None
+            return False
+        ts = float(getattr(smp, "ts", now))
+        rate = float(getattr(smp, "yaw_rate_dps", 0.0))
+        if self._imu_last_ts is not None:
+            dt = ts - self._imu_last_ts
+            if 0.0 < dt <= 0.25:
+                self._heading_deg += rate * dt
+        self._imu_last_ts = ts
+        self._imu_ok = True
+        self._yaw_rate_dps = rate
+        self._heading_blind_ticks = 0
+        self.heading_source = "imu"
+        return True
+
+    def _update_odometry(self) -> None:
+        enc = self._encoders
+        if enc is None:
+            return
+        try:
+            smp = enc.read()
+        except Exception:
+            self._odometry_ok = False
+            return
+        ok = bool(getattr(smp, "ok", False))
+        self._odometry_ok = ok
+        if ok:
+            self._odometry_m = float(getattr(smp, "distance_m", self._odometry_m))
+            self._last_encoder_sample = smp
+
+    def _odometry_live(self) -> bool:
+        return self._encoders is not None and self._odometry_ok
+
+    def _straight_is_closed_loop(self, goal: Optional[dict]) -> bool:
+        return (
+            bool(self.odometry_closed_loop)
+            and self._encoders is not None
+            and goal is not None
+            and str(goal.get("kind", "straight")) == "straight"
+        )
+
+    def _update_power(self, now: float) -> None:
+        mon = self._power
+        if mon is None or now < self._power_next_ts:
+            return
+        hz = max(0.1, float(self.power_sample_hz))
+        self._power_next_ts = now + 1.0 / hz
+        try:
+            smp = mon.read()
+        except Exception:
+            return
+        if not getattr(smp, "ok", False):
+            self._power_sample = {"pack_ok": False}
+            return
+        v = float(getattr(smp, "bus_voltage_v", 0.0))
+        i = float(getattr(smp, "current_a", 0.0))
+        try:
+            from .power_monitor import nimh_pack_state
+
+            state = nimh_pack_state(v)
+        except Exception:
+            state = "unknown"
+        self._power_sample = {
+            "pack_voltage_v": round(v, 3),
+            "pack_current_a": round(i, 3),
+            "pack_state": state,
+            "pack_ok": True,
+        }
+        if v < float(self.pack_low_voltage_v) and not self._pack_warned:
+            self._pack_warned = True
+            logger.warning(
+                "pack voltage %.2f V is below %.2f V (%s) — expect speed sag; "
+                "the drive is NOT stopped automatically",
+                v, float(self.pack_low_voltage_v), state,
+            )
+
+    def _sensors_snapshot(self) -> Optional[dict]:
+        """The additive ``RobotState.sensors`` sub-map, or None if no source."""
+        if self._imu is None and self._yaw is None and self._encoders is None and self._power is None:
+            return None
+        out: dict = {
+            "heading_deg": round(self._heading_deg, 2),
+            "yaw_rate_dps": round(self._yaw_rate_dps, 1),
+            "heading_source": self.heading_source if self._heading_live() else "none",
+        }
+        if self._encoders is not None:
+            smp = getattr(self, "_last_encoder_sample", None)
+            out["odometry_m"] = round(self._odometry_m, 3)
+            out["odometry_ok"] = self._odometry_ok
+            if smp is not None:
+                out["left_mps"] = round(float(getattr(smp, "left_mps", 0.0)), 3)
+                out["right_mps"] = round(float(getattr(smp, "right_mps", 0.0)), 3)
+        if self._power_sample:
+            out.update(self._power_sample)
+        return out
 
     def _heading_live(self) -> bool:
         """Whether the visual heading is trustworthy right now."""
         return (
-            self._yaw is not None
+            (self._yaw is not None or self._imu is not None)
             and self._heading_blind_ticks <= int(self.heading_hold_blind_ticks)
         )
 
     def _rotate_is_closed_loop(self, goal: Optional[dict]) -> bool:
         return (
             bool(self.rotate_closed_loop)
-            and self._yaw is not None
+            and (self._yaw is not None or self._imu is not None)
             and goal is not None
             and str(goal.get("kind", "straight")) == "rotate"
         )
@@ -974,11 +1134,12 @@ class ReactiveTickCore(ReactiveBackend):
 
     def _publish_heading(self, goal: dict) -> None:
         """Additive, wire-compatible heading fields on the goal dict."""
-        if self._yaw is None:
+        if self._yaw is None and self._imu is None:
             return
         goal["heading_deg"] = round(self._heading_deg, 2)
         goal["yaw_rate_dps"] = round(self._yaw_rate_dps, 1)
         goal["heading_live"] = self._heading_live()
+        goal["heading_source"] = self.heading_source if self._heading_live() else "none"
 
     def _learn_straight_bias(self, goal: dict) -> None:
         """Fold this completed straight drive's mean correction into the bias.
@@ -1049,6 +1210,7 @@ class ReactiveTickCore(ReactiveBackend):
             last_frame_id=s.last_frame_id,
             speed_limit=s.speed_limit,
             ultrasonic=dict(s.ultrasonic) if s.ultrasonic is not None else None,
+            sensors=dict(s.sensors) if s.sensors is not None else None,
             ts=s.ts,
         )
 

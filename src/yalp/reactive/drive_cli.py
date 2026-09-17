@@ -216,7 +216,14 @@ def _timeline_line(elapsed: float, state) -> str:
         detail = "-"
     if "heading_deg" in goal:
         live = "" if goal.get("heading_live", True) else " (blind)"
-        detail += f"  hdg={float(goal['heading_deg']):+6.1f}°{live}"
+        src = goal.get("heading_source")
+        tag = f"[{src}]" if src and src != "none" else ""
+        detail += f"  hdg={float(goal['heading_deg']):+6.1f}°{tag}{live}"
+    if "odometry_m" in goal:
+        detail += f"  odo={float(goal['odometry_m']):.2f}m"
+    sensors = getattr(state, "sensors", None) or {}
+    if sensors.get("pack_ok"):
+        detail += f"  pack={float(sensors['pack_voltage_v']):.2f}V"
     return (
         f"[{elapsed:6.1f}s] dist={state.distance_m:5.2f}m ({known:^7})  "
         f"mode={state.mode.value:<10}  status={state.goal_status:<24}  {detail}"
@@ -313,10 +320,13 @@ def _poll_loop(client, base_seq: int, timeout: float, poll_interval: float) -> i
                 goal = state.goal or {}
                 closure = goal.get("closure", "timed")
                 if closure == "visual":
+                    src = goal.get("heading_source", "camera")
                     how = (
-                        "closed-loop on the camera heading estimate — turned "
+                        f"closed-loop on the {src} heading estimate — turned "
                         f"{float(goal.get('heading_deg', 0.0)):+.1f}°"
                     )
+                elif closure == "odometry":
+                    how = f"closed-loop on wheel odometry — travelled {float(goal.get('odometry_m', 0.0)):.2f} m"
                 else:
                     how = "open-loop, timed, UNVERIFIED — no encoders"
                 print(

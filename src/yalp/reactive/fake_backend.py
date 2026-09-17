@@ -96,6 +96,10 @@ class FakeReactiveBackend(ReactiveTickCore):
         rotate_closed_loop: bool = False,
         trim_learning: bool = False,
         yaw_estimator: Optional[object] = None,
+        imu: Optional[object] = None,
+        encoders: Optional[object] = None,
+        power_monitor: Optional[object] = None,
+        odometry_closed_loop: bool = False,
     ) -> None:
         # Observer seam (telemetry / any recorder). Injected so tests and library
         # users can pass their own or leave it None. ``close_observer`` = this
@@ -162,6 +166,19 @@ class FakeReactiveBackend(ReactiveTickCore):
         self._heading_last_ts = 0.0
         self._heading_corr_sum = 0.0
         self._heading_corr_n = 0
+        # Optional simulated closed-loop sensors (same core code as the real backend).
+        self._imu = imu
+        self._encoders = encoders
+        self._power = power_monitor
+        self.odometry_closed_loop = bool(odometry_closed_loop) and encoders is not None
+        self._imu_last_ts = None
+        self._imu_ok = False
+        self._odometry_m = 0.0
+        self._odometry_ok = False
+        self._odometry_start_m = 0.0
+        self._power_next_ts = 0.0
+        self._power_sample = None
+        self._pack_warned = False
 
     # -- shared-core hook: the simulated range read --------------------------
     def read_range(self) -> Tuple[float, bool]:

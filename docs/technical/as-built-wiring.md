@@ -22,8 +22,13 @@ you plug a jumper in.
 > - **DONE & recorded (§3.4):** motor direction calibration — both wheels wired
 >   reversed (mirror-mount, symmetric); corrected in software (`left_invert=True`,
 >   `right_invert=True`), persisted to `~/.config/yalp/calibration.json` on the Pi.
-> - **NEXT PHYSICAL STEP:** collision-stop reflex (J) — bring the reactive safety loop
->   up on the real body with live HC-SR04 reads and the drivetrain.
+> - **DONE (2026-09-15/16, §3.6):** left motor leads found swapped → `left_invert=false`;
+>   DRV8833 decay-mode asymmetry fixed in software (uniform slow decay); **visual heading
+>   hold + closed-loop turns + trim learning** verified on the floor. Body is now the
+>   two-deck acrylic chassis (§0).
+> - **NEXT PHYSICAL STEP:** third deck + screwed camera mount, then the I2C sensors
+>   (MPU-6050 IMU, INA219 pack monitor) and the FIT0450 encoder motors — the code for
+>   all three is in place and auto-detects them. See `shopping-list-2026-09.md`.
 >
 > The board is the **DRV8833** (`MOTOR_DRIVER_KIND="drv8833"`, the `config.py`
 > default). It has **no STBY pin**; TB6612FNG is a fallback only if the DRV8833
@@ -38,6 +43,30 @@ you plug a jumper in.
 | Vision pipeline | ✅ working | `yalp see` (frame → Claude vision → scene description) |
 | **Ultrasonic HC-SR04** | ✅ **wired & working** | `yalp hwtest --check ultrasonic` (real distances) |
 | **Motors (DRV8833 + 2× TT + 4×AA)** | ✅ **wired & Gate E PASSED (2026-07-03); milestone H PASSED (2026-07-15)** | `yalp hwtest --check motors`; `vcgencmd get_throttled` (want 0x0) |
+
+---
+
+## 0. Body — as built (2026-09-16)
+
+Izzy is on the **two-deck 2WD acrylic chassis** from `chassis-v2.md` §12 (Stage 1 of
+that plan is done as far as the deck goes; the caster/encoder-motor/electrical-hardening
+stages are still open). The v1 cardboard body is retired.
+
+| Deck | Carries | Notes |
+|---|---|---|
+| **1 (bottom)** | 4×AA NiMH pack with its switch; **HC-SR04** ultrasonic at the front | Sonar low and level (see `chassis-v2.md` §7 for the beam-vs-floor geometry). |
+| **2 (top)** | **Pi 5**; the **drivetrain breadboard** (DRV8833, §3) and the **sonar-divider mini breadboard** (§1); **C270 camera** | **Out of room.** The camera is clipped, not screwed. |
+
+> **TODO (fill in when the third plate is ordered — see `shopping-list-2026-09.md` §1):**
+> plate outer dimensions, standoff hole spacing, standoff height, and the camera lens
+> height above the floor once it moves to deck 3. Record the transducer-face-to-bumper
+> offset for the sonar too (served distance vs actual clearance).
+
+**Planned (code in place, hardware not yet fitted):** MPU-6050 IMU and INA219 pack
+monitor on I2C-1 (SDA GPIO2 / pin 3, SCL GPIO3 / pin 5, 3V3, GND); FIT0450 encoder
+motors with A/B on GPIO16/26 (left, pins 36/37) and GPIO20/21 (right, pins 38/40),
+encoder VCC from 3V3. When any of these is wired, add its jumper table here in the §1/§3
+style.
 
 ---
 

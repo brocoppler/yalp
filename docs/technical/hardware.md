@@ -228,6 +228,23 @@ Pin map (BCM numbering — the two motor PWM pins **must** be hardware-PWM pins;
 | Ultrasonic TRIG | GPIO 5 | 3.3V out → HC-SR04 trigger (fine as-is) |
 | Ultrasonic ECHO | GPIO 6 | **via divider** — 5V echo → 3.3V GPIO |
 | Common ground | any GND pin | shared with motor supply (see §2) |
+| **I2C-1 SDA** *(planned 2026-09)* | GPIO 2 (pin 3) | MPU-6050 IMU (0x68) + INA219 pack monitor (0x40) share the bus; 3V3 supply |
+| **I2C-1 SCL** *(planned 2026-09)* | GPIO 3 (pin 5) | as above |
+| **Encoder left A / B** *(planned 2026-09)* | GPIO 16 / 26 (pins 36/37) | FIT0450 quadrature; encoder VCC from 3V3; `yalp/reactive/encoders.py` |
+| **Encoder right A / B** *(planned 2026-09)* | GPIO 20 / 21 (pins 38/40) | as above |
+
+> **NOTE (2026-09-15, supersedes the "don't software-PWM all four" advice above) —** under
+> gpiozero's lgpio pin factory the "hardware PWM" lines GPIO12/13 were **never** in
+> hardware-PWM mode (`pinctrl get 12,13` shows plain output — lgpio software-times the
+> PWM), so the concern about mixing hardware and software PWM was moot in practice. More
+> importantly, PWMing only one input per channel forces **fast decay forward / slow decay
+> reverse**, which — once one wheel was inverted and the other not — drove the two wheels
+> in different decay modes and made her veer with a sign that flipped with duty
+> (`as-built-wiring.md` §3.6, measured). The driver now software-PWMs **both** inputs
+> (`config.MOTOR_DECAY_MODE="slow"`): one held HIGH, the other PWMed at 1−duty, both
+> directions, both channels — symmetric wheels and more torque near the stall floor. No
+> speed inconsistency from PWM jitter was observable against the camera yaw estimate at
+> 1 kHz; the residual imbalance is handled by the visual heading hold.
 
 ASCII wiring sketch:
 

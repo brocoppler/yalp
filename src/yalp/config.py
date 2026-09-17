@@ -618,6 +618,48 @@ TRIM_LEARNING_RATE: float = _env_float("YALP_TRIM_LEARNING_RATE", 0.3)
 #   GPIO). Validated on the robot 2026-09-15.
 MOTOR_DECAY_MODE: str = _env_str("YALP_MOTOR_DECAY", "slow")
 
+# --- Optional closed-loop sensors (2026-09-16; drivers in yalp.reactive.*) ----
+# Each is a tri-state "auto" | "1"/"on" | "0"/"off". "auto" = probe for the
+# device at backend start and use it if it answers; missing hardware is silent.
+# The camera heading hold stays the fallback whenever the IMU is absent/blind.
+IMU_ENABLED: str = _env_str("YALP_IMU", "auto")
+IMU_I2C_BUS: int = _env_int("YALP_IMU_I2C_BUS", 1)
+IMU_I2C_ADDRESS: int = _env_int("YALP_IMU_I2C_ADDRESS", 0x68)
+# Which gyro axis is vertical on the mounted board and its sign so that
+# POSITIVE = robot turning LEFT / CCW (matches rotate targets and the camera).
+IMU_YAW_AXIS: str = _env_str("YALP_IMU_YAW_AXIS", "z")
+IMU_YAW_SIGN: int = _env_int("YALP_IMU_YAW_SIGN", 1)
+# Gyro bias calibration at backend start: samples averaged while the robot is
+# still (do not touch her for the first ~1 s after the server starts).
+IMU_CALIBRATION_SAMPLES: int = _env_int("YALP_IMU_CALIBRATION_SAMPLES", 200)
+
+POWER_MONITOR_ENABLED: str = _env_str("YALP_POWER_MONITOR", "auto")
+POWER_MONITOR_I2C_ADDRESS: int = _env_int("YALP_POWER_MONITOR_I2C_ADDRESS", 0x40)
+POWER_MONITOR_SHUNT_OHMS: float = _env_float("YALP_POWER_MONITOR_SHUNT_OHMS", 0.1)
+POWER_MONITOR_SAMPLE_HZ: float = _env_float("YALP_POWER_MONITOR_SAMPLE_HZ", 2.0)
+# Below this pack voltage the backend logs a low-pack warning once per session
+# (4xAA NiMH: 4 x 1.15 V). It never stops the robot — that is the operator's call.
+PACK_LOW_VOLTAGE_V: float = _env_float("YALP_PACK_LOW_VOLTAGE_V", 4.6)
+
+ENCODERS_ENABLED: str = _env_str("YALP_ENCODERS", "auto")
+ENCODER_LEFT_A_PIN: int = _env_int("YALP_ENCODER_LEFT_A_PIN", 16)   # physical 36
+ENCODER_LEFT_B_PIN: int = _env_int("YALP_ENCODER_LEFT_B_PIN", 26)   # physical 37
+ENCODER_RIGHT_A_PIN: int = _env_int("YALP_ENCODER_RIGHT_A_PIN", 20)  # physical 38
+ENCODER_RIGHT_B_PIN: int = _env_int("YALP_ENCODER_RIGHT_B_PIN", 21)  # physical 40
+# DFRobot FIT0450: 16 pulses / motor rev x 120:1 gearbox = 1920 per wheel rev on
+# one edge of one channel. The driver counts BOTH edges of BOTH channels (x4), so
+# the default here is 4 x 1920. VERIFY on the bench: spin a wheel one full turn by
+# hand and read `yalp hwtest --check encoders`.
+ENCODER_TICKS_PER_WHEEL_REV: int = _env_int("YALP_ENCODER_TICKS_PER_WHEEL_REV", 7680)
+ENCODER_WHEEL_DIAMETER_M: float = _env_float("YALP_ENCODER_WHEEL_DIAMETER_M", 0.065)
+ENCODER_TRACK_WIDTH_M: float = _env_float("YALP_ENCODER_TRACK_WIDTH_M", 0.14)  # measure it
+ENCODER_LEFT_INVERT: bool = _env_bool("YALP_ENCODER_LEFT_INVERT", False)
+ENCODER_RIGHT_INVERT: bool = _env_bool("YALP_ENCODER_RIGHT_INVERT", False)
+# Closed-loop DISTANCE on straight goals when encoders are live: complete when the
+# odometry reaches the target; the open-loop timer stays as a x-factor upper bound.
+ODOMETRY_CLOSED_LOOP: bool = _env_bool("YALP_ODOMETRY_CLOSED_LOOP", True)
+ODOMETRY_TIMEOUT_FACTOR: float = _env_float("YALP_ODOMETRY_TIMEOUT_FACTOR", 3.0)
+
 
 @dataclass(frozen=True)
 class Config:
@@ -713,6 +755,29 @@ class Config:
     trim_learning_enabled: bool = TRIM_LEARNING_ENABLED
     trim_learning_rate: float = TRIM_LEARNING_RATE
     motor_decay_mode: str = MOTOR_DECAY_MODE
+    imu_enabled: str = IMU_ENABLED
+    imu_i2c_bus: int = IMU_I2C_BUS
+    imu_i2c_address: int = IMU_I2C_ADDRESS
+    imu_yaw_axis: str = IMU_YAW_AXIS
+    imu_yaw_sign: int = IMU_YAW_SIGN
+    imu_calibration_samples: int = IMU_CALIBRATION_SAMPLES
+    power_monitor_enabled: str = POWER_MONITOR_ENABLED
+    power_monitor_i2c_address: int = POWER_MONITOR_I2C_ADDRESS
+    power_monitor_shunt_ohms: float = POWER_MONITOR_SHUNT_OHMS
+    power_monitor_sample_hz: float = POWER_MONITOR_SAMPLE_HZ
+    pack_low_voltage_v: float = PACK_LOW_VOLTAGE_V
+    encoders_enabled: str = ENCODERS_ENABLED
+    encoder_left_a_pin: int = ENCODER_LEFT_A_PIN
+    encoder_left_b_pin: int = ENCODER_LEFT_B_PIN
+    encoder_right_a_pin: int = ENCODER_RIGHT_A_PIN
+    encoder_right_b_pin: int = ENCODER_RIGHT_B_PIN
+    encoder_ticks_per_wheel_rev: int = ENCODER_TICKS_PER_WHEEL_REV
+    encoder_wheel_diameter_m: float = ENCODER_WHEEL_DIAMETER_M
+    encoder_track_width_m: float = ENCODER_TRACK_WIDTH_M
+    encoder_left_invert: bool = ENCODER_LEFT_INVERT
+    encoder_right_invert: bool = ENCODER_RIGHT_INVERT
+    odometry_closed_loop: bool = ODOMETRY_CLOSED_LOOP
+    odometry_timeout_factor: float = ODOMETRY_TIMEOUT_FACTOR
 
 
 def get_api_key() -> str | None:
@@ -828,6 +893,29 @@ __all__ = [
     "TRIM_LEARNING_ENABLED",
     "TRIM_LEARNING_RATE",
     "MOTOR_DECAY_MODE",
+    "IMU_ENABLED",
+    "IMU_I2C_BUS",
+    "IMU_I2C_ADDRESS",
+    "IMU_YAW_AXIS",
+    "IMU_YAW_SIGN",
+    "IMU_CALIBRATION_SAMPLES",
+    "POWER_MONITOR_ENABLED",
+    "POWER_MONITOR_I2C_ADDRESS",
+    "POWER_MONITOR_SHUNT_OHMS",
+    "POWER_MONITOR_SAMPLE_HZ",
+    "PACK_LOW_VOLTAGE_V",
+    "ENCODERS_ENABLED",
+    "ENCODER_LEFT_A_PIN",
+    "ENCODER_LEFT_B_PIN",
+    "ENCODER_RIGHT_A_PIN",
+    "ENCODER_RIGHT_B_PIN",
+    "ENCODER_TICKS_PER_WHEEL_REV",
+    "ENCODER_WHEEL_DIAMETER_M",
+    "ENCODER_TRACK_WIDTH_M",
+    "ENCODER_LEFT_INVERT",
+    "ENCODER_RIGHT_INVERT",
+    "ODOMETRY_CLOSED_LOOP",
+    "ODOMETRY_TIMEOUT_FACTOR",
     "Config",
     "get_api_key",
     "require_api_key",

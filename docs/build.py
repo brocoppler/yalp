@@ -31,6 +31,7 @@ DOCS = [
     "technical/hardware-runbook.md",
     "technical/as-built-wiring.md",
     "technical/chassis-v2.md",
+    "technical/shopping-list-2026-09.md",
     "archive/initial-plan.md",
 ]
 

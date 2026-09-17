@@ -62,6 +62,7 @@ the docs resolve. Only `build.py` touches the embedded copies between the `<!--D
 | Technical | `technical/roadmap.md` | Build sequencing, the go/no-go gates, the risk register, the consolidated open questions. |
 | Technical | `technical/as-built-wiring.md` | The as-built record of the *real* robot's wiring (wire colors, breadboard nodes, Pi physical pins) — what is actually connected on Izzy today. |
 | Technical | `technical/chassis-v2.md` | Why the cardboard body is now the limiting factor, the spec for its replacement, and the staged rebuild plan. |
+| Technical | `technical/shopping-list-2026-09.md` | What to order for the third deck, the IMU / pack monitor / encoders the code now supports, and the test rig. |
 | Archive | `archive/initial-plan.md` | The original brain-dump the six specs were factored out of — kept for provenance. |
 
 ## How it's built

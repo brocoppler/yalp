@@ -145,6 +145,10 @@ class RealReactiveBackend(ReactiveTickCore):
         rotate_closed_loop: Optional[bool] = None,
         trim_learning: Optional[bool] = None,
         yaw_estimator: Optional[object] = None,
+        imu: Optional[object] = None,
+        encoders: Optional[object] = None,
+        power_monitor: Optional[object] = None,
+        probe_sensors: bool = True,
     ) -> None:
         # Observer seam (telemetry / any recorder). Injected so tests and library
         # users can pass their own or leave it None. ``close_observer`` = this
@@ -306,6 +310,41 @@ class RealReactiveBackend(ReactiveTickCore):
         self._heading_corr_sum = 0.0
         self._heading_corr_n = 0
 
+        # --- Optional closed-loop sensors (2026-09-16) -------------------------
+        # Injected objects win; otherwise each is probed per its config tri-state
+        # ("auto" = try, silent if absent; "1" = try, LOUD if absent; "0" = skip)
+        # only when ``probe_sensors`` (the CLI path) — tests that build many
+        # backends never touch I2C/GPIO. The gyro bias is calibrated in start().
+        self._imu = imu if imu is not None else (self._probe_imu() if probe_sensors else None)
+        self._encoders = (
+            encoders if encoders is not None else (self._probe_encoders() if probe_sensors else None)
+        )
+        self._power = (
+            power_monitor
+            if power_monitor is not None
+            else (self._probe_power_monitor() if probe_sensors else None)
+        )
+        self.odometry_closed_loop = bool(config.ODOMETRY_CLOSED_LOOP) and self._encoders is not None
+        self.odometry_timeout_factor = config.ODOMETRY_TIMEOUT_FACTOR
+        self.power_sample_hz = config.POWER_MONITOR_SAMPLE_HZ
+        self.pack_low_voltage_v = config.PACK_LOW_VOLTAGE_V
+        self._imu_last_ts = None
+        self._imu_ok = False
+        self._odometry_m = 0.0
+        self._odometry_ok = False
+        self._odometry_start_m = 0.0
+        self._power_next_ts = 0.0
+        self._power_sample = None
+        self._pack_warned = False
+        self._sensors_calibrated = False
+        if self._imu is not None or self._encoders is not None or self._power is not None:
+            logger.info(
+                "closed-loop sensors: imu=%s encoders=%s power=%s",
+                type(self._imu).__name__ if self._imu is not None else "none",
+                type(self._encoders).__name__ if self._encoders is not None else "none",
+                type(self._power).__name__ if self._power is not None else "none",
+            )
+
         self._state = RobotState(mode=Mode.IDLE, goal_status=GoalStatus.NONE)
         self._goal_duration_s = 0.0
         self._frame_id = 0
@@ -314,6 +353,86 @@ class RealReactiveBackend(ReactiveTickCore):
         # Has any range read EVER reported a valid distance? (See ReactiveTickCore:
         # drives startup_blind vs echo_timeout on a blind safety latch.)
         self._ever_valid = False
+
+    # -- optional sensor probes -------------------------------------------------
+    @staticmethod
+    def _wants(flag: str) -> Optional[bool]:
+        """Tri-state config: None = auto, True = required, False = off."""
+        v = str(flag).strip().lower()
+        if v in ("0", "off", "no", "false", "none"):
+            return False
+        if v in ("1", "on", "yes", "true", "required"):
+            return True
+        return None
+
+    def _probe_imu(self) -> Optional[object]:
+        want = self._wants(config.IMU_ENABLED)
+        if want is False:
+            return None
+        try:
+            from .imu import Mpu6050Imu
+
+            return Mpu6050Imu(
+                bus=config.IMU_I2C_BUS,
+                address=config.IMU_I2C_ADDRESS,
+                yaw_axis=config.IMU_YAW_AXIS,
+                yaw_sign=config.IMU_YAW_SIGN,
+            )
+        except Exception as exc:
+            (logger.error if want else logger.info)("IMU not available (%s): %s", config.IMU_ENABLED, exc)
+            return None
+
+    def _probe_encoders(self) -> Optional[object]:
+        want = self._wants(config.ENCODERS_ENABLED)
+        if want is False:
+            return None
+        try:
+            from .encoders import GpiodWheelEncoders
+
+            return GpiodWheelEncoders(
+                left_a_pin=config.ENCODER_LEFT_A_PIN,
+                left_b_pin=config.ENCODER_LEFT_B_PIN,
+                right_a_pin=config.ENCODER_RIGHT_A_PIN,
+                right_b_pin=config.ENCODER_RIGHT_B_PIN,
+                ticks_per_wheel_rev=config.ENCODER_TICKS_PER_WHEEL_REV,
+                wheel_diameter_m=config.ENCODER_WHEEL_DIAMETER_M,
+                track_width_m=config.ENCODER_TRACK_WIDTH_M,
+                left_invert=config.ENCODER_LEFT_INVERT,
+                right_invert=config.ENCODER_RIGHT_INVERT,
+            )
+        except Exception as exc:
+            (logger.error if want else logger.info)("encoders not available (%s): %s", config.ENCODERS_ENABLED, exc)
+            return None
+
+    def _probe_power_monitor(self) -> Optional[object]:
+        want = self._wants(config.POWER_MONITOR_ENABLED)
+        if want is False:
+            return None
+        try:
+            from .power_monitor import Ina219PowerMonitor
+
+            return Ina219PowerMonitor(
+                bus=config.IMU_I2C_BUS,
+                address=config.POWER_MONITOR_I2C_ADDRESS,
+                shunt_ohms=config.POWER_MONITOR_SHUNT_OHMS,
+            )
+        except Exception as exc:
+            (logger.error if want else logger.info)("pack monitor not available (%s): %s", config.POWER_MONITOR_ENABLED, exc)
+            return None
+
+    def _calibrate_sensors_once(self) -> None:
+        """Gyro bias at rest (once per session). Do not touch her for ~1 s."""
+        if self._sensors_calibrated:
+            return
+        self._sensors_calibrated = True
+        imu = self._imu
+        if imu is None:
+            return
+        try:
+            bias = imu.calibrate_gyro(samples=config.IMU_CALIBRATION_SAMPLES)
+            logger.info("gyro bias calibrated (deg/s): %s", bias)
+        except Exception as exc:
+            logger.warning("gyro bias calibration failed (%s) — IMU heading may drift", exc)
 
     # -- shared-core hooks: real range read + real motor commands ------------
     def read_range(self) -> Tuple[float, bool]:
@@ -394,6 +513,7 @@ class RealReactiveBackend(ReactiveTickCore):
         if not self._camera_started:
             self._camera.start()
             self._camera_started = True
+        self._calibrate_sensors_once()  # gyro bias at rest, once
         self._watchdog.start()  # idempotent; heartbeats fresh on (re)arm
         return self
 
@@ -572,6 +692,11 @@ class RealReactiveBackend(ReactiveTickCore):
         #    gpiozero close() can block for seconds — or hang against an in-flight
         #    read — during a software-timed echo-timeout storm on the Pi 5, and that
         #    is exactly what made the stack unkillable-by-SIGINT on 2026-07-16.
+        # 4b. Optional sensors (I2C IMU / pack monitor, gpiod encoders) — each
+        #     bounded like the others; none of them can drive motion.
+        for dev, name in ((self._encoders, "encoders"), (self._imu, "imu"), (self._power, "power-monitor")):
+            if dev is not None and hasattr(dev, "close"):
+                self._close_hardware_bounded(dev.close, name)
         self._close_hardware_bounded(self._range_sensor.close, "range-sensor")
         self._close_hardware_bounded(self._motor_driver.close, "motor-driver")
         # 5. Flush + close the telemetry recorder IFF we own it (injected,

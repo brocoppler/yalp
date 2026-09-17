@@ -205,6 +205,12 @@ class RobotState:
     #: exposes is invisible to a plain ``distance_known`` observer, so this is the
     #: only place a state poll / telemetry record can show the TRUE miss rate.
     ultrasonic: Optional[dict] = None
+    #: Optional live sensor sub-map (2026-09-16, ADDITIVE like ``ultrasonic``):
+    #: ``heading_deg`` / ``yaw_rate_dps`` / ``heading_source`` ("imu" | "camera" |
+    #: "none"), ``pack_voltage_v`` / ``pack_current_a`` / ``pack_state`` when an
+    #: INA219 is fitted, ``odometry_m`` / ``left_mps`` / ``right_mps`` when wheel
+    #: encoders are fitted. ``None`` when the backend publishes none of these.
+    sensors: Optional[dict] = None
     ts: float = field(default_factory=time.monotonic)
 
     def __post_init__(self) -> None:
@@ -245,6 +251,7 @@ class RobotState:
             "last_frame_id": self.last_frame_id,
             "speed_limit": self.speed_limit,
             "ultrasonic": self.ultrasonic,
+            "sensors": self.sensors,
             "ts": self.ts,
         }
 
@@ -272,6 +279,7 @@ class RobotState:
             last_frame_id=d.get("last_frame_id"),
             speed_limit=float(d.get("speed_limit", 1.0)),
             ultrasonic=d.get("ultrasonic"),
+            sensors=d.get("sensors"),
             ts=float(d.get("ts", 0.0)),
         )
 

@@ -1,0 +1,59 @@
+# yalp-reactive.service — systemd USER unit for the reactive layer
+# (`yalp reactive --backend real`: motors, ultrasonic, camera, IPC server).
+#
+# Install (idempotent):   bash scripts/install_reactive_service.sh
+#   copies this file to ~/.config/systemd/user/, seeds ~/.config/yalp/reactive.env,
+#   then runs `systemctl --user daemon-reload && systemctl --user enable yalp-reactive`.
+#
+# Drive it with `yalp session start|stop|status|restart|logs` — the session
+# command detects this unit and dispatches to systemctl --user / journalctl
+# --user — or directly:
+#   systemctl --user start yalp-reactive
+#   systemctl --user stop yalp-reactive
+#   systemctl --user status yalp-reactive
+#   journalctl --user -u yalp-reactive -f
+#
+# Why KillSignal=SIGINT (graceful, motors zeroed first): the server installs one
+# handler for SIGINT and SIGTERM (yalp/reactive/reactive_cli.py). The FIRST
+# signal sets the stop event; the reactive loop exits at the next tick boundary
+# and runs a time-bounded teardown whose very first step ZEROES THE MOTORS, then
+# releases the camera and the GPIO. A SECOND signal force-exits. SIGINT is the
+# same path Ctrl-C exercises every day, so it is the one we trust; systemd only
+# escalates to SIGKILL after TimeoutStopSec, which is long enough for the
+# bounded teardown even during an ultrasonic echo-timeout storm. KillMode=mixed
+# sends that SIGINT to the main process only (never to a helper it may have
+# spawned), and the final SIGKILL to the whole control group.
+#
+# Running at boot WITHOUT a login: a USER unit only runs while the user's
+# systemd instance exists, which normally starts at first login and stops at
+# last logout. For izzy's reactive layer to come up at boot with nobody logged
+# in, enable lingering ONCE for the robot user:
+#     sudo loginctl enable-linger izzy
+# (verify with `loginctl show-user izzy -p Linger`). Without it the unit starts
+# on the first SSH login and is stopped when the last session ends.
+#
+# Paths: %h expands to the user's home; the checkout is assumed at ~/yalp with
+# its venv at ~/yalp/.venv (what scripts/pi_setup.sh creates). Edit ExecStart /
+# WorkingDirectory if the checkout lives elsewhere. WorkingDirectory matters:
+# yalp.config hydrates a git-ignored .env from the CWD (optional; the reactive
+# layer needs no API key). All YALP_* knobs (ultrasonic backend, heading-hold
+# gains, telemetry) live in ~/.config/yalp/reactive.env — one KEY=VALUE per
+# line, no `export`; the leading '-' means a missing file is not an error.
+
+[Unit]
+Description=yalp reactive layer (motors, ultrasonic, camera; IPC server on 127.0.0.1:8765)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/yalp
+EnvironmentFile=-%h/.config/yalp/reactive.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/yalp/.venv/bin/python -u -m yalp reactive --backend real
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
