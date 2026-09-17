@@ -105,6 +105,12 @@ class MotorCalibration:
         with a live camera heading estimate (``config.TRIM_LEARNING_*``), so the
         robot adapts to a new floor without a manual recalibration. ``0.0`` = no
         bias (the default and the pre-2026-09-15 behaviour).
+    camera_hfov_deg:
+        GROUND-TRUTHED horizontal field of view of the camera (degrees), measured
+        by ``yalp calibrate --heading`` (a closed-loop 90 deg turn read against a
+        floor mark). Every visual yaw/heading number scales with it. ``0.0`` =
+        not measured: use ``config.CAMERA_HFOV_DEG`` (55, the C270 datasheet
+        value).
     """
 
     left_invert: bool = False
@@ -117,6 +123,7 @@ class MotorCalibration:
     turn_duty_deadband: float = 0.0
     straight_bias_fwd: float = 0.0
     straight_bias_rev: float = 0.0
+    camera_hfov_deg: float = 0.0
 
     def to_dict(self) -> dict:
         """Return a JSON-ready dict with normalised (bool/float) values."""
@@ -131,6 +138,7 @@ class MotorCalibration:
             "turn_duty_deadband": float(self.turn_duty_deadband),
             "straight_bias_fwd": float(self.straight_bias_fwd),
             "straight_bias_rev": float(self.straight_bias_rev),
+            "camera_hfov_deg": float(self.camera_hfov_deg),
         }
 
     @classmethod
@@ -153,6 +161,10 @@ class MotorCalibration:
         if "duty_deadband" not in data:
             kwargs["duty_deadband"] = 0.0
         return cls(**kwargs)
+
+    def effective_hfov_deg(self, default: float) -> float:
+        """The camera HFOV to use: the measured one if present, else ``default``."""
+        return float(self.camera_hfov_deg) if self.camera_hfov_deg and self.camera_hfov_deg > 0 else float(default)
 
     def save(self, path: Optional[PathLike] = None) -> Path:
         """Write this calibration as pretty JSON, creating parent dirs.

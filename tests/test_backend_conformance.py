@@ -372,9 +372,11 @@ def test_no_preempted_while_blocked_or_on_sticky_release(factory):
     assert st.mode == Mode.SAFE_STOP
     assert st.goal_status == GoalStatus.BLOCKED
 
-    # A fresh intent WHILE blocked must NOT preempt — safety wins (sticky).
+    # A fresh FORWARD intent WHILE blocked must NOT preempt — safety wins
+    # (sticky). (A rotate or a reverse straight would be adopted as an ESCAPE
+    # move — software-spec.md §2.3 amendment 2026-09-16, tests/test_safe_stop_escape.py.)
     backend.apply_intent(
-        Intent(Mode.DRIVE_GOAL, {"kind": "rotate", "target": 90.0, "speed": 0.3}, seq=2)
+        Intent(Mode.DRIVE_GOAL, {"kind": "straight", "target": 3.0, "speed": 0.3}, seq=2)
     )
     st = backend.tick()
     assert st.mode == Mode.SAFE_STOP

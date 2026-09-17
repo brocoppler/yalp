@@ -79,6 +79,24 @@ def add_parser(subparsers) -> None:
             "Safe to run on a laptop."
         ),
     )
+    parser.add_argument(
+        "--heading",
+        action="store_true",
+        help=(
+            "ONLY ground-truth the camera heading estimate: spin LEFT until the "
+            "camera says 90 deg, ask how far she actually turned (read a floor "
+            "mark), then RIGHT the same way, and write the corrected "
+            "camera_hfov_deg into the existing calibration file (other fields "
+            "untouched). Every visual yaw/heading number scales with this."
+        ),
+    )
+    parser.add_argument(
+        "--turn-deg",
+        type=float,
+        default=90.0,
+        metavar="DEG",
+        help="--heading: the commanded turn size (default 90).",
+    )
     parser.set_defaults(handler=run)
 
 
@@ -87,6 +105,8 @@ def run(args) -> int:
     dry_run = bool(getattr(args, "dry_run", False))
     out = getattr(args, "out", None)
     out_path = out if out is not None else default_path()
+    if bool(getattr(args, "heading", False)):
+        return run_heading(out_path, dry_run=dry_run, turn_deg=float(getattr(args, "turn_deg", 90.0)))
 
     if dry_run:
         from .hardware import FakeMotorDriver
@@ -246,3 +266,153 @@ def _ask_float(ask: AskFn, prompt: str) -> float:
 
 
 __all__ = ["add_parser", "run", "calibrate"]
+
+
+# ---------------------------------------------------------------------------
+# Heading ground truth: calibrate the camera HFOV against a floor mark
+# ---------------------------------------------------------------------------
+HEADING_SPIN_DUTY = 0.5
+HEADING_SPIN_MAX_S = 4.0
+DRY_RUN_HEADING_ANSWERS = ["90", "90"]
+
+
+def run_heading(out_path, *, dry_run: bool, turn_deg: float = 90.0) -> int:
+    """``yalp calibrate --heading`` — write a ground-truthed ``camera_hfov_deg``."""
+    from .. import config
+    from .calibration import load_if_present
+
+    cal = load_if_present(out_path) or MotorCalibration()
+    hfov_old = cal.effective_hfov_deg(config.CAMERA_HFOV_DEG)
+
+    if dry_run:
+        from .drive_diagnostics import DriverCoupledYaw, TickingFakeCamera
+        from .hardware import FakeMotorDriver
+
+        driver = FakeMotorDriver()
+        camera = TickingFakeCamera()
+        estimator = DriverCoupledYaw(driver)
+        ask = _scripted_ask(DRY_RUN_HEADING_ANSWERS)
+        sleep: Callable[[float], None] = lambda _s: None  # noqa: E731
+        clock = {"t": 0.0}
+
+        def monotonic() -> float:
+            clock["t"] += 1.0 / 15.0
+            return clock["t"]
+
+        cleanup = driver.stop
+        print("=== yalp calibrate --heading [DRY RUN — fake driver, scripted answers] ===")
+    else:
+        try:
+            from ..camera import Camera
+            from .hardware import GpiozeroMotorDriver
+            from .visual_odometry import YawEstimator
+
+            driver = GpiozeroMotorDriver(
+                left_invert=cal.left_invert, right_invert=cal.right_invert,
+                left_trim=cal.left_trim, right_trim=cal.right_trim,
+            )
+            camera = Camera(source="webcam")
+            camera.start()
+            if camera.wait_for_frame(timeout=6.0) is None:
+                print("  ERROR: no camera frame within 6 s.")
+                camera.stop()
+                driver.close()
+                return 1
+            estimator = YawEstimator(hfov_deg=hfov_old)
+        except Exception as exc:  # pragma: no cover - needs a real Pi env
+            print(f"  ERROR: could not build the rig — {exc}")
+            return 1
+        ask = input
+        sleep = time.sleep
+        monotonic = time.monotonic
+
+        def cleanup() -> None:
+            for fn in (driver.stop, camera.stop, driver.close):
+                try:
+                    fn()
+                except Exception:
+                    pass
+
+        print("=== yalp calibrate --heading ===")
+        print("  Put a tape mark on the floor along her nose direction, and a second")
+        print("  mark at 90 deg (a floor tile edge or a protractor works). She will")
+        print(f"  spin LEFT until the camera says {turn_deg:.0f} deg, stop, and ask what you saw.")
+        print()
+
+    try:
+        hfov_new = calibrate_heading(
+            driver, camera, estimator, ask, hfov_deg=hfov_old, turn_deg=turn_deg,
+            sleep=sleep, monotonic=monotonic,
+        )
+    finally:
+        try:
+            cleanup()
+        except Exception:
+            pass
+
+    cal.camera_hfov_deg = float(hfov_new)
+    written = cal.save(out_path)
+    print()
+    print(f"  saved calibration -> {written}")
+    print(f"    camera_hfov_deg={cal.camera_hfov_deg:.2f} (was {hfov_old:.2f}; other fields untouched)")
+    return 0
+
+
+def calibrate_heading(
+    driver,
+    camera,
+    estimator,
+    ask: AskFn,
+    *,
+    hfov_deg: float,
+    turn_deg: float = 90.0,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> float:
+    """Spin LEFT then RIGHT to the camera's ``turn_deg``; return the corrected HFOV.
+
+    The camera integrates yaw in units of ``hfov_deg / width`` per pixel, so if
+    it *claims* ``turn_deg`` when the robot actually turned ``measured`` degrees,
+    the true HFOV is ``hfov_deg * measured / claimed``. Both directions are
+    measured and averaged (a mounting tilt biases them slightly differently).
+    """
+    from .drive_diagnostics import _FrameFeed
+
+    ratios: List[float] = []
+    for label, (l, r) in (("LEFT", (-HEADING_SPIN_DUTY, HEADING_SPIN_DUTY)), ("RIGHT", (HEADING_SPIN_DUTY, -HEADING_SPIN_DUTY))):
+        feed = _FrameFeed(camera)
+        estimator.reset()
+        first = feed.next()
+        if first is not None:
+            estimator.update(first)
+        claimed = 0.0
+        t0 = monotonic()
+        print(f"  spinning {label} until the camera reads {turn_deg:.0f} deg (cap {HEADING_SPIN_MAX_S:.0f} s)...")
+        driver.set_motors(l, r)
+        try:
+            while monotonic() - t0 < HEADING_SPIN_MAX_S:
+                frame = feed.next()
+                if frame is not None:
+                    smp = estimator.update(frame)
+                    if smp is not None and smp.response >= 0.05:
+                        claimed += float(smp.delta_deg)
+                if abs(claimed) >= turn_deg:
+                    break
+                sleep(0.005)
+        finally:
+            driver.stop()
+        sleep(0.8)
+        if abs(claimed) < 0.25 * turn_deg:
+            print(f"    camera only saw {claimed:+.1f} deg — did she move? skipping this direction.")
+            continue
+        measured = abs(_ask_float(ask, f"    camera says {claimed:+.1f} deg — how many degrees did she ACTUALLY turn? "))
+        ratio = measured / abs(claimed)
+        ratios.append(ratio)
+        print(f"    -> actual/camera = {ratio:.3f}")
+    if not ratios:
+        print("  no usable measurement; keeping the current HFOV.")
+        return float(hfov_deg)
+    ratio = sum(ratios) / len(ratios)
+    hfov_new = float(hfov_deg) * ratio
+    print(f"  camera_hfov_deg: {hfov_deg:.2f} x {ratio:.3f} = {hfov_new:.2f}")
+    return hfov_new

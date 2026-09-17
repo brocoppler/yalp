@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import threading
 
 
@@ -82,6 +83,14 @@ def add_parser(subparsers) -> None:
 
 def run(args) -> int:
     """Handler for ``yalp reactive``. Returns a process exit code."""
+    # The server is normally run detached with stdout to a log file; without
+    # this, Python block-buffers that stream and the log is EMPTY until exit —
+    # which hid the camera warm-up warning on 2026-09-15. Line-buffer it.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except Exception:  # pragma: no cover - non-reconfigurable stream
+            pass
     from .. import config
     from ..contract.ipc import ReactiveServer
     from ..telemetry import create_logger_from_env

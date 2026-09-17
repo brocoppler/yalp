@@ -55,6 +55,7 @@ def test_calibration_round_trip(tmp_path):
         "turn_duty_deadband": 0.0,
         "straight_bias_fwd": 0.0,
         "straight_bias_rev": 0.0,
+        "camera_hfov_deg": 0.0,
     }
 
     loaded = MotorCalibration.load(path)
@@ -146,6 +147,7 @@ def test_dry_run_calibrate_writes_file(tmp_path, capsys):
         "turn_duty_deadband",
         "straight_bias_fwd",
         "straight_bias_rev",
+        "camera_hfov_deg",
     }
     # ...with the deterministic values derived from the scripted answers
     # ("y" -> no invert; 1.0 m over 2.0 s -> 0.5 m/s; 360° over 2.0 s -> 180 °/s).
@@ -388,3 +390,62 @@ def test_set_motors_trim_and_invert_together(fake_gpiozero):
     # slow-decay duty = 1 - 0.5 = 0.5.
     assert drv._left_dir.value == 1
     assert drv._left_pwm.value == pytest.approx(0.5)
+
+
+# --------------------------------------------------------------------------- #
+# 4. Heading ground truth: yalp calibrate --heading writes camera_hfov_deg.
+# --------------------------------------------------------------------------- #
+def test_calibrate_heading_dry_run_scales_hfov(tmp_path, monkeypatch):
+    import types
+
+    from yalp import config
+    from yalp.reactive import calibration_cli
+
+    out = tmp_path / "cal.json"
+    MotorCalibration(max_speed_mps=0.29, right_invert=True).save(out)
+    # Scripted answers say she turned exactly what the camera claimed -> ratio 1.
+    args = types.SimpleNamespace(dry_run=True, out=str(out), heading=True, turn_deg=90.0)
+    assert calibration_cli.run(args) == 0
+    cal = MotorCalibration.load(out)
+    # The dry-run yaw double steps ~13 deg per frame, so the "camera" overshoots
+    # the 90 deg target a little and the scripted "90" answer shrinks the HFOV
+    # by that overshoot (~4%): the flow, not the number, is what this checks.
+    assert cal.camera_hfov_deg == pytest.approx(config.CAMERA_HFOV_DEG, rel=0.06)
+    assert cal.max_speed_mps == 0.29 and cal.right_invert is True  # untouched
+
+    # Now the operator reports 72 deg for a claimed ~90 -> HFOV shrinks by 0.8.
+    monkeypatch.setattr(calibration_cli, "DRY_RUN_HEADING_ANSWERS", ["72", "72"])
+    assert calibration_cli.run(args) == 0
+    cal2 = MotorCalibration.load(out)
+    assert cal2.camera_hfov_deg == pytest.approx(cal.camera_hfov_deg * 0.8, rel=0.05)
+
+
+def test_effective_hfov_falls_back_to_default():
+    assert MotorCalibration().effective_hfov_deg(55.0) == 55.0
+    assert MotorCalibration(camera_hfov_deg=48.5).effective_hfov_deg(55.0) == 48.5
+
+
+def test_real_backend_estimator_uses_measured_hfov(tmp_path):
+    from yalp.reactive.hardware import FakeMotorDriver, FakeRangeSensor
+    from yalp.reactive.real_backend import RealReactiveBackend
+
+    path = tmp_path / "cal.json"
+    MotorCalibration(camera_hfov_deg=48.5).save(path)
+
+    class _Cam:  # a non-synthetic camera double so the estimator is built
+        source = "webcam"
+
+        def start(self):
+            return self
+
+        def stop(self):
+            pass
+
+        def latest(self):
+            return None
+
+    b = RealReactiveBackend(
+        motor_driver=FakeMotorDriver(), range_sensor=FakeRangeSensor(), camera=_Cam(),
+        calibration_path=path,
+    )
+    assert b._yaw is not None and b._yaw.hfov_deg == pytest.approx(48.5)

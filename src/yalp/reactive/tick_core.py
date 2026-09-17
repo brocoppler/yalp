@@ -412,7 +412,8 @@ class ReactiveTickCore(ReactiveBackend):
             #    SAFE_STOP/BLOCKED. The mailbox is deliberately NOT drained here, so
             #    a pending intent cannot override the safety stop while still
             #    blocked (sticky).
-            if s.obstacle:
+            if s.obstacle and not self._escape_permitted(s):
+                prev_status, prev_mode = s.goal_status, s.mode
                 self._halt_motors()
                 # A straight drive cut short by the reflex still taught us how
                 # much steering it needed: fold that in (no-op below the sample
@@ -432,10 +433,22 @@ class ReactiveTickCore(ReactiveBackend):
                     reason = "echo_timeout"
                 else:
                     reason = "startup_blind"
-                s.goal = {
+                latched = {
                     "reason": reason,
                     "distance": s.distance_m,
                 }
+                # An escape goal (rotate / reverse) that COMPLETED last tick with
+                # the obstacle still in view re-latches here. Keep the evidence
+                # that it finished so a client polling at 5 Hz (which will miss
+                # the one-tick COMPLETED state) can tell "escape done, latch
+                # re-armed" apart from "the reflex stopped it".
+                prev = s.goal or {}
+                if prev_status == GoalStatus.COMPLETED and prev_mode == Mode.IDLE:
+                    latched["after"] = GoalStatus.COMPLETED
+                    for k in ("kind", "target", "closure", "heading_deg"):
+                        if k in prev:
+                            latched[k] = prev[k]
+                s.goal = latched
                 return self._finish()
 
             # 3. DRAIN SINGLE-SLOT MAILBOX, then adopt (preempt in-progress mode).
@@ -488,6 +501,47 @@ class ReactiveTickCore(ReactiveBackend):
                 self._step_follow()
 
             return self._finish()
+
+    @staticmethod
+    def _goal_is_escape(goal: Optional[dict]) -> bool:
+        """A goal that never moves the nose FORWARD: a rotate, or a reverse straight."""
+        if not goal:
+            return False
+        kind = str(goal.get("kind", "straight"))
+        if kind == "rotate":
+            return True
+        return kind == "straight" and float(goal.get("target", 0.0)) < 0
+
+    def _escape_permitted(self, s: RobotState) -> bool:
+        """Whether this tick may run despite a KNOWN obstacle inside the threshold.
+
+        software-spec.md §2.3: the reflex halts forward motion, but recovery is
+        an explicit NEW intent — "a turn, or a short reverse the operator
+        explicitly asks for". Without this rule a robot that stopped 0.25 m from
+        a wall could never move again under its own control (every goal was
+        refused until someone lifted her). The rule is deliberately narrow:
+
+        * the obstacle reading must be KNOWN (a blind sensor still latches — a
+          reverse or a pivot while blind is driving blind), and
+        * the goal that would run this tick — the pending mailbox intent if there
+          is one, else the goal already RUNNING — must be an *escape* goal: a
+          ``rotate``, or a ``straight`` with a NEGATIVE target. A pending FORWARD
+          intent keeps the latch sticky exactly as before (the mailbox is not
+          drained), and a running forward drive is still halted.
+
+        The published ``obstacle`` / ``distance_m`` stay truthful throughout, and
+        the moment the escape goal ends the ordinary latch returns.
+        """
+        if not s.distance_known:
+            return False
+        pending = self.mailbox.peek()
+        if pending is not None:
+            return pending.mode == Mode.DRIVE_GOAL and self._goal_is_escape(pending.goal)
+        return (
+            s.mode == Mode.DRIVE_GOAL
+            and s.goal_status == GoalStatus.RUNNING
+            and self._goal_is_escape(s.goal)
+        )
 
     def _finish(self) -> RobotState:
         """Snapshot, fire the tick-complete observer, and return the snapshot."""

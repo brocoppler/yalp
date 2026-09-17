@@ -15,6 +15,8 @@ Field add-ons (opt-in flags; absent = default behavior above, unchanged):
     yalp hwtest --check ultrasonic --seconds 20 --hz 10   # soak: ~200 reads + summary
     yalp hwtest --check motors --matrix                   # 6-step per-channel triage
     yalp hwtest --check camera --save /tmp/frame.png       # also save the grabbed frame
+    yalp hwtest --check wheels --duty 0.45 --duty 0.60      # per-wheel yaw-rate matrix (camera-measured)
+    yalp hwtest --check straight --duty 0.45 --seconds 3 --reverse-first 2 --save /tmp/straight.csv
 
 With ``--dry-run`` every hardware constructor is replaced by a fake so the full
 test logic runs on a Mac with no GPIO libraries installed.  The real constructors
@@ -47,17 +49,42 @@ def add_parser(subparsers) -> None:
     )
     parser.add_argument(
         "--check",
-        choices=("all", "gpio", "motors", "ultrasonic", "camera"),
+        choices=("all", "gpio", "motors", "ultrasonic", "camera", "wheels", "straight"),
         default="all",
-        metavar="{all,gpio,motors,ultrasonic,camera}",
+        metavar="{all,gpio,motors,ultrasonic,camera,wheels,straight}",
         help=(
             "Which subsystem to test: "
             "'gpio' — toggle left-DIR pin (GPIO17, LED blink); "
             "'motors' — nudge forward/turn/stop (PUT ROBOT ON A STAND FIRST); "
             "'ultrasonic' — print 5 distance reads at ~3 Hz; "
             "'camera' — grab one still and print frame shape; "
-            "'all' — run all in sequence (default)."
+            "'wheels' — camera-measured per-wheel yaw-rate matrix (ON THE FLOOR, "
+            "~0.5 m clear all round): finds a weak/dead/reversed channel and the "
+            "decay-mode signature; "
+            "'straight' — drive straight at --duty for --seconds recording yaw + "
+            "sonar per frame (the veer diagnostic); "
+            "'all' — run gpio/motors/ultrasonic/camera in sequence (default; the "
+            "floor checks are never part of 'all')."
         ),
+    )
+    # --- Floor diagnostics (wheels / straight) --------------------------------
+    parser.add_argument(
+        "--duty",
+        type=float,
+        action="append",
+        default=None,
+        metavar="D",
+        help=(
+            "wheels: a duty to pulse at (repeatable; default 0.45 and 0.60). "
+            "straight: the drive duty (first value; default 0.45)."
+        ),
+    )
+    parser.add_argument(
+        "--reverse-first",
+        type=float,
+        default=0.0,
+        metavar="S",
+        help="straight: back up for S seconds first to make room (NO rear sensor).",
     )
     parser.add_argument(
         "--dry-run",
@@ -127,6 +154,8 @@ def run(args) -> int:
     hz = getattr(args, "hz", 3.0)
     matrix = bool(getattr(args, "matrix", False))
     save = getattr(args, "save", None)
+    duties = getattr(args, "duty", None)
+    reverse_first = float(getattr(args, "reverse_first", 0.0) or 0.0)
 
     checks = ("gpio", "motors", "ultrasonic", "camera") if check == "all" else (check,)
 
@@ -140,8 +169,10 @@ def run(args) -> int:
             "motors": _check_motors,
             "ultrasonic": _check_ultrasonic,
             "camera": _check_camera,
+            "wheels": _check_wheels,
+            "straight": _check_straight,
         }[name]
-        rc = fn(
+        kwargs = dict(
             dry_run=dry_run,
             camera_source=camera_source,
             seconds=seconds,
@@ -149,6 +180,9 @@ def run(args) -> int:
             matrix=matrix,
             save=save,
         )
+        if name in ("wheels", "straight"):
+            kwargs.update(duties=duties, reverse_first=reverse_first)
+        rc = fn(**kwargs)
         if rc != 0:
             print(f"  !! {name} FAILED (exit {rc})")
             overall = rc
@@ -517,3 +551,151 @@ def _save_frame(frame, path: str) -> None:
 
 
 __all__ = ["add_parser", "run"]
+
+
+# ---------------------------------------------------------------------------
+# Floor diagnostics: per-wheel yaw-rate matrix + straight-drive recorder
+# (yalp.reactive.drive_diagnostics — the camera is the measuring instrument)
+# ---------------------------------------------------------------------------
+def _floor_rig(dry_run: bool, camera_source: str):
+    """Build (driver, camera, estimator, sensor, sleep, monotonic, cleanup, note)."""
+    if dry_run:
+        from .drive_diagnostics import DriverCoupledYaw, TickingFakeCamera
+        from .hardware import FakeMotorDriver, FakeRangeSensor
+
+        driver = FakeMotorDriver()
+        camera = TickingFakeCamera()
+        # A slightly weak RIGHT wheel so the dry-run table has something to say.
+        estimator = DriverCoupledYaw(driver, right_scale=0.8)
+        sensor = FakeRangeSensor(distance_m=1.5, known=True)
+        clock = {"t": 0.0}
+
+        def sleep(_s: float) -> None:  # no real waiting in dry-run
+            return None
+
+        def monotonic() -> float:
+            clock["t"] += 1.0 / 15.0
+            return clock["t"]
+
+        def cleanup() -> None:
+            driver.stop()
+
+        return driver, camera, estimator, sensor, sleep, monotonic, cleanup, "  [DRY RUN — fakes]"
+
+    from .. import config
+    from ..camera import Camera
+    from .calibration import load_if_present
+    from .hardware import GpiozeroMotorDriver, make_ultrasonic_sensor
+    from .visual_odometry import YawEstimator
+
+    cal = load_if_present()
+    if cal is not None:
+        driver = GpiozeroMotorDriver(
+            left_invert=cal.left_invert, right_invert=cal.right_invert,
+            left_trim=cal.left_trim, right_trim=cal.right_trim,
+        )
+        hfov = float(getattr(cal, "camera_hfov_deg", 0.0) or config.CAMERA_HFOV_DEG)
+    else:
+        driver = GpiozeroMotorDriver()
+        hfov = config.CAMERA_HFOV_DEG
+    sensor = make_ultrasonic_sensor()
+    camera = Camera(source=camera_source)
+    camera.start()
+    if camera.wait_for_frame(timeout=6.0) is None:
+        print("  WARNING: no camera frame within 6 s — yaw measurement will be blind.")
+    estimator = YawEstimator(hfov_deg=hfov)
+
+    def cleanup() -> None:
+        for fn in (driver.stop, camera.stop, sensor.close, driver.close):
+            try:
+                fn()
+            except Exception:
+                pass
+
+    note = (
+        f"  [REAL GPIO — {type(driver).__name__}, {type(sensor).__name__}, "
+        f"camera {camera_source!r}, HFOV {hfov:.1f} deg]"
+    )
+    return driver, camera, estimator, sensor, time.sleep, time.monotonic, cleanup, note
+
+
+def _check_wheels(
+    *,
+    dry_run: bool,
+    camera_source: str,
+    seconds: Optional[float] = None,
+    hz: float = 3.0,
+    matrix: bool = False,
+    save: Optional[str] = None,
+    duties=None,
+    reverse_first: float = 0.0,
+) -> int:
+    """Camera-measured per-wheel yaw-rate matrix (see drive_diagnostics)."""
+    from .drive_diagnostics import format_wheel_matrix, measure_wheel_matrix
+
+    duties = tuple(float(d) for d in (duties or (0.45, 0.60)))
+    print(f"Wheel matrix: single-wheel pulses at duties {', '.join(f'{d:.2f}' for d in duties)}.")
+    print("  *** ON THE FLOOR with ~0.5 m clear ALL ROUND — she will pivot each way ***")
+    print("  The camera measures the yaw rate of each pulse (+ = LEFT).")
+    print()
+    try:
+        driver, camera, estimator, sensor, sleep, monotonic, cleanup, note = _floor_rig(
+            dry_run, camera_source
+        )
+    except Exception as exc:
+        print(f"  ERROR: could not build the floor rig — {exc}")
+        return 1
+    print(note)
+    try:
+        results = measure_wheel_matrix(
+            driver, camera, estimator, sensor, duties=duties, sleep=sleep, monotonic=monotonic,
+        )
+    finally:
+        cleanup()
+    print(format_wheel_matrix(results))
+    bad = [p for p in results if p.sign_ok is False]
+    return 1 if bad else 0
+
+
+def _check_straight(
+    *,
+    dry_run: bool,
+    camera_source: str,
+    seconds: Optional[float] = None,
+    hz: float = 3.0,
+    matrix: bool = False,
+    save: Optional[str] = None,
+    duties=None,
+    reverse_first: float = 0.0,
+) -> int:
+    """Straight-drive recorder: yaw + sonar per camera frame (see drive_diagnostics)."""
+    from .drive_diagnostics import format_straight, measure_straight, write_straight_csv
+
+    duty = float((duties or (0.45,))[0])
+    secs = float(seconds) if seconds is not None else 3.0
+    print(f"Straight-drive recorder: duty {duty:.2f} for up to {secs:.1f} s.")
+    print("  *** ON THE FLOOR with a clear lane ahead; the sonar guard stops at the SAFE_STOP threshold ***")
+    print()
+    try:
+        driver, camera, estimator, sensor, sleep, monotonic, cleanup, note = _floor_rig(
+            dry_run, camera_source
+        )
+    except Exception as exc:
+        print(f"  ERROR: could not build the floor rig — {exc}")
+        return 1
+    print(note)
+    try:
+        result = measure_straight(
+            driver, camera, estimator, sensor, duty=duty, seconds=secs,
+            reverse_first_s=float(reverse_first or 0.0), sleep=sleep, monotonic=monotonic,
+        )
+    finally:
+        cleanup()
+    print(format_straight(result))
+    if save:
+        try:
+            write_straight_csv(result, save)
+            print(f"  per-frame CSV written -> {save}")
+        except Exception as exc:
+            print(f"  WARNING: could not write CSV to {save!r} ({exc})")
+    return 0

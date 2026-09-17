@@ -290,7 +290,12 @@ class RealReactiveBackend(ReactiveTickCore):
         elif want_hold or want_rotate:
             from .visual_odometry import YawEstimator
 
-            self._yaw = YawEstimator(hfov_deg=config.CAMERA_HFOV_DEG)
+            hfov = (
+                calibration.effective_hfov_deg(config.CAMERA_HFOV_DEG)
+                if calibration is not None
+                else config.CAMERA_HFOV_DEG
+            )
+            self._yaw = YawEstimator(hfov_deg=hfov)
         else:
             self._yaw = None
         self._heading_deg = 0.0

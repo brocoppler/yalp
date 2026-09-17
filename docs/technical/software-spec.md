@@ -160,6 +160,8 @@ There is a strict priority order. Higher always wins, immediately:
 > **DECISION —** New intents *replace*, they do not *queue* — consistent with the single-slot, last-write-wins mailbox (§2.2). The robot always reflects the operator's most recent instruction. If the user wants a sequence, the deliberative layer issues it step by step (waiting for a terminal `goal_status` — `"completed (timed, unverified)"` or `"blocked"` — between steps), rather than the reactive layer buffering a plan.
 
 > **DECISION —** `SAFE_STOP` is sticky. Clearing the obstacle is necessary but not sufficient to resume — the robot waits in `SAFE_STOP` until the obstacle clears **and** a fresh intent arrives. This prevents a robot that's been nosed into a wall from lurching forward the instant someone moves out of the way.
+>
+> **Escape moves (2026-09-16 amendment).** A fresh intent that *cannot move the nose forward* — a `rotate`, or a `straight` with a **negative** target — is adopted and runs **even while the obstacle is still in view**, provided the obstacle reading is *known* (a blind sensor still latches everything). This is the "turn, or a short reverse the operator explicitly asks for" recovery the next decision already names; before the amendment the tick never drained the mailbox while latched, so a robot parked 0.25 m from a wall could not move again under its own control. A pending **forward** intent keeps the latch exactly as before, and the ordinary latch returns the tick after an escape goal ends (the re-latched goal dict carries `after: "completed (timed, unverified)"` plus the escape's `closure`/`heading_deg` so a 5 Hz poller can tell "escape finished" from "reflex stopped it"). Implemented in `ReactiveTickCore._escape_permitted`; the `yalp drive` pre-flight applies the same rule.
 
 > **DECISION —** **Post-collision behavior (v1): HALT and surface `BLOCKED`, no open-loop reverse.** When collision-stop fires, the reactive layer stops the wheels, enters `SAFE_STOP` with `goal_status = "blocked"`, and publishes that upward so the deliberative layer can re-plan. It does **not** auto-reverse: there is **no rear sensor**, so backing up open-loop would be driving blind into whatever is behind the robot. Recovery is the deliberative layer's job — it sees `blocked`, and may issue a *new* intent (e.g. a turn, or a short reverse the operator explicitly asks for) once it has reasoned about the scene. This resolves the open question of what to do after a collision: stop and report, never blind-reverse.
 
@@ -177,8 +179,11 @@ def reactive_tick(state, intent_mailbox, motors, sensor):
     state.obstacle = (not known) or (dist < SAFE_STOP_THRESHOLD)
 
     # 2. SAFETY OVERRIDE — beats everything, every tick
-    if state.obstacle:
-        motors.stop()                          # HALT — never open-loop reverse (no rear sensor)
+    #    (2026-09-16: unless the goal that would run this tick is an ESCAPE — a
+    #    rotate or a reverse straight — and the obstacle reading is KNOWN; see the
+    #    "Escape moves" amendment above)
+    if state.obstacle and not escape_permitted(state, intent_mailbox):
+        motors.stop()                          # HALT — never AUTO-reverse (no rear sensor)
         state.mode, state.goal_status = "SAFE_STOP", "blocked"   # surface BLOCKED upward
         state.goal = {"reason": "obstacle" if known else "echo_timeout", "distance": dist}
         publish(state)

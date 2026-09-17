@@ -142,7 +142,7 @@ def _is_remote(host: str) -> bool:
     return str(host).strip().lower() not in _LOCAL_HOSTS
 
 
-def preflight_decision(state, threshold: float) -> Tuple[str, str]:
+def preflight_decision(state, threshold: float, escape: bool = False) -> Tuple[str, str]:
     """Decide whether it is safe to START a drive from the initial snapshot.
 
     Pure and side-effect-free so the gate can be reasoned about (and tested) in
@@ -157,6 +157,10 @@ def preflight_decision(state, threshold: float) -> Tuple[str, str]:
       first-read timeout latch, and adopting our intent lifts it (proven contract,
       tick_core.py lines 341-376).
     * Anything else (clear path, or a block we do not recognize) PROCEEDS.
+    * ``escape=True`` (a rotate, or a NEGATIVE straight target) PROCEEDS past a
+      genuine obstacle: neither moves the nose forward, and software-spec.md
+      §2.3 names exactly these as the operator's post-collision recovery. The
+      reactive tick applies the same rule (``ReactiveTickCore._escape_permitted``).
     """
     if state is None:
         return "proceed", "no initial snapshot returned; proceeding (assuming clear)."
@@ -168,6 +172,14 @@ def preflight_decision(state, threshold: float) -> Tuple[str, str]:
     served = goal.get("distance", state.distance_m)
 
     if reason == "obstacle" and state.distance_known and float(served) < float(threshold):
+        if escape:
+            return "proceed", (
+                f"obstacle latched at {float(served):.2f} m, but this goal does not "
+                "move the nose forward (rotate / reverse) — proceeding as an ESCAPE "
+                "move; the reflex re-latches the moment it ends if the obstacle is "
+                "still there. There is NO rear sensor: you are responsible for the "
+                "space behind/around her."
+            )
         return "refuse", (
             f"GENUINE obstacle latched at {float(served):.2f} m "
             f"(< SAFE_STOP {float(threshold):.2f} m) — refusing to start a forward "
@@ -326,6 +338,20 @@ def _poll_loop(client, base_seq: int, timeout: float, poll_interval: float) -> i
                 goal = state.goal or {}
                 reason = goal.get("reason", "unknown")
                 served = goal.get("distance", state.distance_m)
+                if goal.get("after") == GoalStatus.COMPLETED:
+                    # Our escape goal finished; the obstacle is still in view so
+                    # the latch re-armed on the very next tick (the one-tick
+                    # COMPLETED state is easy to miss at 5 Hz polling).
+                    how = goal.get("closure", "timed")
+                    hdg = goal.get("heading_deg")
+                    extra = f", turned {float(hdg):+.1f}°" if hdg is not None else ""
+                    print(
+                        f"\nVERDICT: COMPLETE — escape goal finished after {elapsed:.1f}s "
+                        f"({how}{extra}); the obstacle is still at {float(served):.2f} m "
+                        "so SAFE_STOP re-armed. Wheels are stopped."
+                    )
+                    print(_ultrasonic_line("end", state))
+                    return 0
                 print(
                     f"\nVERDICT: SAFE_STOP — the collision reflex stopped the drive "
                     f"after {elapsed:.1f}s (reason={reason!r}, served distance="
@@ -418,7 +444,8 @@ def run(args) -> int:
         try:
             # 1. Initial snapshot + pre-flight safety gate.
             state = client.request_state(timeout=2.0)
-            action, why = preflight_decision(state, threshold)
+            escape = (turn is not None) or (target < 0)
+            action, why = preflight_decision(state, threshold, escape=escape)
             print(f"pre-flight: {why}")
             print(_ultrasonic_line("start", state))
             if action == "refuse":
