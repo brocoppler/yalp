@@ -31,7 +31,7 @@ code and calibration, then tests again.
 | Drive a commanded distance | Timed guess, about 1.8× off. No encoders fitted. | Robot, 2026-07-17 |
 | See and describe | `yalp see` captures a frame and Claude describes it. | Robot, 2026-07-17 |
 | Voice commands | Push-to-talk only: one 5 s recording per `yalp agent --listen` run, transcribed locally. | Laptop only |
-| Camera microphone | Works on the robot in a quiet room (2026-11-18): `tiny.en` transcribed counting speech from 1–2 m almost perfectly. The default `tiny` model returned nothing — set `YALP_STT_MODEL=tiny.en`. With both motors at duty 0.45 the noise at the mic is 4–5× the quiet level and louder than speech from 1–2 m: full commands come out garbled, but the word "stop" was still recognised. Design consequence: listen for commands while stationary; while driving, listen only for "stop". | Robot, 2026-11-18 |
+| Camera microphone | Works on the robot in a quiet room (2026-11-18): `tiny.en` transcribed counting speech from 1–2 m almost perfectly. The multilingual `tiny` model returned nothing, so `tiny.en` is now the default. With both motors at duty 0.45 the noise at the mic is 4–5× the quiet level and louder than speech from 1–2 m: full commands come out garbled, but the word "stop" was still recognised. Design consequence: listen for commands while stationary; while driving, listen only for "stop". | Robot, 2026-11-18 |
 | Reply by message | Built 2026-11-18, not yet run against the real Telegram service. `yalp telegram` takes text commands from the owner's chat and replies there; `yalp agent --listen --telegram` sends replies to a spoken command. Setup steps are in `.env.example`. | Laptop tests only |
 | Follow a person | Detector runs at about 26 Hz on the Pi. `yalp follow` only drives simulated wheels. | Laptop (follow); Pi (detector speed) |
 | Telemetry | Flight recorder writes JSONL; `yalp telemetry` lists, summarises, exports and plots it. | Recorder on robot; reader laptop-only |
@@ -53,6 +53,15 @@ never been checked against a real 90° mark.
   certificate error until the clock syncs, about a minute after Wi-Fi comes up.
 - `yalp`'s transcriber crashed on the Pi (PyAV / faster-whisper version mismatch);
   fixed by decoding the WAV ourselves in `voice/stt.py`.
+
+- Only one process can open the camera. With the reactive server running, a second
+  open of `/dev/video0` fails. Fixed 2026-11-18: the server publishes its newest
+  frame to `~/.local/state/yalp/latest-frame.jpg` and the agent reads that
+  (`src/yalp/frame_share.py`). Verified on the robot: the vision model described
+  the scene in 3.1 s through the shared frame.
+- The camera is pointed well down: its frame is almost all floor, with the wall
+  only in the top tenth. Fine for heading hold; it needs levelling before
+  "what do you see" or following a person is useful.
 
 **Hardware as built:** Raspberry Pi 5, Logitech C270, two TT motors on a DRV8833,
 one front HC-SR04, 4×AA NiMH pack, two-deck acrylic chassis. Detail in
@@ -79,10 +88,8 @@ until we know they are needed). Against the V1 goal:
    one with them running, and transcribe both.
 2. **Message channel.** Code is in (`src/yalp/telegram.py`, `yalp telegram`). Left to
    do: create the bot, put the token and chat id in the robot's `.env`, and try it
-   for real. Known gap for running it ON the robot: the agent opens its own camera,
-   but the reactive server already holds `/dev/video0`, so `yalp telegram --host
-   localhost` on the Pi will fight over the camera. The agent needs to get its
-   stills from the reactive server instead.
+   for real. On the robot run it as `yalp session start` then
+   `yalp telegram --host 127.0.0.1`.
 3. **Continuous listening.** Replace the single 5 s recording with a loop that keeps
    listening and hands each utterance to the agent. Skip this if step 1 shows the
    microphone is unusable; do "follow on real wheels" instead.

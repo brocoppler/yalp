@@ -38,7 +38,7 @@ If **no** TTS binary is found on the host, `--speak` is a **silent no-op**: the 
 `yalp agent --listen` runs the push-to-talk pipeline:
 
 1. **Record** — capture ~5 s of audio (default; configurable via `YALP_VOICE_RECORD_SECONDS`) from the configured source.
-2. **Transcribe** — run the clip through faster-whisper locally (default model `tiny`; override with `YALP_STT_MODEL=base`). No audio leaves the machine.
+2. **Transcribe** — run the clip through faster-whisper locally (default model `tiny.en`; override with `YALP_STT_MODEL=base.en`). No audio leaves the machine.
 3. **Agent** — feed the transcribed text into the normal deliberative loop.
 
 Combine with `--speak` for a hands-free loop: `yalp agent --listen --speak`.
@@ -88,7 +88,7 @@ All seven voice variables, with defaults and example values. They are documented
 | `YALP_VOICE_RECORD_SECONDS` | `5` | Seconds of audio captured per utterance | `8` |
 | `YALP_VOICE_AUDIO_FILE` | _(none)_ | WAV path used when `YALP_VOICE_SOURCE=file` | `tests/assets/sample.wav` |
 | `YALP_STT_BACKEND` | `faster-whisper` | STT backend: `faster-whisper` or `fake` | `fake` |
-| `YALP_STT_MODEL` | `tiny` | faster-whisper model size: `tiny` or `base` | `base` |
+| `YALP_STT_MODEL` | `tiny.en` | faster-whisper model size: `tiny.en` / `base.en` (English) or `tiny` / `base` (multilingual) | `base.en` |
 
 ---
 
@@ -132,7 +132,7 @@ YALP_STT_BACKEND=fake yalp agent --listen
 
 ## 9. Raspberry Pi 5 notes
 
-- Same faster-whisper backend as the laptop — **keep the model at `tiny`** on the 4 GB Pi 5 for memory headroom.
+- Same faster-whisper backend as the laptop — **keep the model at `tiny.en`** on the 4 GB Pi 5 for memory headroom.
 - `sounddevice` ships ARM64 wheels; install the `libportaudio2` system package so it has a PortAudio runtime.
 - TTS on the Pi uses `espeak-ng` (`sudo apt-get install espeak-ng`); a small USB speaker carries voice output once the body is built (see `hardware.md`).
 - **The Logitech C270 webcam has a built-in mono microphone.** Voice INPUT (`--listen`) can be trialled on the Pi with zero new hardware — no separate USB mic required. Buy only the speaker first; add a dedicated mic later if the C270's audio quality proves insufficient.

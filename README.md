@@ -206,9 +206,9 @@ Linux / Raspberry Pi also need the PortAudio system library:
 sudo apt-get install libportaudio2
 ```
 
-**STT model** — the default is `tiny` (fastest, lowest RAM). Override with
+**STT model** — the default is `tiny.en` (English-only, fastest, lowest RAM). Override with
 `YALP_STT_MODEL=base` for better accuracy. On a 4 GB Raspberry Pi 5 keep the
-model at `tiny`.
+model at `tiny.en`.
 
 **"follow me" not heard?** The CLI now reports the captured mic level on an empty
 result. A **very low peak** (e.g. `>>> [heard nothing — mic input very low (peak
@@ -248,7 +248,7 @@ All voice knobs live in `.env` (see `.env.example` to override):
 | `YALP_VOICE_RECORD_SECONDS` | `5` | How long push-to-talk records |
 | `YALP_VOICE_AUDIO_FILE` | _(none)_ | WAV file path when `YALP_VOICE_SOURCE=file` |
 | `YALP_STT_BACKEND` | `faster-whisper` | STT engine: `faster-whisper` or `fake` |
-| `YALP_STT_MODEL` | `tiny` | faster-whisper model size (`tiny`/`base`) |
+| `YALP_STT_MODEL` | `tiny.en` | faster-whisper model size (`tiny.en`/`base.en`, or multilingual `tiny`/`base`) |
 
 Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
 
