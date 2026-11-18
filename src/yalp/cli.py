@@ -1,8 +1,8 @@
 """yalp command-line entrypoint.
 
-A small argparse-based dispatcher with an extensible subcommand registry. Later
-waves register real subcommands (``see``, ``agent``) by adding a feature module
-that exposes two functions:
+A small argparse-based dispatcher with an extensible subcommand registry. Each
+subcommand (``see``, ``agent``, ``drive``, ...) is a feature module that exposes
+two functions:
 
     def add_parser(subparsers) -> None:   # register the subcommand + its flags
         p = subparsers.add_parser("see", help="...")
@@ -12,8 +12,7 @@ that exposes two functions:
     def run(args) -> int:                 # the handler; returns an exit code
         ...
 
-then listing that module in ``FEATURE_MODULES`` below. Today there are no
-feature subcommands yet — only ``--version`` and a friendly ``--help``.
+and is listed in ``FEATURE_MODULES`` below.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from typing import Optional, Sequence
 from . import __version__
 
 # Dotted module paths for feature modules that expose ``add_parser(subparsers)``.
-# Populated by later waves, e.g. "yalp.deliberative.agent".
 FEATURE_MODULES: list[str] = [
     "yalp.deliberative.see",
     "yalp.deliberative.agent_cli",
@@ -68,7 +66,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     handler = getattr(args, "handler", None)
     if handler is None:
-        # No subcommand given (or none registered yet): show help.
+        # No subcommand given: show help.
         parser.print_help()
         return 0
     return int(handler(args))

@@ -56,13 +56,17 @@ the docs resolve. Only `build.py` touches the embedded copies between the `<!--D
 |---|---|---|
 | Product | `product/product-vision.md` | Why yalp exists, who it's for, the two horizons, the scope envelope. |
 | Product | `product/product-spec.md` | What yalp does from the user's seat — capability catalog, acceptance scenarios, latency. |
+| Technical | `technical/status.md` | **Start here.** The V1 goal, what works today, the next steps, and what the self-improving loop needs. |
+| Technical | `technical/next-session-handoff.md` | Commands to resume on the robot, key facts, and the defect backlog. |
+| Technical | `technical/session-log.md` | Dated history of past sessions. |
 | Technical | `technical/architecture.md` | The two-loop concept, the agent/tool model, the contract between thinking and reflexes. |
 | Technical | `technical/hardware.md` | Bill of materials, power architecture, drivetrain, sensing, pin planning. |
 | Technical | `technical/software-spec.md` | The two-layer runtime, the loop-to-loop wire contract, person-tracking, config. |
-| Technical | `technical/roadmap.md` | Build sequencing, the go/no-go gates, the risk register, the consolidated open questions. |
+| Technical | `technical/roadmap.md` | The milestone ladder, the go/no-go gates, the risk register, the consolidated open questions. |
 | Technical | `technical/as-built-wiring.md` | The as-built record of the *real* robot's wiring (wire colors, breadboard nodes, Pi physical pins) — what is actually connected on Izzy today. |
 | Technical | `technical/chassis-v2.md` | Why the cardboard body is now the limiting factor, the spec for its replacement, and the staged rebuild plan. |
 | Technical | `technical/shopping-list-2026-09.md` | What to order for the third deck, the IMU / pack monitor / encoders the code now supports, and the test rig. |
+| Technical | `technical/audio.md` | Voice stack reference: speech-to-text, text-to-speech, env vars. |
 | Archive | `archive/initial-plan.md` | The original brain-dump the six specs were factored out of — kept for provenance. |
 
 ## How it's built

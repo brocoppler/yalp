@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "yalp" }]
 keywords = ["robotics", "raspberry-pi", "vlm", "claude", "differential-drive"]
 
-# Runtime dependencies. Keep in sync with requirements.txt.
+# Runtime dependencies.
 dependencies = [
     "anthropic",
     "opencv-python",

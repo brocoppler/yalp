@@ -1,6 +1,0 @@
-# pyproject.toml is authoritative. This file is a convenience mirror of [project.dependencies] only — extras ([pi], [voice], etc.) are intentionally omitted; install them via pip extras.
-anthropic
-opencv-python
-pillow
-numpy
-python-dotenv

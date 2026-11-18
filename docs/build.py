@@ -24,6 +24,9 @@ HTML = ROOT / "index.html"
 DOCS = [
     "product/product-vision.md",
     "product/product-spec.md",
+    "technical/status.md",
+    "technical/next-session-handoff.md",
+    "technical/session-log.md",
     "technical/architecture.md",
     "technical/hardware.md",
     "technical/software-spec.md",
@@ -32,6 +35,7 @@ DOCS = [
     "technical/as-built-wiring.md",
     "technical/chassis-v2.md",
     "technical/shopping-list-2026-09.md",
+    "technical/audio.md",
     "archive/initial-plan.md",
 ]
 

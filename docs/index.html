@@ -180,6 +180,9 @@
     <a class="doc" data-doc="product-spec.md">product-spec.md</a>
 
     <div class="grp">Technical</div>
+    <a class="doc" data-doc="status.md">status.md</a>
+    <a class="doc" data-doc="next-session-handoff.md">next-session-handoff.md</a>
+    <a class="doc" data-doc="session-log.md">session-log.md</a>
     <a class="doc" data-doc="architecture.md">architecture.md</a>
     <a class="doc" data-doc="hardware.md">hardware.md</a>
     <a class="doc" data-doc="software-spec.md">software-spec.md</a>
@@ -187,6 +190,8 @@
     <a class="doc" data-doc="hardware-runbook.md">hardware-runbook.md</a>
     <a class="doc" data-doc="as-built-wiring.md">as-built-wiring.md</a>
     <a class="doc" data-doc="chassis-v2.md">chassis-v2.md</a>
+    <a class="doc" data-doc="shopping-list-2026-09.md">shopping-list-2026-09.md</a>
+    <a class="doc" data-doc="audio.md">audio.md</a>
 
     <div class="grp">Archive</div>
     <a class="doc" data-doc="initial-plan.md">initial-plan.md</a>
@@ -219,25 +224,21 @@
     <!-- CURRENT STATUS & NEXT STEPS -->
     <section id="status">
       <h2>Current status &amp; next steps</h2>
-      <p class="sub">The live status home is <code>roadmap.md</code>; the hardware bring-up bench session is
-      <code>hardware-runbook.md</code>.</p>
+      <p class="sub">The live status home is <code>status.md</code>; the commands to resume on the robot are in
+      <code>next-session-handoff.md</code>.</p>
       <div class="status">
-        <p class="now"><span class="badge b-done">DONE</span> &nbsp;Laptop brain <strong>complete &amp; laptop-tested
-        (437 tests)</strong> — the full <strong>voice&nbsp;→&nbsp;follow&nbsp;→&nbsp;voice-stop loop</strong> works end to end
-        with <strong>real eyes / fake wheels</strong>.</p>
-        <h3>Working on the laptop now</h3>
+        <p class="now"><span class="badge b-next">GOAL</span> &nbsp;<strong>V1:</strong> a cheap robot that drives
+        around, takes voice commands through the camera microphone, and replies by message.</p>
+        <h3>Working today</h3>
         <ul class="badged">
-          <li><span class="badge b-done">DONE</span> <code>yalp see</code> — vision Q&amp;A (with <code>--speak</code>).</li>
-          <li><span class="badge b-done">DONE</span> <code>yalp agent</code> — tool-use deliberative loop (narrates; <code>--speak</code>; <code>--listen</code> push-to-talk).</li>
-          <li><span class="badge b-done">DONE</span> <code>yalp follow</code> — track-by-detection follow (face / hog / person&nbsp;[<code>cv2.dnn</code>, any-angle] / auto; <code>--preview</code>, <code>--benchmark</code>).</li>
-          <li><span class="badge b-done">DONE</span> Voice <strong>OUTPUT</strong> (cross-platform TTS, <code>--speak</code>) <strong>and INPUT</strong> (push-to-talk STT, <code>--listen</code> → faster-whisper) shipped; say "follow me" to follow live, "stop" to end (hands-free).</li>
-          <li><span class="badge b-done">DONE</span> Phase&nbsp;2 hardware arrived (host: <strong>izzy</strong>). <code>real_backend.py</code> (<code>RealReactiveBackend</code>) is <strong>fully implemented</strong> — tick loop, collision-stop, motor paths, and <code>MotorWatchdog</code> wired into <code>run()</code>.</li>
+          <li><span class="badge b-done">DONE</span> On the robot: drives straight and turns to an angle on camera heading, stops 0.30&nbsp;m from obstacles, describes what it sees (<code>yalp see</code>).</li>
+          <li><span class="badge b-done">DONE</span> On the laptop: the agent loop, push-to-talk voice commands, and person-following with simulated wheels.</li>
         </ul>
-        <h3>Next target — Raspberry Pi 5 bring-up</h3>
+        <h3>Next</h3>
         <ul class="badged">
-          <li><span class="badge b-next">NOW</span> <em>(no battery pack)</em> flash Raspberry Pi OS Lite 64-bit (headless, SSH, Wi-Fi); install Python 3.11+ + gpiozero/lgpio; <strong>GPIO first light (G)</strong>; build &amp; meter the HC-SR04 1k/2k divider to&nbsp;~3.3&nbsp;V <strong>(I)</strong>; wire drivetrain + sensor power-off (§5).</li>
-          <li><span class="badge b-next">NEXT</span> <em>(waits on the inbound 4×AA NiMH holder)</em> <strong>Gate&nbsp;E</strong> (power/brownout, F) → Hello&nbsp;motors (H) → Safety&nbsp;reflex (J) → fps gates (K/L) → follow on hardware (M) — anything where motors spin.</li>
-          <li><span class="badge b-next">THEN</span> implement <code>RealReactiveBackend</code> so the same brain drives real wheels. Full ladder in <code>hardware-runbook.md</code>.</li>
+          <li><span class="badge b-next">NOW</span> One session on the robot: run the September code, calibrate heading, test the camera microphone.</li>
+          <li><span class="badge b-next">NEXT</span> A message channel for replies, then continuous listening. These complete V1.</li>
+          <li><span class="badge b-next">THEN</span> A scored self-test, the foundation of the self-improving loop.</li>
         </ul>
       </div>
     </section>
@@ -337,10 +338,11 @@
         <tr><th>Track</th><th>Doc</th><th>What it is</th></tr>
         <tr><td>Product</td><td><code>product-vision.md</code></td><td>Why yalp exists, who it's for, the two horizons, and the scope envelope.</td></tr>
         <tr><td>Product</td><td><code>product-spec.md</code></td><td>What yalp does from the user's seat — the capability catalog, acceptance scenarios, latency feel.</td></tr>
+        <tr><td>Technical</td><td><code>status.md</code></td><td>Start here: the V1 goal, what works today, and the next steps.</td></tr>
         <tr><td>Technical</td><td><code>architecture.md</code></td><td>The two-loop concept, the agent/tool model, and the contract between thinking and reflexes.</td></tr>
         <tr><td>Technical</td><td><code>hardware.md</code></td><td>Bill of materials, power architecture, drivetrain, sensing, and pin planning.</td></tr>
         <tr><td>Technical</td><td><code>software-spec.md</code></td><td>The two-layer runtime, the loop-to-loop wire contract, person-tracking, config.</td></tr>
-        <tr><td>Technical</td><td><code>roadmap.md</code></td><td>Build sequencing, the gates, the risk register, and the consolidated open questions — the live status home.</td></tr>
+        <tr><td>Technical</td><td><code>roadmap.md</code></td><td>Build sequencing, the gates, the risk register, and the consolidated open questions.</td></tr>
         <tr><td>Technical</td><td><code>hardware-runbook.md</code></td><td>The hardware bring-up bench session: GPIO first light, the power/brownout and Pi-fps gates, motors, and the safety reflex.</td></tr>
         <tr><td>Archive</td><td><code>initial-plan.md</code></td><td>The original brain-dump the six specs were factored out of — kept for provenance.</td></tr>
       </table>
@@ -740,6 +742,378 @@ Promising any of these would set the user up to be disappointed. The honest pitc
 > **OPEN —** Should yalp remember anything between sessions — names, preferences, past games — or start fresh each time? v1 assumes stateless. Persistence is a personality question worth settling before the kid version; see `product-vision.md`.
 
 </script>
+<script type="text/markdown" data-name="status.md">
+# Status — the V1 goal and where we are
+
+> The one page that says what we are building, what works today, and what is next.
+> If another doc disagrees with this one, this one wins. Last updated 2026-11-18.
+
+---
+
+## The V1 goal
+
+Build our own robot as cheaply as is reasonable. For V1 it must:
+
+1. **Drive around** without hitting things.
+2. **Listen to voice commands** through the camera's built-in microphone.
+3. **Reply by message** (it has no speaker), on a channel that reaches a phone.
+
+**Fallback, if the camera microphone is not usable on the robot:** skip voice,
+take text commands over the same message channel, and make it follow a person.
+
+**Either way, the next goal after that** is a self-improving loop: the robot runs
+driving tests, records what happened, and an agent uses the results to improve the
+code and calibration, then tests again.
+
+---
+
+## What works today
+
+| Capability | State | Proven where |
+|---|---|---|
+| Drive straight, turn to an angle | Heading held within about ±5°; 90° turns land at +96° / −91°. Camera is the heading sensor. | Robot, 2026-09-15 |
+| Stop before obstacles | SAFE_STOP at 0.30 m from the front sonar; reverse and rotate allowed as escape moves. | Robot (stop); escape moves laptop-only |
+| Drive a commanded distance | Timed guess, about 1.8× off. No encoders fitted. | Robot, 2026-07-17 |
+| See and describe | `yalp see` captures a frame and Claude describes it. | Robot, 2026-07-17 |
+| Voice commands | Push-to-talk only: one 5 s recording per `yalp agent --listen` run, transcribed locally. | Laptop only |
+| Camera microphone | The C270 has a built-in mono mic. Never tried on the Pi or near motor noise. | Untested |
+| Reply by message | Not built. `src/yalp/responder.py` is the plug-in point (console and speech exist). | — |
+| Follow a person | Detector runs at about 26 Hz on the Pi. `yalp follow` only drives simulated wheels. | Laptop (follow); Pi (detector speed) |
+| Telemetry | Flight recorder writes JSONL; `yalp telemetry` lists, summarises, exports and plots it. | Recorder on robot; reader laptop-only |
+
+**Not yet run on the robot:** everything from 2026-09-16 — escape moves,
+`hwtest --check wheels/straight`, `calibrate --heading`, `yalp session`, the
+telemetry reader, and the IMU / encoder / pack-monitor drivers (no such hardware is
+fitted). The camera's field-of-view constant, which scales every heading number, has
+never been checked against a real 90° mark.
+
+**Hardware as built:** Raspberry Pi 5, Logitech C270, two TT motors on a DRV8833,
+one front HC-SR04, 4×AA NiMH pack, two-deck acrylic chassis. Detail in
+`as-built-wiring.md` §0.
+
+**The `shopping-list-2026-09.md` parts were NOT ordered** (decided 2026-11-18: hold
+until we know they are needed). Against the V1 goal:
+
+| Part | Needed for V1? | Needed for the self-improving loop? |
+|---|---|---|
+| INA219 pack monitor (~$8) | No | Yes — the one part worth buying. Without it the loop cannot tell a weak battery from a bad calibration. |
+| MPU-6050 IMU (~$5) | No | Not at first. The camera heading works; buy it only if follow mode or dark rooms break the camera heading. |
+| Encoder motors (~$15) | No | Not at first. A sonar-against-a-wall routine can calibrate distance. Buy them if that proves too coarse. |
+| Third deck + camera mount (~$20–35) | No | Only if the clipped camera shifts between runs and biases the heading. |
+| Second set of AAs + charger | No | Convenience only. |
+
+---
+
+## Next steps, in order
+
+1. **One session on the robot.** Follow `next-session-handoff.md`: pull the
+   September code, confirm it drives, run `yalp calibrate --heading`. Then settle the
+   microphone question: `yalp audio --list`, record a clip with the motors off and
+   one with them running, and transcribe both.
+2. **Message channel.** Add a `Responder` that sends replies to a phone, and accept
+   text commands on the same channel.
+3. **Continuous listening.** Replace the single 5 s recording with a loop that keeps
+   listening and hands each utterance to the agent. Skip this if step 1 shows the
+   microphone is unusable; do "follow on real wheels" instead.
+4. **Scored self-test.** One command that drives a fixed set of trials and writes a
+   JSON score (see below). This is the foundation of the self-improving loop.
+
+Steps 2 and 3 complete V1.
+
+---
+
+## What the self-improving loop needs
+
+| Need | Have | Missing |
+|---|---|---|
+| Reach the robot | SSH as `izzy`, `git pull`, `yalp session restart` | Robot powered and on Wi-Fi whenever the agent runs |
+| Ground truth with no human | Sonar distance to a wall; camera heading | A routine that drives at a wall and compares commanded distance to the sonar change, and checks turns against the camera. `yalp calibrate` needs a person with a tape measure today. |
+| A score | Telemetry recorder and reader | A fixed trial set and a JSON result an agent can compare run to run |
+| Battery awareness | Driver code for an INA219 pack monitor | The INA219 itself (about $8). Speed sags about 26% over one session; without a voltage reading the loop will tune against a dying battery. |
+| Safe unattended driving | SAFE_STOP, motor watchdog | A confined lane. One front sonar is the only obstacle sensor. |
+
+---
+
+## Parked until V1 works
+
+These exist in code or docs and are tested, but are not on the V1 path. Leave them
+alone; do not extend them.
+
+- EXPLORE mode and explore-and-report.
+- Spoken replies and the speaker purchase.
+- Three-tier model routing beyond its current defaults.
+- Kid-version planning, enclosure, and everything in `roadmap.md` §6.
+- `chassis-v2.md` stages beyond what the self-test needs (caster, electrical
+  hardening, third deck).
+
+---
+
+## Where to look
+
+| For | Read |
+|---|---|
+| Commands to resume on the robot, key facts, open defects | `next-session-handoff.md` |
+| What happened in past sessions | `session-log.md` |
+| Milestone ladder, gates, risk register | `roadmap.md` |
+| Wiring as it really is | `as-built-wiring.md` |
+| Voice stack reference | `audio.md` |
+
+</script>
+<script type="text/markdown" data-name="next-session-handoff.md">
+# Next-session handoff — resume here
+
+**Last updated:** 2026-11-18 (trimmed; history moved to `session-log.md`).
+**Goal and current state:** `status.md`.
+**One-line status:** Izzy drives straight and turns to a commanded angle using the
+camera as her heading sensor. She was powered down on 2026-09-15 and has NOT run the
+2026-09-16 code.
+
+---
+
+## First thing next session
+
+```
+ssh izzy
+cd ~/yalp && git pull --ff-only && .venv/bin/pip install -e . -q && .venv/bin/pip install smbus2 -q
+bash scripts/install_reactive_service.sh        # optional: systemd user unit + ~/.config/yalp/reactive.env
+.venv/bin/yalp session start                    # or: systemctl --user start yalp-reactive
+.venv/bin/yalp session wait --camera            # READY when the port answers AND the camera is warm
+.venv/bin/yalp drive --target 0.6               # the timeline shows hdg=[camera]
+.venv/bin/yalp drive --turn 90                  # closed-loop turn; allowed inside the 0.30 m latch (escape move)
+.venv/bin/yalp hwtest --check wheels            # per-wheel yaw-rate matrix
+.venv/bin/yalp hwtest --check straight --seconds 3 --reverse-first 2 --save /tmp/s.csv
+.venv/bin/yalp calibrate --heading              # ground-truth the camera HFOV against a floor mark (do this once)
+.venv/bin/yalp telemetry summary                # per-goal summary of the newest flight-recorder file
+```
+
+Then the microphone check (decides the V1 path — see `status.md`):
+
+```
+.venv/bin/pip install -e ".[voice]" -q && sudo apt-get install -y libportaudio2
+.venv/bin/yalp audio --list                     # is the C270 mic listed?
+```
+
+Record one clip with the motors off and one with them running, and transcribe both.
+
+If sensors from `shopping-list-2026-09.md` are fitted: `yalp hwtest --check imu`,
+`--check power`, `--check encoders`. Everything auto-detects at server start
+(`YALP_IMU` / `YALP_POWER_MONITOR` / `YALP_ENCODERS` = auto|1|0).
+
+---
+
+## Open questions
+
+- Heading-hold gains (0.01 / 0.004) were tuned on one floor in about 10 legs. Re-tune
+  with `yalp telemetry plot`.
+- The FIT0450 16-pulse figure (x4 = 7680 ticks/rev) is from the datasheet; verify by
+  hand-spinning once encoders are fitted.
+- `ENCODER_TRACK_WIDTH_M` (0.14) must be measured.
+- `camera_hfov_deg` has never been ground-truthed.
+
+---
+
+## Defect backlog
+
+1. **Open-loop timed distance over-reports about 1.8×** (about 0.9 m actual on a
+   1.6 m goal). OPEN. Fix is encoders or a sonar-based speed calibration.
+   Side-effect: the goal timer can fire before the reflex on long approaches.
+2. **Veer under way.** CLOSED 2026-09-15 by the slow-decay driver mode and the visual
+   heading hold (`as-built-wiring.md` §3.6).
+3. **Floor-graze at about 0.6 m.** OPEN. The sonar module leans forward a few
+   degrees. Shim its bottom edge up 1–2°. Benign meanwhile: it can only stop her early.
+4. **Battery sag.** OPEN. Speed droops about 26% over about 28 runs in one session
+   (0.155 → 0.114 m/s at duty 0.45). Recharge between long sessions; an INA219 would
+   make it measurable.
+5. **Rotation model.** CLOSED 2026-09-15 by closed-loop rotate goals. The open-loop
+   `turn_rate_dps` figure is only a fallback now.
+6. **Retinue-side (not this repo):** tasks that depend on archived task IDs stall.
+   Workaround: clear `depends_on` on the stalled task.
+
+---
+
+## Key facts for whoever resumes
+
+- **Connection:** `ssh izzy` / `izzy.local`. The old static IP is dead. Pack switch =
+  motor master cutoff; sensor-only work is safe with it off.
+
+- **Motor power path — do not re-diagnose:**
+  `red = VM = breadboard J1`, `black = J3`, caps' + legs on the VM column.
+  See `as-built-wiring.md` §3.3 before touching anything in J1.
+
+- **Calibration state (2026-09-15):** `~/.config/yalp/calibration.json` on the Pi has
+  `left_invert=false, right_invert=true, left_trim=1.0, right_trim=1.0,
+  max_speed_mps=0.29, turn_rate_dps=120` plus the LEARNED `straight_bias_fwd` /
+  `straight_bias_rev` (≈ +0.01; rewritten by the reactive layer after straight
+  drives). Backups: `calibration.json.bak-pretune` (July) and
+  `calibration.json.bak-2026-09-15`. The July `right_trim 0.90` was tuned for the old
+  mixed decay mode and is WRONG under slow decay. The `duty_deadband` key is not in
+  the live file; `from_dict` defaults a missing key to 0.0, which preserves the
+  measured linear behavior.
+
+- **Drive settings:** motors stall at duty 0.30; 0.45 is reliably above stiction and
+  is the `yalp drive` default. `config.MOTOR_DECAY_MODE="slow"`.
+
+- **Camera warm-up:** the C270 publishes black frames for about 1 s after open. Give
+  the server about 4 s after its port comes up before the first drive
+  (`yalp session wait --camera` does this).
+
+- **Settled facts — do NOT re-diagnose:** DRV8833 IN/IN driver fix confirmed; camera
+  is `/dev/video0`; `.env` in `~/yalp` holds `ANTHROPIC_API_KEY` (mode 600,
+  gitignored); `GpiodUltrasonicSensor` is auto-selected when `python3-libgpiod` v2 is
+  present (force with `YALP_ULTRASONIC_BACKEND=gpiod`; chip via `YALP_GPIOCHIP`).
+
+- **Motion is proven by frames, not exit codes.** One visible pivot burst in camera
+  frames before trusting any motor run. A commanded pivot with zero scene change means
+  a wheel obstruction, a dead channel, or the pack switched off — not a software bug.
+  Run `yalp hwtest --check motors --matrix`.
+
+- **Cosmetic warnings expected:** `cv2.CascadeClassifier` fallback and
+  `gpiozero PWMSoftwareFallback`. Both harmless.
+
+- **Safety ritual:** wheels up on a stand for motor tests; pack switch is the motor
+  master cutoff; dress Pin 1 (3V3) and Pin 2 (5V) wires apart.
+
+</script>
+<script type="text/markdown" data-name="session-log.md">
+# Session log — what happened, newest first
+
+> History only. For the current state and the V1 goal read `status.md`; for the
+> commands to resume on the robot read `next-session-handoff.md`. Entries below are
+> kept as written at the time, so some facts in older entries were later superseded
+> (each entry says when).
+
+---
+
+## 2026-09-16 overnight build — what landed (all on `main`, tests 1008+ passing)
+
+- **Escape moves (spec §2.3 amendment):** a rotate or a NEGATIVE straight goal is
+  adopted and runs while a KNOWN obstacle is latched; a forward intent stays refused;
+  a blind sensor still latches everything. `yalp drive --turn` / negative `--target`
+  pass the pre-flight as an ESCAPE. She no longer strands herself at 0.25 m.
+- **`yalp hwtest --check wheels` / `--check straight`:** the camera-measured per-wheel
+  yaw-rate matrix (verdicts: weak/dead/wrong-sign wheel, the sign-flipping-gap
+  decay-mode signature) and the straight-drive recorder (veer character, CSV).
+- **`yalp calibrate --heading`:** closed-loop 90° spins L and R read against a floor
+  mark → `camera_hfov_deg` in the calibration file. Every heading number scales
+  with it; it has never been ground-truthed — do it.
+- **`yalp session`:** start/wait/status/stop/restart/logs for the reactive server;
+  systemd user unit + installer. Server output is line-buffered now.
+- **Sensors (drivers + fakes + tests, hardware not yet fitted):** MPU-6050 IMU is
+  the primary heading source when present (camera = fallback); FIT0450 quadrature
+  encoders close the distance loop (goal `closure: "odometry"`); INA219 pack monitor
+  publishes `pack_voltage_v` / `pack_state` in the new `RobotState.sensors` sub-map.
+  Pin plan in `hardware.md` §5; wiring notes in the module docstrings.
+- **`yalp telemetry list|summary|export|plot`:** the flight-recorder reader —
+  per-goal heading/distance/motor traces as an SVG for tuning the hold.
+- **Docs:** `shopping-list-2026-09.md`, `as-built-wiring.md` §0 (the two-deck body)
+  and §3.6, `hardware.md` §5 additions, spec §2.3 amendment.
+
+**Open questions (2026-09-16):** heading-hold gains (0.01 / 0.004) were tuned on one
+floor in ~10 legs — re-tune with `yalp telemetry plot` once the IMU is in; the
+FIT0450 16-pulse figure (x4 = 7680 ticks/rev) is from the datasheet, verify by
+hand-spinning; `ENCODER_TRACK_WIDTH_M` (0.14) must be measured.
+
+---
+
+## 2026-09-15 session — what happened, in order
+
+1. **Motor pack was switched off** at first (no motion, exit 0 — the drive CLI's
+   open-loop "complete" proves nothing; the sonar not moving did). Switched on.
+2. **She spun left instead of driving straight.** The left TT motor's leads at
+   H4/H5 are swapped relative to July. Fixed in the calibration file:
+   `left_invert=false` (backup `calibration.json.bak-2026-09-15`).
+3. **Still veered, and the veer flipped sign with duty** (+14° left at 0.45,
+   −42° right at 0.60, ~100° left in reverse). Per-wheel camera measurement
+   (`as-built-wiring.md` §3.6 table) showed the DRV8833 "mixed" PWM dialect put the
+   two wheels in different decay modes once only one was inverted. **Fix:**
+   `config.MOTOR_DECAY_MODE="slow"` — uniform slow decay on both channels/both
+   directions (DIR pins are software-PWMed too). No re-wiring.
+4. **Visual heading hold** (`yalp/reactive/visual_odometry.py` + `ReactiveTickCore`):
+   frame-to-frame yaw from phase correlation (left/right halves averaged to
+   cancel looming), P+D correction on the straight-drive duty split, learned
+   feed-forward bias persisted to the calibration file after every straight drive
+   (also on SAFE_STOP / preemption). Closed-loop rotate goals with a predictive
+   stop lead. `yalp drive --turn DEG` added; the timeline prints `hdg=`.
+   Config knobs: `HEADING_HOLD_*`, `ROTATE_*`, `TRIM_LEARNING_*`, `CAMERA_HFOV_DEG`.
+5. **Camera warm-up** (`camera.WARMUP_MAX_SECONDS` 1.5 → 3 s): the C270 publishes
+   black frames for ~1 s after open; the heading estimate is blind until then.
+   Give the server ~4 s after its port comes up before the first drive.
+
+**Open design decision — SAFE_STOP has no escape.** Once the reflex latches at
+<0.30 m, the tick halts *every* goal, and the drive CLI pre-flight refuses
+reverse and rotate too. On a small floor she strands herself after every forward
+leg and after any pivot that sweeps the sonar across furniture (happened twice
+this session). Recommendation: allow `rotate` goals and NEGATIVE straight drives
+while the obstacle latch is active (neither moves the nose forward; the reflex
+still halts any forward motion), and have the pre-flight pass them. This changes
+software-spec.md §2.3 — operator's call, not made unilaterally.
+
+**Measured this session (slow decay, single-wheel |yaw rate| deg/s, no trims):**
+duty 0.45 → L fwd 104 / R fwd 66 / L rev 111 / R rev 76; duty 0.60 → 121 / 89 /
+81 / 102. Left is ~20–35% stronger forward; the heading hold + learned bias absorb it.
+
+---
+
+## 2026-07-17 session — first floor drive, drivetrain tuning, first `yalp see`
+
+- **Floor-drive milestone: EARNED.** Four drives (A–D) across the session
+  closed the rung:
+  - **Drive A:** Timed-goal completion on a long lane — wall track confirmed
+    true-range descent from 1.94 m to 1.08 m.
+  - **Drive B:** Leftward-veer run (defect filed — see backlog item 2 below).
+  - **Drive C:** Goal timer expired 2 cm above the SAFE_STOP threshold — no
+    contact, clean exit.
+  - **Drive D (earning run):** SAFE_STOP triggered at served 0.30 m, reason
+    `"obstacle"`. Motors zeroed in one tick; retry refused by the sticky
+    latch. This is the run that earned the milestone.
+
+- **Sonar quality across all drives:** ~5,000 reads, 100% valid, zero misses.
+  `GpiodUltrasonicSensor` (gpiod backend) confirmed in-stack — the kernel irq
+  thread is visible in the process table. No gpiozero fallback, no inflation
+  artifact.
+
+- **Frame-verified motion gate is now standard practice:** one visible pivot
+  burst in camera frames before trusting any motor run. Exit codes are never
+  proof of motion — this gate is.
+
+- **SIGINT shutdown verified graceful** at session end (motors zeroed, bounded
+  joins, clean exit).
+
+- **Immobility root cause (that morning):** the motor pack's red VM lead had
+  been pulled out during charging. Reseated at breadboard J1 per
+  `as-built-wiring.md` §3.3. The session then proceeded without further power
+  issues.
+
+- **Proven session playbook (now first-class tooling):**
+  - `yalp hwtest --check motors --matrix` — 6-step per-channel triage
+    (LEFT-FWD/REV, RIGHT-FWD/REV, PIVOT-LEFT/RIGHT).
+  - `yalp hwtest --check ultrasonic --seconds N --hz H` — timed soak with
+    valid%, miss%, min/median/max/stdev, longest-miss streak.
+  - `yalp drive` — gated one-command drive (pre-flights safety, sends
+    `DRIVE_GOAL`, polls live timeline, refuses genuine obstacles before
+    sending intent).
+  - Frame-verified motion gate before trusting any motor run.
+
+- **Drivetrain tuned (2026-07-17 afternoon).** Motor stall confirmed at duty
+  0.30 — zero displacement over a 5.4 s commanded drive (frame- and
+  sonar-verified). Duty 0.45 reliably above stiction. Speed sag measured:
+  0.155 m/s fresh → 0.114 m/s after ~28 runs (~26% across one session —
+  recharge between long sessions). Pivots stiction-dominated at duty 0.45:
+  commanded 30–60° delivers 2–15°. Reverse is slower than forward and
+  pulls the nose right. Deadband code landed in commit `ebbd727` (see Key
+  facts). Calibration written to `~/.config/yalp/calibration.json` (backup
+  at `calibration.json.bak-pretune`): `max_speed_mps 0.29`,
+  `right_trim 0.90`. Post-tune verification: commanded 1.0 m → 0.94 m
+  sonar-true, veer ~7 cm/m, SAFE_STOP re-verified at served 0.28 m.
+
+- **First `yalp see` on-robot run (2026-07-17 afternoon).** `yalp see` ran
+  from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the
+  C270 webcam captured a frame; the model returned an accurate scene
+  description of the wall corner, baseboard, and floor Izzy faced —
+  verified against the frame by an independent reviewer. Milestone C
+  done-signal satisfied; PASSED 2026-07-17 in the roadmap.
+
+</script>
 <script type="text/markdown" data-name="architecture.md">
 # yalp — Technical Architecture
 
@@ -983,6 +1357,8 @@ The value is in **reading the patterns**, not adopting the stacks wholesale.
 ![Exploded assembly view of the yalp rover showing each component — Raspberry Pi 5, Logitech C270 webcam, DRV8833 motor driver, TT gear motors, ball caster, HC-SR04 ultrasonic, and 4×AA battery holder — separated and labelled](../images/yalp-exploded-assembly.png)
 
 *Exploded assembly view — every v1 component laid out before it meets the cardboard deck.*
+
+> **NOTE (2026-11) —** This is the original v1 spec. The cardboard chassis described here was replaced by a two-deck acrylic 2WD kit (`chassis-v2.md`); the body as it really is lives in `as-built-wiring.md` §0, and the current state of the project in `status.md`.
 
 This is the whole bot, part by part. v1 is a build-and-learn project — cardboard chassis, almost no soldering: every module is bought with screw terminals or pre-attached headers, with **one** exception — the common **DRV8833** breakout ships as a bare board plus loose header strips, so the build **does include hand-soldering those eight DRV8833 header pins** (a beginner-friendly first solder job — see the **"Soldering the DRV8833 header pins"** first-timer walkthrough in `hardware-runbook.md`). A **pre-soldered-header DRV8833 is an easier alternative if you can buy one**, and then this build really is solder-free. The Pi is mostly doing **I/O** here; the heavy AI runs in the cloud (see `architecture.md` and `software-spec.md`). So the spend goes to clean I/O and not getting electrocuted, not to compute.
 
@@ -1792,74 +2168,23 @@ each layer does see `architecture.md`; for *how* the code is shaped see
 
 ---
 
-## ⭐ Current status & next steps — read this first
+## ⭐ Current status — read `status.md`
 
-> **Phase 1 (the brain) is COMPLETE and laptop-tested — 597+ tests passing.** The full
-> two-loop brain runs on the laptop against the fake reactive backend ("real eyes / fake
-> wheels"), and the whole **voice → follow → voice-stop loop works end to end**. **13 of 16
-> rungs are green (0, A, B, C, D, E + Pi-hardware rungs F, G, H, I, J, first floor drive, and `yalp see` Pi-first-light)** plus voice
-> OUTPUT *and* INPUT (milestone O is now functionally done on the laptop); the remaining
-> hardware rungs (K–N) are **gated on the Pi 5 + Phase 2**. **Phase 2 / Wave 3
-> hardware bring-up is UNDERWAY on the real robot — see the next note.** The full §3 status
-> and the §1 ladder have the detail; this is the skim.
+> The V1 goal, what works today, and the next steps live in **`status.md`**. That
+> page is the single source of current truth; this doc keeps the milestone ladder,
+> the gates, and the risk register.
 
-> **⚙️ HARDWARE BRING-UP UPDATE (Izzy, Phase 2 / Wave 3) — camera, vision, ultrasonic,
-> drivetrain, Hello Motors, collision-stop reflex (J), and now first floor drive are ALL DONE on real hardware; milestones H and J PASSED 2026-07-15; first floor drive PASSED 2026-07-17.**
-> The physical robot — named **Izzy** (Raspberry Pi 5, hostname `izzy`) — is up: flashed with
-> Raspberry Pi OS Lite 64-bit (headless, SSH, hostname `izzy`, on WiFi, fully apt-updated), yalp
-> installed from GitHub, and `scripts/pi_setup.sh` hardened during bring-up (venv now
-> `--system-site-packages` so the apt `python3-lgpio` is visible; swig + python3-dev
-> fallback; libgl1 + libglib2.0-0 so `import cv2` works on Lite — all committed). Green on
-> the real Pi: **GPIO stack verified** (gpiozero lgpio/native factory, no RPi.GPIO —
-> milestone **G**, `scripts/verify_gpio_stack.py` passes); **camera** (Logitech C270 USB —
-> `yalp hwtest --check camera` grabs a 640×480 frame, **B** Pi-confirmed); **vision** (`yalp
-> see` runs on Izzy — captures a frame and describes the scene via the Claude vision API,
-> key in `~/yalp/.env`, **C** Pi-confirmed); the **HC-SR04 ultrasonic** (milestone **I** —
-> `yalp hwtest --check ultrasonic` returns real distances, a live 25-read stream tracked a
-> hand at ~22/25 good reads; as-built divider **1 kΩ + 1.5 kΩ → 3.0 V**); the
-> **DRV8833 drivetrain** — wired across two bench sessions (2026-07-02/03) and **Gate E
-> (power/brownout, milestone F) PASSED** — see the **F** rung for full pass record; and now
-> **milestone H (Hello Motors) PASSED 2026-07-15** on the replacement Pi 5 after a PMIC
-> hardware failure required a board swap — both drive wheels rolling forward together and
-> in-place LEFT/RIGHT turns confirmed, driven through `GpiozeroMotorDriver` and the saved
-> motor calibration (`left_invert=True`, `right_invert=True`). And now **milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP latched at 0.2815 m (< 0.30 m threshold) within ~50 ms; goal 'blocked'; latch persisted 76/76 polls; no reverse; grace fix (commit de48495) verified 18/18 at 15 Hz. **First floor drive ✅ PASSED 2026-07-17. `yalp see` ✅ PASSED 2026-07-17** (first-light: on-robot frame capture + accurate scene description, key via `.env`, independently verified — milestone C). **NEXT: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M) run in parallel.**
+**V1 goal:** a cheap robot that drives around, takes voice commands through the
+camera microphone, and replies by message. Fallback if the microphone is unusable on
+the robot: text commands and person-following. After V1: a self-improving
+drive-test loop.
 
-**DONE — the laptop phase (run any of these today):**
-
-- **`yalp see`** — webcam still → Claude → spoken-style description. `--speak` to hear
-  it, `--image PATH` for a file, free-text question supported. *(steps B, C ⭐)*
-- **`yalp agent "..."`** — deliberative loop: Claude picks tools (`drive`, `turn`,
-  `stop`, `look`, `check_distance`, `describe_scene`, `enter_follow_mode`, `explore`,
-  `speak`, `set_speed_limit`), drives the fake robot, narrates. Flags `--speak`,
-  `--synthetic`, `--steps N`, positional words or `--command`. *(steps A, D, E)*
-- **`yalp follow --detector person --preview`** — track-by-detection FOLLOW. Detectors
-  `face` (desk default) / `hog` / `person` (cv2.dnn MobileNet-SSD, orientation-agnostic,
-  robot default) / `auto`; lost-grace hysteresis; flags `--preview`, `--benchmark`,
-  `--seconds`, `--hz`, `--synthetic`. **The follow brain is fully built** — Gate H (L) is
-  only a Pi fps confirmation.
-- **Voice OUTPUT (TTS, `--speak`) is SHIPPED** (macOS `say` / Linux/Pi `espeak-ng`), and
-  **voice INPUT (push-to-talk STT) is SHIPPED too** — `yalp agent --listen` records a ~5 s
-  window and transcribes locally with faster-whisper (default model `tiny`). Saying
-  "follow me" brings up the camera and follows live until you say **"stop"/"halt"**
-  (hands-free) or hit Ctrl-C / `q`. Optional deps: `pip install -e ".[voice]"`; the base
-  install and test suite need none. *(milestone O, both halves)*
-- **Model routing:** Haiku default → Sonnet (multi-step `explore` / `need_more_reasoning`)
-  → Opus (`describe_scene` full / read-text); model IDs env-overridable. **Adaptive
-  thinking is attached only on Sonnet/Opus — Haiku does not support it.**
-
-**NEXT TARGET — Raspberry Pi 5 bring-up:** move the proven brain onto the Pi 5 hardware
-(follow `hardware-runbook.md`). What can proceed **NOW (no battery pack)**: flash
-Raspberry Pi OS Lite 64-bit (headless, SSH, Wi-Fi); install Python 3.11+ + gpiozero/lgpio;
-**GPIO first-light / LED blink (milestone G)**; build & bench-check the HC-SR04 1k/2k
-voltage divider to ~3.3 V **(milestone I)**; wire the drivetrain + sensor power-off (§5) —
-no soldering (parts pre-headered). What **WAITS on the inbound 4×AA NiMH battery holder**:
-**Gate E power/brownout (F) → Hello motors (H) → collision-stop reflex (J) → the
-load/detector-fps gates (K, L) → follow on hardware (M)** — anything where motors actually
-spin. `RealReactiveBackend` is **already fully implemented** (tick loop, collision-stop,
-motor paths, `MotorWatchdog` wired into `run()`); the hardware bring-up **confirms** it on
-the real body — no backend code remains to write.
-
-**THEN (post-v1):** kid-friendly enclosure and the rest of §6.
+**Where the ladder stands:** 13 of 16 rungs are green — everything through the first
+floor drive and on-robot `yalp see`. The open rungs are **K** (combined-load gate),
+**M** (follow on hardware) and **N** (Wi-Fi-loss test); the motor-loaded flavor of
+**L** is also still open. Of these only **M** matters for V1, and only on the
+fallback path. The two things V1 needs that this ladder never had — a message
+channel and continuous listening — are tracked in `status.md`.
 
 ---
 
@@ -1871,13 +2196,8 @@ know whether a rung is green without opening another doc. The **magic moment** �
 first time the thing feels alive — lands at **C**, reachable on the bench with only
 the Phase 1 hardware already in hand.
 
-> **Progress: 13 of 16 green — the entire laptop phase, all four Pi-hardware bring-up
-> rungs (F, G, H, I), milestone J (collision-stop), first floor drive, milestone C (vision, PASSED 2026-07-17 on hardware), and milestone O are DONE.** Steps **0, A, B, C, D, E** are green
-> (plus voice OUTPUT **and** INPUT and the full follow brain — the whole voice → follow →
-> voice-stop loop works end to end), all laptop-tested (**597+ tests passing**); and on the
-> **real Pi 5 ("Izzy")** — **GPIO first light (G)**, **HC-SR04 divider (I)**, **Gate E
-> power/brownout (F)**, **Hello Motors (H, PASSED 2026-07-15)**, **collision-stop reflex (J, PASSED 2026-07-15)**, **first floor drive (PASSED 2026-07-17)**, and **`yalp see` (C, PASSED 2026-07-17)** are all green. **Next target: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M).** Update this line as each
-> done-signal goes green.
+> **Progress: 13 of 16 green.** Open: **K**, **M**, **N** (and the motor-loaded half of
+> **L**). Each rung's pass record is in its row; dated detail is in `session-log.md`.
 
 | Step | Milestone / gate | Done-signal — self-certify with exactly this | Needs | ⭐ |
 |---|---|---|---|---|
@@ -1886,13 +2206,13 @@ the Phase 1 hardware already in hand.
 | **B** ✅ DONE *(Pi-confirmed)* | **Hello eyes** — capture a photo | Photo captured and saved to disk; file opens and shows the scene. **Now also green on the real Pi 5 (Izzy):** `yalp hwtest --check camera` grabs a 640×480 frame from the C270 over USB. **Verify:** `yalp see --image PATH` (or a webcam grab via `yalp see`); `pytest tests/test_camera.py`. | Phase 1 (C270 / laptop cam) | |
 | **C** ✅ DONE *(Pi, 2026-07-17)* | **It sees and talks** | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). `yalp see` ran on-robot from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the C270 webcam captured a frame and the model returned an accurate scene description of the wall corner, baseboard, and floor Izzy faced — verified against the frame by an independent reviewer. Done-signal satisfied: photo → vision model → answer printed to console, all on real hardware. **Verify:** `yalp see` (webcam still → spoken-style description; add `--speak` to hear it, or a free-text question); `python scripts/magic_moment.py`. | Phase 1 | ⭐ **the magic moment** |
 | **D** ✅ DONE | **It acts** (agent loop) — three checkpoints | **D1:** model calls ONE tool and the fake backend prints the tool call. **D2:** a multi-step plan that reads RobotState back between steps. **D3:** the full agent loop runs on the laptop webcam. Done = **D3** green. **Verify:** `yalp agent "drive forward and tell me what you see"` (or `--synthetic`, `--steps N`, `--command`); `pytest tests/test_agent.py`. | Laptop (webcam stand-in) | |
-| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest` (597+ passing). | Laptop | |
+| **E** ✅ DONE | **Laptop integration checkpoint** | The full agent loop drives the **FAKE** robot through a scripted scene end-to-end (command → Intent over the socket → fake reactive executes → RobotState updates → goal completes); the transcript prints/logs cleanly. Last all-software green before hardware. **Verify:** `python scripts/agent_demo.py` (drives the fake robot end-to-end and prints 'AGENT LOOP OK'); full suite `pytest`. | Laptop | |
 | **F** ✅ DONE *(Pi, 2026-07-03)* | 🚦 **Gate E — Power / brownout bring-up** | **PASSED 2026-07-03** via the §6 staged bring-up on the assembled robot ("Izzy"). Stage 1 (Pi alone): `get_throttled` 0x0. Stage 2 (motor rail alone, logic disconnected): rail 5.55 V; both motors spun both directions via hand-jumpered inputs. Stage 3 (joined, stall-heavy): **two runs of 24 full-duty reversal cycles** (`GpiozeroMotorDriver`, `drv8833` kind) with repeated thumb-stalls including both motors at once — zero Pi resets, SSH session survived, `get_throttled` 0x0 on every cycle, motors never stuttered. Criterion 3 (rail above driver logic VIH under stall) was **verified behaviorally, not metered** — probe access was blocked by the assembled body; the driver never faltered under full both-motor stall, which bounds the sag above the DRV8833's logic/UVLO thresholds. Static rail 5.55 V; 1000 µF bulk installed preemptively. As-built wiring in `as-built-wiring.md` §3. | Pi 5 + Phase 2 | |
 | **G** ✅ DONE *(Pi)* | **GPIO first light** | On the real Pi 5, blink one LED / toggle one motor-driver input pin via **gpiozero**; confirm gpiozero reports the **lgpio** pin factory and that **no RPi.GPIO is anywhere in the import path** (RPi.GPIO does not work on Pi 5). Verify with a meter. **Green on Izzy:** `scripts/verify_gpio_stack.py` passes (gpiozero lgpio/native factory active, RPi.GPIO absent). | Pi 5 (+ one LED) | |
 | **H** ✅ DONE *(Pi, 2026-07-15)* | **Hello motors** | **PASSED 2026-07-15** on the replacement Pi 5 ("Izzy"). Both drive wheels confirmed rolling forward together; in-place LEFT and RIGHT turns confirmed (wheels counter-rotating via differential steering). Driven through yalp's own `GpiozeroMotorDriver` and the saved motor calibration. **Blocked path to sign-off (fully resolved):** in order — (1) failed SD card; (2) DRV8833 driver decay-mode bug (found and fixed in code, commit 9c43242 — the idle/opposite channel now stays truly still and `stop()` coasts; the pre-fix code spun an "idle" channel at full reverse); (3) "train" chassis (one motor per axle, rebuilt to one motor per side); (4) Raspberry Pi PMIC hardware failure requiring a board replacement. **Motor calibration as-built:** both wheels were wired with reversed polarity relative to the driver's forward convention (a symmetric consequence of mirror-mounting the two motors), corrected in software with `left_invert=True` and `right_invert=True`, persisted to `~/.config/yalp/calibration.json` on the Pi (machine-local, not committed). No re-soldering needed. | Pi 5 + Phase 2 + F + G | |
 | **I** ✅ DONE *(Pi)* | **HC-SR04 resistor-divider bring-up** | Build the ECHO divider; **meter the 3.3 V tap and confirm ≤ 3.3 V BEFORE it touches any GPIO pin**; then read one sane distance. **Green on Izzy:** wired with an as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider (kit had no 2 kΩ; pins/software unchanged); `yalp hwtest --check ultrasonic` returns real distances (~22/25 good reads tracking a hand). Full as-built wiring: `as-built-wiring.md`. | Pi 5 + HC-SR04 + resistors | |
 | **J** ✅ DONE *(Pi, 2026-07-15)* | **Safety reflex** (collision-stop) | **PASSED 2026-07-15** on the Pi 5 ("Izzy"), wheels-up on a stand. `DRIVE_GOAL {"kind":"straight","target":10,"speed":0.3}` through `RealReactiveBackend` (20 Hz tick, 15 Hz ultrasonic cap, stock config); motors drove at +0.3/+0.3 for ~10 s; an approaching hand produced a cleanly decreasing valid distance series. SAFE_STOP latched on a valid echo of 0.2815 m (< `SAFE_STOP_THRESHOLD_M` 0.30 m), reason 'obstacle'; motors zeroed within one 20 Hz tick (~50 ms); goal status 'blocked' with `{'reason':'obstacle','distance':0.2815}`. Zero reverse motor commands in the full run. Latch persisted 76/76 polls over 15 s after obstacle removed — only a fresh adopted intent lifts it; clean SIGINT shutdown, motors idle. Separately verified same day: phantom-stop grace fix (commit de48495, bounded coast-last-known grace) confirmed on hardware — 18/18 induced open-room echo timeouts coasted with zero phantom stops at 15 Hz stock config. *(The served trip distance 0.2815 m was later found inflated ~2× by a Pi 5 gpiozero timing artifact — true hand distance at trip ~0.14 m — corrected by the `GpiodUltrasonicSensor` driver now auto-selected on Pi 5; the reflex logic and latch behavior are fully validated.)* | Pi 5 + Phase 2 | |
-| **First floor drive** ✅ DONE *(Pi, 2026-07-17)* | **First floor drive** (off the stand, full reactive stack, collision-stop live) | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). Commanded forward drives on hardwood executed and frame-verified: three moving laps, ~2 m total true displacement, via the new `yalp drive` CLI through `RealReactiveBackend`, stock config, gpiod kernel-timestamped ultrasonic backend. Sonar tracked TRUE range throughout: monotone-decreasing wall tracks (e.g. 1.94 → 1.08 m at physical closing speed); ~5,000 reads across the session, 100% valid, zero raw misses. The reflex earned the rung: SAFE_STOP latched at served 0.30 m, reason 'obstacle', motors zeroed within one poll tick, exit 0; immediate retry REFUSED by the pre-flight gate (genuine obstacle latched); zero reverse commands in any timeline; post-lap frame shows ~a foot of physical clearance to the wall. Bonus live save: with the operator standing in the lane at 0.28 m, the drive CLI refused to start (no intent sent, exit 2) — twice. Known minor defects filed for the backlog (not blockers): open-loop timed distance over-reports ~1.8× vs actual travel (encoders or speed recalibration needed); slight leftward veer under way (motor trim) — **closed 2026-09-15 by the visual heading hold + slow-decay driver mode, see `as-built-wiring.md` §3.6**; **2026-09-16: escape moves, `hwtest --check wheels/straight`, `calibrate --heading`, `yalp session`, IMU/encoder/pack-monitor drivers with closed-loop odometry, `yalp telemetry` — see `next-session-handoff.md`**; goal timer can expire before reflex trips on long approaches (same calibration fix); benign ~0.6 m floor-graze mode until sensor is shimmed up 1–2 degrees. | Pi 5 + Phase 2 + J | |
+| **First floor drive** ✅ DONE *(Pi, 2026-07-17)* | **First floor drive** (off the stand, full reactive stack, collision-stop live) | **PASSED 2026-07-17** on the Pi 5 ("Izzy"). Commanded forward drives on hardwood executed and frame-verified: three moving laps, ~2 m total true displacement, via the new `yalp drive` CLI through `RealReactiveBackend`, stock config, gpiod kernel-timestamped ultrasonic backend. Sonar tracked TRUE range throughout: monotone-decreasing wall tracks (e.g. 1.94 → 1.08 m at physical closing speed); ~5,000 reads across the session, 100% valid, zero raw misses. The reflex earned the rung: SAFE_STOP latched at served 0.30 m, reason 'obstacle', motors zeroed within one poll tick, exit 0; immediate retry REFUSED by the pre-flight gate (genuine obstacle latched); zero reverse commands in any timeline; post-lap frame shows ~a foot of physical clearance to the wall. Bonus live save: with the operator standing in the lane at 0.28 m, the drive CLI refused to start (no intent sent, exit 2) — twice. Known minor defects filed for the backlog (not blockers): open-loop timed distance over-reports ~1.8× vs actual travel (encoders or speed recalibration needed); slight leftward veer under way (motor trim) — **closed 2026-09-15 by the visual heading hold + slow-decay driver mode, see `as-built-wiring.md` §3.6**; **2026-09-16: escape moves, `hwtest --check wheels/straight`, `calibrate --heading`, `yalp session`, IMU/encoder/pack-monitor drivers with closed-loop odometry, `yalp telemetry` — see `session-log.md`**; goal timer can expire before reflex trips on long approaches (same calibration fix); benign ~0.6 m floor-graze mode until sensor is shimmed up 1–2 degrees. | Pi 5 + Phase 2 + J | |
 | **K** | 🚦 **Combined-load gate** (NEW) | **Reactive-tick p99 latency < 33 ms** with tracker + detector + capture + motor writes **all live simultaneously**; record the config. NO-GO recovery: drop detector cadence/resolution, move detection off the tick onto a slower thread feeding the tracker, re-measure. | Pi 5 + Phase 2 | |
 | **L** | 🚦 **Gate H — Person-detector fps benchmark on Pi** | ⚠️ **Scope narrowed to a Pi fps benchmark — the brain is already built (laptop-tested ✅):** the follow *brain* — `Detector` interface, track-by-detection tracker, and steering logic — is **already implemented and laptop-tested** (`yalp follow`, `enter_follow_mode`; detectors `face`/`hog`/`person`/`auto`, where `person` is the **cv2.dnn MobileNet-SSD** — orientation-agnostic, works front/back/side — and is the robot default; lost-grace hysteresis; graceful lost/too-dark → stop). Gate H is now a **benchmark-confirmation only**: measure **SUSTAINED** detector fps at ~320×240 on the Pi under real load (reactive loop + camera capture + motor-PWM stress), record the triple **(model, resolution, runtime)**. Try ONNX Runtime or ncnn with int8. PASS: **≥ 3 Hz sustained = GO** (same pipeline, Pi confirmed). NO-GO: **≤ 1–2 Hz** → swap in the blob/color `Detector` behind the same interface; ship that as milestone **M** NO-GO. **Laptop fps baseline (already runnable):** `yalp follow --benchmark --detector person`. See `software-spec.md`. **→ DETECTOR-FPS CRITERION MEASURED GO (2026-07-01, real Pi 5 + C270, no motors):** `person` (MobileNet-SSD) ~26.6 Hz sustained (p99 25.5 Hz), `hog` ~55 Hz — vs the 3 Hz floor (~8.8× and ~18× margin). See [pi-validation-2026-07.md](./pi-validation-2026-07.md) §5. **Caveat:** this is the detector-fps criterion only; the motor-loaded flavor of Gate H (sustained fps under reactive loop + camera + motor-PWM stress) remains open until motors are wired. **Thermal note:** sustained detection drives the Pi to 80–83 °C with soft throttling (`0xe0000`/`0xe0008`); fps stays well above the gate but active cooling is recommended for prolonged FOLLOW. **Gate K fake-backend ceiling (§6 of validation doc):** tick p99 18.63 ms vs 33 ms budget — PASS as a fake-driver ceiling, NOT the real Gate K (real Gate K needs `--backend real` with live motor writes). | Pi 5 + Phase 2 | |
 | **M** | **It follows / explores** (local tracker, no cloud round-trip; collision-stop underneath) | **GO branch** (Gate H ≥ 3 Hz): the laptop-proven track-by-detection pipeline runs on the Pi — robot keeps a walking person centered on the bench loop. **NO-GO branch** (Gate H ≤ 1–2 Hz): swap in the blob/color `Detector` behind the same pluggable interface — robot follows a colored target, collision-stop underneath, own bench demo. The follow *logic/steering* is already proven; only the Pi's detector fps is the open question Gate H answers. A NO-GO is a *different detector, not a demotion*. EXPLORE behavior per `architecture.md` / `software-spec.md`. | Pi 5 + Phase 2 + L (+ K) | |
@@ -2037,68 +2357,22 @@ number means you swap the detector — not redesign the follow loop. See `softwa
 
 ## 3. Current status
 
-> **Status as of this writing:** Phase 1 (the brain) is **COMPLETE and laptop-tested
-> (597+ tests passing)**, and **Phase 2 / Wave 3 hardware bring-up is UNDERWAY on the real
-> robot, "Izzy"** (Raspberry Pi 5, hostname `izzy`). **13 of 16 rungs green** — the entire
-> laptop phase (**0, A, B, C, D, E**), all four Pi bring-up rungs (**F** Gate E, **G** GPIO
-> first light, **H** Hello Motors, **I** HC-SR04 divider), **J** (collision-stop reflex), **first floor drive** (PASSED 2026-07-17), and **`yalp see` (C, PASSED 2026-07-17)** on real hardware — plus voice OUTPUT *and* INPUT and the full
-> follow brain, so the whole **voice → follow → voice-stop loop works end to end** (milestone
-> O is functionally done on the laptop). **Milestone H (Hello Motors) PASSED 2026-07-15** on
-> the replacement Pi 5 — both drive wheels forward, in-place LEFT/RIGHT turns, driven through
-> `GpiozeroMotorDriver` and saved motor calibration. **Milestone J (collision-stop reflex) PASSED 2026-07-15** — SAFE_STOP at 0.2815 m (< 0.30 m threshold, ~50 ms halt), goal status 'blocked', sticky latch (76/76 polls), no reverse; grace fix (commit de48495) verified 18/18. **First floor drive PASSED 2026-07-17** — three moving laps on hardwood, ~2 m true displacement, sonar TRUE throughout, SAFE_STOP at 0.30 m, zero reverse, pre-flight gate refused retry. **`yalp see` PASSED 2026-07-17** — on-robot frame capture + accurate scene description, independently verified, milestone C done on real hardware. **Next targets: richer `yalp see` session → person-following → voice input; combined-load gate (K) → follow on hardware (M). Laptop brain covers all
-> three headline behaviors:**
-> **see** (`yalp see` — webcam still → Claude → spoken-style description,
-> `--speak`/`--image`/free-text), **agent** (`yalp agent` — full deliberative loop D1–D3
-> driving the fake reactive backend, with `--listen` push-to-talk voice input), and
-> **follow** (`yalp follow` / `enter_follow_mode` — track-by-detection pipeline;
-> detectors `face`/`hog`/`person`/`auto`, where `person` is the cv2.dnn MobileNet-SSD
-> (orientation-agnostic, robot default); lost-grace hysteresis, steering, graceful
-> lost/too-dark → stop). The Pi is the remaining unknown for detector fps (Gate H /
-> milestone L) — the follow logic itself is already proven.
+See **`status.md`** for the current state and next steps, `next-session-handoff.md`
+for the commands to resume on the robot, and `session-log.md` for dated history.
 
-- **Spent (~$200):** the CanaKit Raspberry Pi 5 4GB Starter Kit PRO (board, 27W PD
+**Budget so far:**
+
+- **Brain (~$200):** the CanaKit Raspberry Pi 5 4GB Starter Kit PRO (board, 27W PD
   wall supply, active-cooling case, 128GB OS card) plus the Logitech C270 webcam.
-- **Remaining (~$135):** microSD card reader (if no laptop SD slot), Phase 2 body
-  parts (~$105), Phase 3 voice (~$20). Total project ~$335.
-- **Phase 2 ORDERED 2026-06-20 (inbound):** motors, driver, ball caster, HC-SR04,
-  divider resistors, battery + holder, breadboard/wiring, bulk + ceramic caps,
-  glue/zip-ties.
-- **Phase 3 deferred:** USB mic + small speaker.
-- **Laptop brain covers all three headline behaviors:** `yalp see` (**see**), `yalp agent` (**agent**), and `yalp follow` (**follow**) are all implemented and laptop-tested; the follow pipeline (`Detector` interface, track-by-detection tracker, steering, lost/too-dark → stop) was built ahead of the hardware.
-
-**DONE — already shipped and laptop-tested (597+ tests passing):**
-
-1. **Milestone 0 fired** — Phase 2 order placed 2026-06-20; parts inbound.
-2. **Laptop phase (A–E) green:** the loop contract proven with a live socket round-trip
-   (**A**), "it sees and talks" benched (**B–C**, the magic moment), the agent loop built
-   in three checkpoints (**D1–D3**), and the fake-robot integration run closed (**E**).
-3. **Beyond the ladder — milestone O is functionally done on the laptop:** voice OUTPUT
-   (TTS, `--speak`), voice INPUT (push-to-talk STT, `yalp agent --listen` → local
-   faster-whisper), voice-driven FOLLOW with a hands-free "stop"/"halt", and the full
-   follow brain (`yalp follow` — pluggable `Detector`, cv2.dnn MobileNet-SSD person
-   detector, track-by-detection tracker, lost-grace hysteresis, steering, graceful stop).
-   The whole **voice → follow → voice-stop loop works end to end** on the laptop.
-4. **Pi-side bring-up started on Izzy (no battery pack needed):** Pi 5 flashed with
-   Raspberry Pi OS Lite 64-bit (headless, SSH, hostname `izzy`, WiFi, apt-updated); yalp
-   installed from GitHub (`scripts/pi_setup.sh` hardened during bring-up — venv
-   `--system-site-packages` for the apt `python3-lgpio`, swig + python3-dev fallback,
-   libgl1 + libglib2.0-0 for `import cv2` on Lite — all committed); **GPIO first light
-   (G)** verified (`scripts/verify_gpio_stack.py`, lgpio/native factory, no RPi.GPIO);
-   **camera (B)** and **vision (C)** re-confirmed on Izzy; and the **HC-SR04 (I)** wired
-   and reading real distances (as-built **1 kΩ + 1.5 kΩ → 3.0 V** divider — see
-   `as-built-wiring.md`).
-
-**DONE ✅ — first floor drive (off the stand, full reactive stack, collision-stop live) PASSED 2026-07-17** — three moving laps on hardwood (~2 m true displacement), sonar TRUE throughout, SAFE_STOP live at 0.30 m, pre-flight gate refused retry, zero reverse. See the §1 ladder rung for full pass record.
-
-**DONE ✅ — `yalp see` first-light (2026-07-17, afternoon session).** `yalp see` ran on-robot from `~/yalp` with the API key loaded via `load_dotenv` from `.env`; the C270 webcam captured a frame and the model returned an accurate scene description of the wall corner, baseboard, and floor Izzy faced — verified against the frame by an independent reviewer. Milestone C done-signal fully satisfied on real hardware; **PASSED 2026-07-17** — see the §1 C rung for the pass record.
-
-**NEXT TARGET — richer `yalp see` session, then person-following, then voice input:**
-
-1. **Richer `yalp see` session:** interactive Q&A, multiple scenes, `--speak` path; the road toward the camera + sonar + LLM first-moment vision loop.
-2. **Person-following on hardware (M):** the laptop-proven track-by-detection pipeline drives Izzy in a bench loop — Gate K (combined-load latency) confirmed as part of this.
-3. **Voice input on hardware (O / Pi):** push-to-talk STT (`yalp agent --listen`) on the Pi with mic attached.
-4. **`RealReactiveBackend`** (already fully implemented — tick loop, collision-stop,
-   motor paths, `MotorWatchdog`) is floor-proven (first floor drive). No backend code remains to write.
+- **Phase 2 body (~$105):** motors, driver, ball caster, HC-SR04, divider resistors,
+  battery + holder, breadboard/wiring, caps. Ordered 2026-06-20; all fitted.
+- **Chassis rebuild:** the two-deck acrylic kit from `chassis-v2.md` §12 replaced the
+  cardboard body.
+- **Not bought:** a speaker (V1 replies by message instead) and a separate USB mic
+  (the C270 has one built in).
+- **Proposed, NOT ordered:** `shopping-list-2026-09.md` (IMU, pack monitor, encoder
+  motors, third deck). None is needed for V1; see `status.md` for which are worth
+  buying later.
 
 > **THESIS —** Develop the brain on the laptop, not the Pi. Only motor-control and
 > camera-capture genuinely need the Pi. Iterating the vision/agent loop over SSH on a
@@ -2179,6 +2453,9 @@ converted to DECISIONs and cross-linked here so the backlog reflects reality.
 ---
 
 ## 6. Future / stretch (post-v1)
+
+> Everything here, plus the items under "Parked until V1 works" in `status.md`, is off
+> the V1 path.
 
 Explicitly out of scope for v1, recorded so good ideas don't get re-litigated as if
 they were on the critical path.
@@ -4028,6 +4305,147 @@ extra layer. **Before ordering #7:** `chassis-v2.md` §12.3 (shaft/bracket fit).
 3. Encoders (with the FIT0450 swap, chassis-v2 Stage 1): `yalp hwtest --check encoders`
    (spin each wheel by hand: ticks count up forward, down backward), then
    `yalp calibrate` for `max_speed_mps` — after that, distance goals close on odometry.
+
+</script>
+<script type="text/markdown" data-name="audio.md">
+# Audio — yalp's voice stack
+
+> The consolidated technical reference for yalp's voice **output** (text-to-speech) and voice **input** (speech-to-text). Backends, the record→transcribe→agent pipeline, the dev/CI abstractions that make it run without a mic or a model download, and the full environment-variable surface.
+
+---
+
+## 1. Overview
+
+yalp has two independent voice halves:
+
+- **Voice OUTPUT (TTS)** — `--speak` reads a text reply aloud. Ships in software, needs no extra hardware on the laptop, and is a silent no-op when no TTS binary is present.
+- **Voice INPUT (STT)** — `--listen` records a short clip from the microphone, transcribes it locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and feeds the transcript through the agent loop. The **Logitech C270 webcam has a built-in mono mic** — no separate USB mic is needed on the Pi.
+
+Both are opt-in flags on the CLI; neither is required for the base install or the test suite.
+
+---
+
+## 2. Voice OUTPUT (TTS)
+
+`yalp agent --speak` and `yalp see --speak` speak each reply aloud after the turn completes.
+
+### Backend selection
+
+The TTS backend is chosen by platform:
+
+| Platform | Backend | Install |
+|---|---|---|
+| macOS | built-in `say` | (none — ships with macOS) |
+| Linux / Raspberry Pi | `espeak-ng` | `sudo apt-get install espeak-ng` |
+| macOS (parity with Pi) | `espeak-ng` | `brew install espeak-ng` |
+
+If **no** TTS binary is found on the host, `--speak` is a **silent no-op**: the command still prints its text reply and exits normally, it just doesn't speak. This keeps `--speak` safe to leave on in headless or CI environments.
+
+---
+
+## 3. Voice INPUT (STT)
+
+`yalp agent --listen` runs the push-to-talk pipeline:
+
+1. **Record** — capture ~5 s of audio (default; configurable via `YALP_VOICE_RECORD_SECONDS`) from the configured source.
+2. **Transcribe** — run the clip through faster-whisper locally (default model `tiny`; override with `YALP_STT_MODEL=base`). No audio leaves the machine.
+3. **Agent** — feed the transcribed text into the normal deliberative loop.
+
+Combine with `--speak` for a hands-free loop: `yalp agent --listen --speak`.
+
+### Precedence
+
+Positional words and `--command TEXT` **always take precedence** over `--listen`. If you pass command text *and* `--listen`, the text wins and the mic is not opened. `--listen` only supplies the command when no text is given.
+
+---
+
+## 4. The `YALP_VOICE_SOURCE` abstraction
+
+`YALP_VOICE_SOURCE` selects where input audio comes from, so the STT pipeline can run with or without hardware:
+
+| Value | Meaning | Typical use |
+|---|---|---|
+| `microphone` | Live capture via `sounddevice` (default) | Real laptop/Pi use |
+| `synthetic` | Generated audio, no mic required | Unit tests, dev on machines with no mic |
+| `file` | Replay a recorded WAV at `YALP_VOICE_AUDIO_FILE` | Deterministic CI, reproducing a clip |
+
+This mirrors the existing **synthetic-camera** dev story: just as vision falls back to a generated test pattern when no webcam is present, voice input can be driven from a synthetic source or a recorded file so the pipeline is exercisable with no hardware.
+
+---
+
+## 5. The `YALP_STT_BACKEND` abstraction
+
+`YALP_STT_BACKEND` selects the transcription engine:
+
+| Value | Meaning | When to use |
+|---|---|---|
+| `faster-whisper` | Real local faster-whisper inference (default) | Real transcription on laptop/Pi |
+| `fake` | Deterministic stub transcript, no model | CI and tests — **no model download needed** |
+
+Use `fake` whenever you want to exercise the `--listen` code path without downloading or running a Whisper model (e.g. CI, or a quick smoke test).
+
+---
+
+## 6. Environment variables
+
+All seven voice variables, with defaults and example values. They are documented in `.env.example`; copy it to `.env` to override.
+
+| Variable | Default | Meaning | Example |
+|---|---|---|---|
+| `YALP_VOICE_SOURCE` | `microphone` | Audio source: `microphone`, `synthetic`, or `file` | `synthetic` |
+| `YALP_VOICE_SAMPLE_RATE` | `16000` | PCM sample rate in Hz (16000 recommended for Whisper) | `16000` |
+| `YALP_VOICE_CHANNELS` | `1` | Audio channels (1 = mono; Whisper expects mono) | `1` |
+| `YALP_VOICE_RECORD_SECONDS` | `5` | Seconds of audio captured per utterance | `8` |
+| `YALP_VOICE_AUDIO_FILE` | _(none)_ | WAV path used when `YALP_VOICE_SOURCE=file` | `tests/assets/sample.wav` |
+| `YALP_STT_BACKEND` | `faster-whisper` | STT backend: `faster-whisper` or `fake` | `fake` |
+| `YALP_STT_MODEL` | `tiny` | faster-whisper model size: `tiny` or `base` | `base` |
+
+---
+
+## 7. Installation
+
+Voice dependencies are an **optional extra**. The base install and the test suite do **not** require them.
+
+```bash
+pip install -e ".[voice]"
+```
+
+This adds `sounddevice` (microphone capture) and `faster-whisper` (local STT).
+
+### System dependencies (Linux / Raspberry Pi)
+
+```bash
+sudo apt-get install libportaudio2   # PortAudio runtime for sounddevice
+sudo apt-get install espeak-ng       # TTS backend for --speak
+```
+
+On macOS, `say` is built in for TTS; install `espeak-ng` via Homebrew only if you want parity with the Pi.
+
+---
+
+## 8. Dev / CI without hardware
+
+Run the full voice path with no mic and no model download:
+
+```bash
+# Replay a recorded clip (deterministic):
+YALP_VOICE_SOURCE=file YALP_VOICE_AUDIO_FILE=tests/assets/sample.wav yalp agent --listen
+
+# Synthetic audio, no mic needed:
+YALP_VOICE_SOURCE=synthetic yalp agent --listen
+
+# Skip the Whisper model entirely (fake transcript):
+YALP_STT_BACKEND=fake yalp agent --listen
+```
+
+---
+
+## 9. Raspberry Pi 5 notes
+
+- Same faster-whisper backend as the laptop — **keep the model at `tiny`** on the 4 GB Pi 5 for memory headroom.
+- `sounddevice` ships ARM64 wheels; install the `libportaudio2` system package so it has a PortAudio runtime.
+- TTS on the Pi uses `espeak-ng` (`sudo apt-get install espeak-ng`); a small USB speaker carries voice output once the body is built (see `hardware.md`).
+- **The Logitech C270 webcam has a built-in mono microphone.** Voice INPUT (`--listen`) can be trialled on the Pi with zero new hardware — no separate USB mic required. Buy only the speaker first; add a dedicated mic later if the C270's audio quality proves insufficient.
 
 </script>
 <script type="text/markdown" data-name="initial-plan.md">

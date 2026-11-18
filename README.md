@@ -10,7 +10,9 @@ the robot's camera); only the real reactive layer needs the Pi.
 
 ![Blueprint-style beauty shot of the assembled yalp rover — differential-drive chassis with webcam, HC-SR04 ultrasonic, and Raspberry Pi 5 mounted on a cardboard deck](docs/images/yalp-hero.png)
 
-*Assembled yalp rover — blueprint illustration of the v1 cardboard chassis.*
+*Blueprint illustration of the original cardboard chassis. The real robot ("Izzy") now sits on a two-deck acrylic kit — see [docs/technical/as-built-wiring.md](docs/technical/as-built-wiring.md).*
+
+**Current state, the V1 goal, and what is next:** [docs/technical/status.md](docs/technical/status.md).
 
 ## Repository layout
 
@@ -19,16 +21,18 @@ yalp/
 ├── README.md              # this file
 ├── SETUP.md               # step-by-step laptop bring-up for a non-coder owner
 ├── pyproject.toml         # packaging (src layout, console script `yalp`)
-├── requirements.txt       # runtime deps (mirror of pyproject)
 ├── .env.example           # copy to .env; holds ANTHROPIC_API_KEY + model ids
 ├── src/yalp/
 │   ├── config.py          # canonical constants (model tiers, thresholds, IPC)
 │   ├── camera.py          # threaded latest-frame capture (webcam/image/synthetic)
 │   ├── llm.py             # thin, mockable Anthropic wrapper
 │   ├── cli.py             # `yalp` entrypoint + subcommand registry
-│   ├── contract/          # loop-to-loop interface (Intent/RobotState) — Wave 2
-│   ├── reactive/          # fast on-Pi loop + its fake — later wave
-│   └── deliberative/      # perceive→think→act→report loop — later wave
+│   ├── responder.py       # where a reply lands (console, speech; message channel goes here)
+│   ├── telemetry.py       # JSONL flight recorder (+ telemetry_cli.py to read it)
+│   ├── contract/          # loop-to-loop interface (Intent/RobotState)
+│   ├── reactive/          # fast on-Pi loop, its fake, drive/calibrate/hwtest/session CLIs
+│   ├── deliberative/      # perceive→think→act→report loop (see, agent)
+│   └── voice/             # microphone capture, speech-to-text, text-to-speech
 ├── scripts/               # dev/ops scripts
 ├── tests/                 # pytest suite + tests/assets/sample.jpg
 └── docs/                  # the spec hub (open docs/index.html); source of truth
@@ -50,7 +54,7 @@ cp .env.example .env
 
 # 4. Sanity-check the install
 yalp --help        # shows all available commands
-pytest             # the full suite — 597+ tests as of July 2026 — runs hardware-free; all should pass
+pytest             # the full suite (1,000+ tests) runs hardware-free; all should pass
 ```
 
 ## Commands
@@ -254,42 +258,18 @@ Full technical reference: [docs/technical/audio.md](docs/technical/audio.md).
 
 *Annotated build overview — labels the deliberative-loop (cloud), the vision/follow reactive layer, and the 0.30 m collision-stop threshold.*
 
-**The laptop "brain" is COMPLETE** — the full voice → follow → voice-stop loop runs
-end to end on the laptop ("real eyes, fake wheels"), and **the full suite — 597+ tests as of July 2026 — runs hardware-free**:
+The live answer is [docs/technical/status.md](docs/technical/status.md). In short:
 
-- `yalp see` — single-frame vision: webcam → Claude → spoken/typed scene description.
-- `yalp agent` — deliberative loop (Claude) driving abilities against the reactive
-  layer (simulated motors on the laptop).
-- `yalp follow` — standalone reactive person-tracker (live camera).
-- **Voice OUTPUT** — cross-platform TTS via `--speak` (macOS `say`, Linux/Pi `espeak-ng`).
-- **Voice INPUT** — push-to-talk `yalp agent --listen`: records a ~5 s window, transcribes
-  locally with faster-whisper (default `tiny`), and runs the transcript as a command.
-- **Voice-driven FOLLOW** — saying "follow me" brings up the camera and follows live
-  (room-range `person` detector by default), staying in follow until you say
-  "stop"/"halt" (hands-free) or press Ctrl-C / `q`.
-- All laptop-first and fully testable with synthetic/fake audio and a synthetic camera —
-  no hardware required. Optional voice deps: `pip install -e ".[voice]"`; see
-  [docs/technical/audio.md](docs/technical/audio.md).
+- **On the real robot:** drives straight and turns to an angle using the camera as its
+  heading sensor, stops 0.30 m from obstacles, and describes what it sees (`yalp see`).
+  Robot-side commands: `yalp session`, `yalp drive`, `yalp hwtest`, `yalp calibrate`,
+  `yalp telemetry`.
+- **On the laptop only so far:** the agent loop (`yalp agent`), push-to-talk voice
+  commands (`--listen`), and person-following (`yalp follow`, simulated wheels).
+- **Not built yet:** replying by message, and continuous listening. Those two complete V1.
 
-**Honest caveats:** `RealReactiveBackend` (real GPIO motors + HC-SR04) is **fully
-implemented and laptop-tested** — the tick loop, collision-stop safety override, motor
-translation/drive paths, and `MotorWatchdog` integration are all wired in; what remains
-is physically wiring the motors and confirming behavior on real hardware, so it awaits
-on-hardware confirmation (motors not yet wired). On macOS a cosmetic objc "libavdevice
-implemented in both cv2 and av" warning may print (transcription unaffected). Interaction
-is fixed-duration push-to-talk; voice-activity-detection and a "hey Yalp" wake-word are
-future upgrades.
-
-**Next target — Raspberry Pi 5 bring-up.** Move the proven brain onto the Pi 5 hardware.
-What can proceed **now (no battery pack needed)**: flash Raspberry Pi OS Lite 64-bit
-(headless, SSH, Wi-Fi); install Python 3.11+ + gpiozero/lgpio; GPIO first-light / LED
-blink (milestone G); build & bench-check the HC-SR04 1k/2k voltage divider to ~3.3 V
-(milestone I); wire the drivetrain + sensor with power off (§5) — no soldering needed.
-What **waits on the inbound 4×AA NiMH battery holder**: Gate E (power/brownout, F),
-"hello motors" (H), collision-stop reflex (J), and the detector-fps gates (K/L) — i.e.
-anything where motors actually spin. Then: wire the motors physically and run on-hardware validation — `RealReactiveBackend` is already fully implemented (tick loop, collision-stop safety override, motor translation, `MotorWatchdog` integration) and laptop-tested; it is awaiting on-hardware confirmation because motors are not yet physically wired. See
-[docs/technical/roadmap.md](docs/technical/roadmap.md) for the gate ladder and
-[docs/technical/hardware-runbook.md](docs/technical/hardware-runbook.md) for bring-up steps.
+The full suite (1,000+ tests) runs hardware-free. On macOS a cosmetic objc "libavdevice
+implemented in both cv2 and av" warning may print (transcription unaffected).
 
 ## Viewing the spec hub
 
@@ -305,6 +285,7 @@ After editing any markdown doc under `docs/`, rebuild the embedded page with
 
 ## Learn more
 
+- **Status and V1 goal:** [docs/technical/status.md](docs/technical/status.md).
 - **Setup:** [SETUP.md](SETUP.md) — laptop bring-up, getting an API key, running tests.
 - **Build order & gates:** [docs/technical/roadmap.md](docs/technical/roadmap.md).
 - **The loop contract:** [docs/technical/software-spec.md](docs/technical/software-spec.md).
