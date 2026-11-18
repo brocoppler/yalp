@@ -289,8 +289,10 @@ class ReactiveServer:
                 if not writable:
                     return  # would block — drop, newest wins
                 conn.sendall(data)
-            except OSError:
+            except (OSError, ValueError):
                 # Client vanished; the reader loop will clean up. Drop silently.
+                # (select() raises ValueError, not OSError, on a socket that was
+                # closed between the None-check and here: its fileno is -1.)
                 pass
 
 

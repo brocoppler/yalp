@@ -57,7 +57,7 @@ def test_voice_constant_defaults():
     assert config.VOICE_RECORD_SECONDS == 5.0
     assert config.VOICE_AUDIO_FILE == ""
     assert config.STT_BACKEND == "faster-whisper"
-    assert config.STT_MODEL == "tiny"
+    assert config.STT_MODEL == "tiny.en"
 
 
 def test_voice_constant_types():
@@ -113,7 +113,7 @@ def test_config_voice_audio_file_default():
 
 def test_config_stt_model_default():
     from yalp.config import Config
-    assert Config().stt_model == "tiny"
+    assert Config().stt_model == "tiny.en"
 
 
 def test_voice_constants_in_all():

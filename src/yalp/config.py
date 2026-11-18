@@ -339,6 +339,24 @@ def _default_telemetry_dir() -> str:
     return os.path.join(base, "yalp", "telemetry")
 
 
+
+
+def _default_frame_file() -> str:
+    """Default path of the shared latest-frame JPEG (under the XDG state dir)."""
+    xdg = os.environ.get("XDG_STATE_HOME")
+    base = xdg if xdg else os.path.expanduser("~/.local/state")
+    return os.path.join(base, "yalp", "latest-frame.jpg")
+
+
+# Shared latest frame. Only ONE process can hold the camera, and on the robot that
+# is the reactive server. It publishes its newest frame to this file a few times a
+# second so a deliberative process on the SAME machine (yalp agent / yalp telegram
+# with --host) can see through the robot's eyes without opening the device.
+FRAME_FILE: str = _env_str("YALP_FRAME_FILE", _default_frame_file())
+FRAME_PUBLISH_HZ: float = _env_float("YALP_FRAME_PUBLISH_HZ", 2.0)
+# A frame file older than this is treated as stale (server not running).
+FRAME_FILE_MAX_AGE_S: float = _env_float("YALP_FRAME_FILE_MAX_AGE_S", 5.0)
+
 TELEMETRY_ENABLED: bool = _env_bool("YALP_TELEMETRY", True)
 TELEMETRY_DIR: str = _env_str("YALP_TELEMETRY_DIR", _default_telemetry_dir())
 TELEMETRY_MAX_BYTES: int = _env_int("YALP_TELEMETRY_MAX_BYTES", 10 * 1024 * 1024)
@@ -386,7 +404,9 @@ AUDIO_INPUT_DEVICE: str = _env_str("YALP_AUDIO_INPUT_DEVICE", "")  # '' = system
 STT_BACKEND: str = _env_str("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whisper' | 'fake'
 # Whisper model size when STT_BACKEND='faster-whisper'. 'tiny' and 'base' run
 # comfortably on laptop-class CPUs (trade speed vs accuracy).
-STT_MODEL: str = _env_str("YALP_STT_MODEL", "tiny")  # tiny|base for faster-whisper
+# English-only 'tiny.en' is the default: on the robot (2026-11-18, C270 mic) the
+# multilingual 'tiny' returned nothing for speech that 'tiny.en' transcribed well.
+STT_MODEL: str = _env_str("YALP_STT_MODEL", "tiny.en")  # tiny.en|base.en|tiny|base
 
 
 # --- Reactive hardware GPIO pin map (BCM numbering; hardware.md) ---
@@ -858,6 +878,9 @@ __all__ = [
     "AUDIO_INPUT_DEVICE",
     "STT_BACKEND",
     "STT_MODEL",
+    "FRAME_FILE",
+    "FRAME_PUBLISH_HZ",
+    "FRAME_FILE_MAX_AGE_S",
     "MOTOR_LEFT_PWM_PIN",
     "MOTOR_LEFT_DIR_PIN",
     "MOTOR_RIGHT_PWM_PIN",

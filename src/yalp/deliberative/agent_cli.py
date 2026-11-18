@@ -369,7 +369,19 @@ def _setup_remote(args, host: str):
 
     port = getattr(args, "port", None) or IPC_PORT
     source = _camera_source(args)  # LOCAL camera source (--synthetic aware)
-    reactive = RemoteReactiveBackend(host=host, port=port, camera_source=source)
+    camera = None
+    from ..frame_share import frame_file_is_fresh
+
+    if source == "webcam" and frame_file_is_fresh():
+        # A reactive server on THIS machine holds the camera and is publishing its
+        # frames (the robot case). Read those instead of opening the device again.
+        from ..camera import Camera
+
+        camera = Camera(source="shared", path=config.FRAME_FILE)
+        source = f"shared:{config.FRAME_FILE}"
+    reactive = RemoteReactiveBackend(
+        host=host, port=port, camera=camera, camera_source=source
+    )
     reactive.connect()
     print(
         f"yalp agent — REMOTE reactive body at {host}:{port} "

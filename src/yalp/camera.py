@@ -70,7 +70,8 @@ class Camera:
     Parameters
     ----------
     source:
-        ``"webcam"``, ``"image"``, or ``"synthetic"``.
+        ``"webcam"``, ``"image"``, ``"shared"`` (frames another process publishes
+        to ``path``; see :mod:`yalp.frame_share`), or ``"synthetic"``.
     index:
         VideoCapture device index for the webcam source (0 = default cam).
     path:
@@ -213,6 +214,13 @@ class Camera:
                 self.source = "synthetic"
                 return
             self._still = img
+        elif self.source == "shared":
+            # Frames published by another process (see yalp.frame_share). The
+            # file is re-read whenever it changes; nothing to open here.
+            if cv2 is None or not self.path:
+                self.source = "synthetic"
+                return
+            self._shared_mtime = None
         # "synthetic" needs no setup.
 
     def _capture_loop(self) -> None:
@@ -280,7 +288,28 @@ class Camera:
             return frame if ok else None
         if self.source == "image" and self._still is not None:
             return self._still.copy()
+        if self.source == "shared":
+            return self._read_shared()
         return self._synthetic_frame()
+
+    def _read_shared(self) -> Optional[np.ndarray]:
+        """Newest frame from the shared file; ``None`` if nothing new to publish.
+
+        Returning ``None`` leaves the previous frame in the latest-frame slot, so
+        an unchanged or briefly missing file never blanks the camera.
+        """
+        import os
+
+        try:
+            mtime = os.path.getmtime(self.path)
+        except OSError:
+            return None
+        if mtime == getattr(self, "_shared_mtime", None):
+            return None
+        frame = cv2.imread(self.path)
+        if frame is not None:
+            self._shared_mtime = mtime
+        return frame
 
     def _synthetic_frame(self) -> np.ndarray:
         """A cheap moving gradient so consumers see a changing frame."""

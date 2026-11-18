@@ -192,6 +192,16 @@ def run(args) -> int:
         f"detector={detector!r}"
     )
 
+    # Publish the newest camera frame to a file so a deliberative process on this
+    # machine can see without opening the (single-owner) camera device. Real
+    # backend only: on a laptop the agent opens its own webcam.
+    frame_publisher = None
+    backend_camera = getattr(backend, "_camera", None)
+    if backend_kind == "real" and backend_camera is not None:
+        from ..frame_share import FramePublisher
+
+        frame_publisher = FramePublisher(backend_camera.latest).start()
+
     server.start()
     try:
         backend.run(server=server, stop_event=stop_event)
@@ -203,6 +213,8 @@ def run(args) -> int:
         stop_event.set()
         # Teardown is time-bounded inside the backend (motors zeroed first, every
         # join/close bounded), so this never hangs even during a sensor storm.
+        if frame_publisher is not None:
+            frame_publisher.stop()
         backend.stop()
         server.stop()
         # Flush + join the telemetry writer AFTER the loop/teardown so late events
