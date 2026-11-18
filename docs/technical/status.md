@@ -31,7 +31,7 @@ code and calibration, then tests again.
 | Drive a commanded distance | Timed guess, about 1.8× off. No encoders fitted. | Robot, 2026-07-17 |
 | See and describe | `yalp see` captures a frame and Claude describes it. | Robot, 2026-07-17 |
 | Voice commands | Push-to-talk only: one 5 s recording per `yalp agent --listen` run, transcribed locally. | Laptop only |
-| Camera microphone | The C270 has a built-in mono mic. Never tried on the Pi or near motor noise. | Untested |
+| Camera microphone | Works on the robot in a quiet room (2026-11-18): `tiny.en` transcribed counting speech from 1–2 m almost perfectly. The default `tiny` model returned nothing — set `YALP_STT_MODEL=tiny.en`. Not yet tested with the motors running. | Robot, 2026-11-18 |
 | Reply by message | Not built. `src/yalp/responder.py` is the plug-in point (console and speech exist). | — |
 | Follow a person | Detector runs at about 26 Hz on the Pi. `yalp follow` only drives simulated wheels. | Laptop (follow); Pi (detector speed) |
 | Telemetry | Flight recorder writes JSONL; `yalp telemetry` lists, summarises, exports and plots it. | Recorder on robot; reader laptop-only |
@@ -41,6 +41,16 @@ code and calibration, then tests again.
 telemetry reader, and the IMU / encoder / pack-monitor drivers (no such hardware is
 fitted). The camera's field-of-view constant, which scales every heading number, has
 never been checked against a real 90° mark.
+
+**Found on the robot 2026-11-18:**
+
+- The Pi overheats under speech-to-text: 47 °C idle, 82 °C and throttled after a few
+  transcriptions, and no fan is visible to the OS. The same 20 s clip took 2.7 s cool
+  and about 40 s hot. Check that the case fan is spinning before relying on voice.
+- The Pi has no clock battery. It boots with a stale date, and `git pull` fails on a
+  certificate error until the clock syncs, about a minute after Wi-Fi comes up.
+- `yalp`'s transcriber crashed on the Pi (PyAV / faster-whisper version mismatch);
+  fixed by decoding the WAV ourselves in `voice/stt.py`.
 
 **Hardware as built:** Raspberry Pi 5, Logitech C270, two TT motors on a DRV8833,
 one front HC-SR04, 4×AA NiMH pack, two-deck acrylic chassis. Detail in

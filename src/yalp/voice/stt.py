@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import logging
 import tempfile
+import wave
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -49,6 +50,39 @@ class STTBackend(ABC):
 
 
 # --- real, local backend (lazy heavy import) --------------------------------
+
+_WHISPER_SAMPLE_RATE = 16000
+
+
+def _pcm16_wav_to_float32(wav_bytes: bytes):
+    """Decode 16-bit PCM WAV bytes to a mono float32 array at 16 kHz.
+
+    Returns ``None`` when the bytes are not a 16-bit PCM WAV (or numpy is
+    missing), so the caller can fall back to faster-whisper's own decoder.
+    """
+    try:
+        import numpy as np
+
+        with wave.open(io.BytesIO(wav_bytes)) as wav:
+            if wav.getsampwidth() != 2:
+                return None
+            channels = wav.getnchannels()
+            rate = wav.getframerate()
+            pcm = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
+    except Exception:
+        return None
+    audio = pcm.astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio[: audio.size - audio.size % channels].reshape(-1, channels).mean(axis=1)
+    if rate != _WHISPER_SAMPLE_RATE and audio.size:
+        # Linear resample; good enough for speech going into Whisper.
+        n_out = int(round(audio.size * _WHISPER_SAMPLE_RATE / rate))
+        audio = np.interp(
+            np.linspace(0.0, audio.size - 1, n_out), np.arange(audio.size), audio
+        )
+    return audio.astype(np.float32)
+
+
 class FasterWhisperBackend(STTBackend):
     """Local on-CPU STT backend using ``faster-whisper`` (CTranslate2).
 
@@ -85,15 +119,22 @@ class FasterWhisperBackend(STTBackend):
 
     def transcribe(self, wav_bytes: bytes) -> str:
         model = self._ensure_model()
-        # faster-whisper accepts a file path or a binary stream. Prefer an
-        # in-memory stream; fall back to a temp file if the stream is rejected.
-        try:
-            segments, _info = model.transcribe(io.BytesIO(wav_bytes))
-        except Exception:  # pragma: no cover - depends on installed lib version
-            with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
-                tmp.write(wav_bytes)
-                tmp.flush()
-                segments, _info = model.transcribe(tmp.name)
+        # Decode the WAV ourselves and hand faster-whisper a float32 array. Its
+        # own file/stream decoding goes through PyAV, and a PyAV / faster-whisper
+        # version mismatch breaks it (seen on the Pi: av 19 + faster-whisper 1.2
+        # -> TypeError in av.open). Our input is always 16-bit PCM WAV, so the
+        # stdlib can decode it; anything else falls back to the library's decoder.
+        samples = _pcm16_wav_to_float32(wav_bytes)
+        if samples is not None:
+            segments, _info = model.transcribe(samples)
+        else:
+            try:
+                segments, _info = model.transcribe(io.BytesIO(wav_bytes))
+            except Exception:  # pragma: no cover - depends on installed lib version
+                with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+                    tmp.write(wav_bytes)
+                    tmp.flush()
+                    segments, _info = model.transcribe(tmp.name)
         parts: List[str] = [seg.text for seg in segments]
         return "".join(parts).strip()
 

@@ -108,3 +108,63 @@ def test_transcribe_faster_whisper_missing_raises_runtime_error(monkeypatch):
     _block_faster_whisper(monkeypatch)
     with pytest.raises(RuntimeError):
         transcribe(_WAV, backend="faster-whisper")
+
+
+# --- WAV decoding without PyAV (Pi: av 19 + faster-whisper 1.2 mismatch) -----
+
+
+def _wav_bytes(samples, rate=16000, channels=1):
+    import io
+    import wave
+
+    import numpy as np
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.asarray(samples, dtype=np.int16).tobytes())
+    return buf.getvalue()
+
+
+def test_pcm16_wav_decodes_to_float32_mono_16k():
+    import numpy as np
+
+    from yalp.voice.stt import _pcm16_wav_to_float32
+
+    out = _pcm16_wav_to_float32(_wav_bytes([0, 16384, -16384, 32767]))
+    assert out.dtype == np.float32
+    assert np.allclose(out, [0.0, 0.5, -0.5, 32767 / 32768.0])
+
+    stereo = _pcm16_wav_to_float32(_wav_bytes([100, 300, -100, -300], channels=2))
+    assert np.allclose(stereo, [200 / 32768.0, -200 / 32768.0])
+
+    resampled = _pcm16_wav_to_float32(_wav_bytes([0] * 800, rate=8000))
+    assert resampled.size == 1600
+
+    assert _pcm16_wav_to_float32(b"not a wav file") is None
+
+
+def test_faster_whisper_backend_passes_an_array_not_a_stream():
+    import numpy as np
+
+    from yalp.voice.stt import FasterWhisperBackend
+
+    class _Seg:
+        text = " hello robot "
+
+    class _Model:
+        def __init__(self):
+            self.got = None
+
+        def transcribe(self, audio):
+            self.got = audio
+            return [_Seg()], None
+
+    backend = FasterWhisperBackend.__new__(FasterWhisperBackend)
+    backend.model_size = "tiny"
+    backend._model = _Model()
+
+    assert backend.transcribe(_wav_bytes([0, 1000, -1000])) == "hello robot"
+    assert isinstance(backend._model.got, np.ndarray)
