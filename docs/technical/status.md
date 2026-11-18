@@ -44,9 +44,11 @@ never been checked against a real 90° mark.
 
 **Found on the robot 2026-11-18:**
 
-- The Pi overheats under speech-to-text: 47 °C idle, 82 °C and throttled after a few
-  transcriptions, and no fan is visible to the OS. The same 20 s clip took 2.7 s cool
-  and about 40 s hot. Check that the case fan is spinning before relying on voice.
+- The Pi runs hot under speech-to-text: 47 °C idle, 80–84 °C and throttled during
+  transcription, and no fan is visible to the OS. Check that the case fan is spinning.
+- Transcription speed is set by decoding options, not heat: the same 20 s clip took
+  24–31 s with library defaults and 2.7 s with `beam_size=1` and no conditioning on
+  previous text, both measured hot. `voice/stt.py` now uses the fast options.
 - The Pi has no clock battery. It boots with a stale date, and `git pull` fails on a
   certificate error until the clock syncs, about a minute after Wi-Fi comes up.
 - `yalp`'s transcriber crashed on the Pi (PyAV / faster-whisper version mismatch);
