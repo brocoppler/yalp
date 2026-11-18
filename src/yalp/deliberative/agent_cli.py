@@ -124,6 +124,17 @@ def add_parser(subparsers) -> None:
         ),
     )
     parser.add_argument(
+        "--telegram",
+        action="store_true",
+        help=(
+            "ALSO send the robot's replies to the owner's Telegram chat (needs "
+            "YALP_TELEGRAM_BOT_TOKEN and YALP_TELEGRAM_CHAT_ID). This is how a "
+            "speakerless robot answers a spoken command: pair it with --listen. "
+            "Answers always print regardless; if Telegram is not configured this "
+            "warns once and carries on."
+        ),
+    )
+    parser.add_argument(
         "--listen",
         action="store_true",
         help=(
@@ -235,10 +246,21 @@ def run(args) -> int:
     from ..responder import CompositeResponder, ConsoleResponder, TtsResponder
 
     speak_enabled = bool(getattr(args, "speak", False))
+    channels = [ConsoleResponder()]
     if speak_enabled:
-        responder = CompositeResponder(ConsoleResponder(), TtsResponder())
-    else:
-        responder = ConsoleResponder()
+        channels.append(TtsResponder())
+    if getattr(args, "telegram", False):
+        from .. import telegram
+
+        telegram_responder = telegram.responder_from_env()
+        if telegram_responder is None:
+            print(
+                f"--telegram: {telegram.ENV_TOKEN} / {telegram.ENV_CHAT_ID} not set "
+                "— replies will only print. Run `yalp telegram` to set it up."
+            )
+        else:
+            channels.append(telegram_responder)
+    responder = channels[0] if len(channels) == 1 else CompositeResponder(*channels)
 
     agent = Agent(
         client=None,  # real LLM client built lazily by llm.call_with_tools
