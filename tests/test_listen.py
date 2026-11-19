@@ -302,3 +302,16 @@ def test_listen_cli_reports_a_missing_file(capsys):
     args = argparse.Namespace(file="/nonexistent/clip.wav", dry_run=True)
     assert listen_cli.run(args) == 2
     assert "Could not open the audio source" in capsys.readouterr().out
+
+
+def test_idle_is_not_moving_even_when_goal_status_says_running():
+    # Seen on the robot: after a stop the state is mode=IDLE, goal_status=running.
+    # Treating that as "moving" left the listener deaf to commands for good.
+    from yalp import listen_cli
+    from yalp.contract.messages import GoalStatus, Mode, RobotState
+
+    assert not listen_cli._state_is_moving(RobotState(mode=Mode.IDLE, goal_status=GoalStatus.RUNNING))
+    assert not listen_cli._state_is_moving(RobotState(mode=Mode.SAFE_STOP))
+    assert not listen_cli._state_is_moving(None)
+    assert listen_cli._state_is_moving(RobotState(mode=Mode.DRIVE_GOAL))
+    assert listen_cli._state_is_moving(RobotState(mode=Mode.FOLLOW))

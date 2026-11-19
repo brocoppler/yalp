@@ -125,6 +125,17 @@ def _make_transcriber(sample_rate: int) -> Callable:
     return transcribe
 
 
+def _state_is_moving(state) -> bool:
+    """True if the motors may be running: a drive/turn goal or FOLLOW is active.
+
+    Decided by mode alone. The reactive layer reports ``goal_status="running"``
+    in IDLE too (seen on the robot 2026-11-18), so the status is not a signal.
+    """
+    from .contract.messages import Mode
+
+    return state is not None and state.mode in (Mode.DRIVE_GOAL, Mode.FOLLOW)
+
+
 def _saving(transcribe: Callable, directory: str, sample_rate: int) -> Callable:
     """Wrap ``transcribe`` so each clip is also written to ``directory``."""
     import itertools
@@ -239,7 +250,6 @@ def run(args) -> int:
         return 0
 
     from . import telegram
-    from .contract.messages import GoalStatus, Mode
     from .deliberative import agent_cli
     from .deliberative.agent import Agent, format_transcript
     from .deliberative.model_router import Budget
@@ -273,13 +283,7 @@ def run(args) -> int:
     )
 
     def is_moving() -> bool:
-        state = reactive.request_state(timeout=0.3)
-        if state is None:
-            return False
-        return (
-            state.mode in (Mode.DRIVE_GOAL, Mode.FOLLOW)
-            or state.goal_status == GoalStatus.RUNNING
-        )
+        return _state_is_moving(reactive.request_state(timeout=0.3))
 
     def on_heard(text: str, accepted: bool) -> None:
         _print_heard(text, accepted)
