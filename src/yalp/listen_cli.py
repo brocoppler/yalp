@@ -74,6 +74,17 @@ def add_parser(subparsers) -> None:
         action="store_true",
         help="Only print what is heard; run no commands and move nothing.",
     )
+    parser.add_argument(
+        "--levels",
+        action="store_true",
+        help="Print the microphone level once a second (for tuning / debugging).",
+    )
+    parser.add_argument(
+        "--save-dir",
+        default=None,
+        metavar="DIR",
+        help="Save every clip sent to speech-to-text as a WAV in DIR (debugging).",
+    )
     parser.set_defaults(handler=run)
 
 
@@ -114,6 +125,27 @@ def _make_transcriber(sample_rate: int) -> Callable:
     return transcribe
 
 
+def _saving(transcribe: Callable, directory: str, sample_rate: int) -> Callable:
+    """Wrap ``transcribe`` so each clip is also written to ``directory``."""
+    import itertools
+    import os
+
+    from .voice.microphone import to_wav_bytes
+
+    os.makedirs(directory, exist_ok=True)
+    counter = itertools.count(1)
+
+    def wrapped(samples) -> str:
+        text = transcribe(samples)
+        path = os.path.join(directory, f"clip-{next(counter):03d}.wav")
+        with open(path, "wb") as handle:
+            handle.write(to_wav_bytes(samples, sample_rate))
+        print(f"    saved {path}: {text!r}", flush=True)
+        return text
+
+    return wrapped
+
+
 def _open_audio(args):
     """Return ``(blocks, backlog, sample_rate, close)`` for the chosen source."""
     from .voice import listen
@@ -123,6 +155,26 @@ def _open_audio(args):
         return blocks, (lambda: 0), rate, (lambda: None)
     source = listen.LiveAudioSource().open()
     return source, source.backlog, source.sample_rate, source.close
+
+
+def _with_levels(blocks, loop):
+    """Pass blocks through, printing loudest level / background / threshold each second."""
+    from .voice.listen import _rms
+
+    peak, count = 0.0, 0
+    for block in blocks:
+        peak = max(peak, _rms(block))
+        count += 1
+        if count >= 10:
+            seg = loop.segmenter
+            mode = "stop-only" if loop._guarded else ("SPEECH" if seg.in_speech else "idle")
+            print(
+                f"    level {peak:.4f}  background {seg._noise or 0:.4f}  "
+                f"threshold {seg.threshold:.4f}  {mode}",
+                flush=True,
+            )
+            peak, count = 0.0, 0
+        yield block
 
 
 def _print_heard(text: str, accepted: bool) -> None:
@@ -136,6 +188,9 @@ def run(args) -> int:
     """Handler for ``yalp listen``. Returns a process exit code."""
     from .voice import listen
 
+    if getattr(args, "levels", False):
+        logging.getLogger("yalp.voice.listen").setLevel(logging.INFO)
+        logging.basicConfig(level=logging.INFO, format="    %(message)s")
     try:
         blocks, backlog, sample_rate, close_audio = _open_audio(args)
     except Exception as exc:  # noqa: BLE001 - no mic / bad file: say so, don't trace
@@ -150,6 +205,9 @@ def run(args) -> int:
         print('Install it with: pip install -e ".[voice]"')
         return 2
 
+    if getattr(args, "save_dir", None):
+        transcribe = _saving(transcribe, args.save_dir, sample_rate)
+
     wake = ", ".join(config.WAKE_WORDS)
 
     if getattr(args, "dry_run", False):
@@ -163,7 +221,10 @@ def run(args) -> int:
             sample_rate=sample_rate,
         )
         try:
-            loop.run(blocks, backlog=backlog)
+            loop.run(
+            _with_levels(blocks, loop) if getattr(args, "levels", False) else blocks,
+            backlog=backlog,
+        )
         except KeyboardInterrupt:
             print()
         finally:
@@ -253,7 +314,10 @@ def run(args) -> int:
     try:
         hint = f'Say "{config.WAKE_WORDS[0]}, <command>".' if wake else "Say a command."
         responder.respond(f"Listening. {hint} Say \"stop\" at any time.", kind=KIND_STATUS)
-        loop.run(blocks, backlog=backlog)
+        loop.run(
+            _with_levels(blocks, loop) if getattr(args, "levels", False) else blocks,
+            backlog=backlog,
+        )
     except KeyboardInterrupt:
         print()
     finally:

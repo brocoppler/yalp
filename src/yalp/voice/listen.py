@@ -306,7 +306,9 @@ class LiveAudioSource:
         def callback(indata, _frames, _time, status) -> None:
             if status:
                 logger.debug("audio stream status: %s", status)
-            self._queue.put(np.ascontiguousarray(indata[:, 0], dtype=np.float32))
+            # Copy: PortAudio reuses ``indata`` for the next block, and a
+            # one-channel column slice is a view, not a copy.
+            self._queue.put(np.array(indata[:, 0], dtype=np.float32, copy=True))
 
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
@@ -468,6 +470,7 @@ class VoiceLoop:
 
     def _handle_utterance(self, text: str) -> None:
         if is_noise_transcript(text):
+            logger.info("heard only noise: %r", text)
             return
         command = extract_command(text, self.wake_words)
         if command is None:
