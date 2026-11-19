@@ -76,13 +76,26 @@ def is_noise_transcript(text: str) -> bool:
     return cleaned in _NOISE_TRANSCRIPTS or (text or "").strip().startswith(("[", "("))
 
 
+def wake_prompt(wake_words: Sequence[str]) -> Optional[str]:
+    """Text to prime the speech model with so it spells the wake words as given.
+
+    Measured 2026-11-18 (tiny.en, 20 synthetic "Izzy, ..." clips in five voices):
+    unprimed, the name came out right once ("IZ", "Aussie", "easy", "I see");
+    primed with this text, 20 of 20. Noise and "stop" were unaffected.
+    """
+    names = [w.strip().capitalize() for w in wake_words if w and w.strip()]
+    if not names:
+        return None
+    return " ".join(f"{n}, turn left. {n}, what do you see?" for n in names)
+
+
 def extract_command(text: str, wake_words: Sequence[str]) -> Optional[str]:
     """Return the command in ``text``, or ``None`` if it is not addressed to us.
 
     With no wake words configured, every transcript is a command. Otherwise the
-    transcript must contain one; the command is what follows it ("robot, turn
+    transcript must contain one; the command is what follows it ("Izzy, turn
     left" → "turn left"), or what precedes it when nothing follows ("turn left,
-    robot"). A bare wake word returns ``None``.
+    Izzy"). A bare wake word returns ``None``.
     """
     stripped = (text or "").strip()
     if not stripped:

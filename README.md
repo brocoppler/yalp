@@ -192,8 +192,8 @@ yalp listen --host 127.0.0.1     # on the robot, after `yalp session start`
 yalp listen --dry-run            # only print what is heard; run nothing
 ```
 
-- While the robot is still, say the wake word and a command: "robot, turn left".
-  Sentences without the wake word are ignored (`YALP_WAKE_WORDS`, default `robot`).
+- While the robot is still, say the wake word and a command: "Izzy, turn left".
+  Sentences without the wake word are ignored (`YALP_WAKE_WORDS`, default `izzy`, the robot's name).
 - While it is moving or working on a command, only "stop" is listened for. It
   halts the robot and ends the command, and never needs the wake word.
 

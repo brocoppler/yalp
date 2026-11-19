@@ -408,12 +408,13 @@ STT_BACKEND: str = _env_str("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whi
 # multilingual 'tiny' returned nothing for speech that 'tiny.en' transcribed well.
 STT_MODEL: str = _env_str("YALP_STT_MODEL", "tiny.en")  # tiny.en|base.en|tiny|base
 # Wake words for continuous listening (`yalp listen`), comma-separated. A spoken
-# sentence is only treated as a command if it contains one ("robot, turn left"),
+# sentence is only treated as a command if it contains one ("Izzy, turn left"),
 # so conversation in the room does not drive the robot. "stop" never needs one.
+# The speech model is primed with these words so it spells them as given.
 # Set to an empty string to treat everything heard as a command.
 WAKE_WORDS: tuple = tuple(
     w.strip().lower()
-    for w in _env_str("YALP_WAKE_WORDS", "robot").split(",")
+    for w in _env_str("YALP_WAKE_WORDS", "izzy").split(",")
     if w.strip()
 )
 

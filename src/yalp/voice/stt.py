@@ -96,6 +96,10 @@ class FasterWhisperBackend(STTBackend):
     package. The model is built once, lazily, on first use.
     """
 
+    # Optional text the model is primed with before each clip. It makes unusual
+    # words (the robot's name) come out spelled as given. Set it on an instance.
+    prompt: Optional[str] = None
+
     def __init__(self, model_size: str = config.STT_MODEL) -> None:
         self.model_size = model_size
         self._model = None  # built lazily in _ensure_model()
@@ -131,7 +135,10 @@ class FasterWhisperBackend(STTBackend):
         # stdlib can decode it; anything else falls back to the library's decoder.
         samples = _pcm16_wav_to_float32(wav_bytes)
         if samples is not None:
-            segments, _info = model.transcribe(samples, **_TRANSCRIBE_OPTIONS)
+            options = dict(_TRANSCRIBE_OPTIONS)
+            if self.prompt:
+                options["initial_prompt"] = self.prompt
+            segments, _info = model.transcribe(samples, **options)
         else:
             try:
                 segments, _info = model.transcribe(io.BytesIO(wav_bytes))

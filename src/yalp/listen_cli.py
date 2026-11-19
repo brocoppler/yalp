@@ -4,7 +4,7 @@ Keeps the microphone open and runs each spoken command through the same agent
 loop as ``yalp agent``. Replies print, and also go to Telegram when it is
 configured (the robot has no speaker).
 
-* While the robot is still, say the wake word and a command: "robot, turn left".
+* While the robot is still, say the wake word and a command: "Izzy, turn left".
 * While it is moving or working on a command, only "stop" is listened for; it
   halts the robot and ends the command. "stop" never needs the wake word.
 
@@ -117,7 +117,11 @@ def _make_transcriber(sample_rate: int) -> Callable:
     from .voice.microphone import to_wav_bytes
     from .voice.stt import get_backend
 
+    from .voice.listen import wake_prompt
+
     backend = get_backend()
+    if hasattr(backend, "prompt"):
+        backend.prompt = wake_prompt(config.WAKE_WORDS)
 
     def transcribe(samples) -> str:
         return backend.transcribe(to_wav_bytes(samples, sample_rate))
@@ -337,7 +341,7 @@ def run(args) -> int:
         sample_rate=sample_rate,
     )
     try:
-        hint = f'Say "{config.WAKE_WORDS[0]}, <command>".' if wake else "Say a command."
+        hint = f'Say "{config.WAKE_WORDS[0].capitalize()}, <command>".' if wake else "Say a command."
         responder.respond(f"Listening. {hint} Say \"stop\" at any time.", kind=KIND_STATUS)
         loop.run(
             _with_levels(blocks, loop) if getattr(args, "levels", False) else blocks,

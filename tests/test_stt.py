@@ -170,3 +170,7 @@ def test_faster_whisper_backend_passes_an_array_not_a_stream():
     assert backend.transcribe(_wav_bytes([0, 1000, -1000])) == "hello robot"
     assert isinstance(backend._model.got, np.ndarray)
     assert backend._model.options == {"beam_size": 1, "condition_on_previous_text": False}
+
+    backend.prompt = "Izzy, turn left."
+    backend.transcribe(_wav_bytes([0, 1000, -1000]))
+    assert backend._model.options["initial_prompt"] == "Izzy, turn left."

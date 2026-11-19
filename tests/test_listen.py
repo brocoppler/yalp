@@ -369,3 +369,17 @@ def test_agent_run_direct_sends_one_intent_without_a_model():
     assert len(reactive.sent) == 1
     assert reactive.sent[0].goal == {"kind": "rotate", "target": -90.0, "speed": 0.5}
     assert "completed" in entries[-1].text
+
+
+def test_wake_prompt_names_each_wake_word():
+    assert listen.wake_prompt(()) is None
+    prompt = listen.wake_prompt(("izzy",))
+    assert prompt.startswith("Izzy, ")
+    assert "Robot" in listen.wake_prompt(("izzy", "robot"))
+
+
+def test_default_wake_word_is_the_robots_name():
+    from yalp import config
+
+    assert config.WAKE_WORDS == ("izzy",)
+    assert listen.extract_command("Hey Izzy, turn around.", config.WAKE_WORDS) == "turn around"
