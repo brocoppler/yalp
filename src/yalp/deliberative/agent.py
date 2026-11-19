@@ -40,6 +40,7 @@ key, camera, or network.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -169,8 +170,30 @@ class Agent:
         # no-repeat guard for the answer CHANNEL, kept separate from ``_spoken``
         # so the two output paths never entangle.
         self._answered: set[str] = set()
+        # Set by :meth:`cancel` (from another thread, e.g. a spoken "stop") to end
+        # the turn in progress. The lock makes "check the flag, then send a motion
+        # intent" atomic against "set the flag, then send IDLE", so a motion intent
+        # can never be sent after the stop.
+        self._cancelled = threading.Event()
+        self._intent_lock = threading.Lock()
 
     # -- public API ----------------------------------------------------------
+    def cancel(self) -> None:
+        """Stop the robot and end the turn in progress. Safe from any thread.
+
+        Sends an IDLE intent now and makes the running :meth:`run_turn` issue no
+        further motion and return at its next check. The flag is cleared when the
+        next turn starts.
+        """
+        with self._intent_lock:
+            self._cancelled.set()
+            self._fall_to_idle()
+
+    @property
+    def cancelled(self) -> bool:
+        """True if the current (or last) turn was ended by :meth:`cancel`."""
+        return self._cancelled.is_set()
+
     def run_turn(self, user_text: str) -> list[TranscriptEntry]:
         """Run one user request to completion; return the transcript.
 
@@ -183,9 +206,13 @@ class Agent:
         self._transcript = []
         self._spoken = set()
         self._answered = set()
+        self._cancelled.clear()
         messages: list[dict] = [self._build_user_turn(self._user_text)]
 
         for _step in range(self.max_steps):
+            if self._cancelled.is_set():
+                self._note("stopped by the user — turn ended.")
+                break
             if self.budget.exhausted():
                 self._note(
                     "budget exhausted — stopping and falling back to IDLE (§5).",
@@ -227,7 +254,10 @@ class Agent:
 
             tool_results: list[dict] = []
             for tool_use in turn.tool_uses:
-                content = self._dispatch(tool_use)
+                if self._cancelled.is_set():
+                    content = "not run: the user said stop."
+                else:
+                    content = self._dispatch(tool_use)
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -450,7 +480,10 @@ class Agent:
         ``FOLLOW`` is handed off (returns immediately). Bounded by
         ``settle_timeout`` so a stuck goal can never hang the loop.
         """
-        self.reactive.send_intent(intent)
+        with self._intent_lock:
+            if self._cancelled.is_set():
+                return self._read_state()  # stopped: send no further motion
+            self.reactive.send_intent(intent)
 
         if intent.mode == Mode.FOLLOW:
             return self._read_state()
@@ -459,6 +492,8 @@ class Agent:
         state = self._read_state()
         saw_running = _is_running(state)
         while time.monotonic() < deadline:
+            if self._cancelled.is_set():
+                break
             state = self._read_state()
             if state is None:
                 continue

@@ -407,6 +407,15 @@ STT_BACKEND: str = _env_str("YALP_STT_BACKEND", "faster-whisper")  # 'faster-whi
 # English-only 'tiny.en' is the default: on the robot (2026-11-18, C270 mic) the
 # multilingual 'tiny' returned nothing for speech that 'tiny.en' transcribed well.
 STT_MODEL: str = _env_str("YALP_STT_MODEL", "tiny.en")  # tiny.en|base.en|tiny|base
+# Wake words for continuous listening (`yalp listen`), comma-separated. A spoken
+# sentence is only treated as a command if it contains one ("robot, turn left"),
+# so conversation in the room does not drive the robot. "stop" never needs one.
+# Set to an empty string to treat everything heard as a command.
+WAKE_WORDS: tuple = tuple(
+    w.strip().lower()
+    for w in _env_str("YALP_WAKE_WORDS", "robot").split(",")
+    if w.strip()
+)
 
 
 # --- Reactive hardware GPIO pin map (BCM numbering; hardware.md) ---
@@ -878,6 +887,7 @@ __all__ = [
     "AUDIO_INPUT_DEVICE",
     "STT_BACKEND",
     "STT_MODEL",
+    "WAKE_WORDS",
     "FRAME_FILE",
     "FRAME_PUBLISH_HZ",
     "FRAME_FILE_MAX_AGE_S",

@@ -35,6 +35,31 @@ If **no** TTS binary is found on the host, `--speak` is a **silent no-op**: the 
 
 ## 3. Voice INPUT (STT)
 
+### Continuous listening — `yalp listen`
+
+`yalp listen` keeps the microphone open (`src/yalp/voice/listen.py`). It has two
+modes, chosen by what the robot is doing:
+
+| Robot is | What is listened for | How |
+|---|---|---|
+| Still, no command running | A sentence containing a wake word ("robot, turn left"). `YALP_WAKE_WORDS`, default `robot`; empty means everything heard is a command. | The stream is cut into utterances by loudness: speech starts when 3 of 5 blocks (0.1 s each) exceed 1.35× the background level, and ends after 0.8 s of quiet or at 12 s. Each utterance is transcribed. |
+| Moving, or working on a command | Only "stop" / "halt". No wake word needed. | The newest 2 s of audio is transcribed every second and checked for a stop word. On a match the robot is sent to IDLE and the running command is cancelled. |
+
+Replies print, and are also sent to Telegram when it is configured. Flags:
+`--host` / `--port` (drive a real reactive server), `--file WAV` (replay a
+recording, then exit), `--dry-run` (print what is heard; run nothing).
+
+Measured on the robot (2026-11-18, C270, `tiny.en`, Pi at 83 °C):
+
+- Speech from 1–2 m is only 1.5–3× the quiet-room level (block RMS about 0.010
+  quiet, 0.015–0.030 speech). The detection ratio is tuned to that; the first words
+  of a very quiet sentence can be missed.
+- Stop over motor noise: one "stop" in the motor recording was caught, with no
+  false stops in 26 s. Each 2 s window takes about 0.9 s to transcribe, so a stop
+  takes roughly 1–3 s to act. The sonar SAFE_STOP is still the fast safety layer.
+
+### Push-to-talk — `yalp agent --listen`
+
 `yalp agent --listen` runs the push-to-talk pipeline:
 
 1. **Record** — capture ~5 s of audio (default; configurable via `YALP_VOICE_RECORD_SECONDS`) from the configured source.

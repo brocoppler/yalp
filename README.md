@@ -181,6 +181,22 @@ chosen by platform:
 When no TTS binary is present, `--speak` is a silent no-op — nothing crashes and
 the text reply still prints.
 
+### Voice input (continuous: `yalp listen`)
+
+`yalp listen` keeps the microphone open and runs each spoken command through the
+agent. Replies print, and go to Telegram when it is configured.
+
+```bash
+yalp listen                      # laptop: simulated wheels
+yalp listen --host 127.0.0.1     # on the robot, after `yalp session start`
+yalp listen --dry-run            # only print what is heard; run nothing
+```
+
+- While the robot is still, say the wake word and a command: "robot, turn left".
+  Sentences without the wake word are ignored (`YALP_WAKE_WORDS`, default `robot`).
+- While it is moving or working on a command, only "stop" is listened for. It
+  halts the robot and ends the command, and never needs the wake word.
+
 ### Voice input (push-to-talk STT)
 
 `yalp agent --listen` records one spoken command (~5 s by default), transcribes it
@@ -266,7 +282,9 @@ The live answer is [docs/technical/status.md](docs/technical/status.md). In shor
   `yalp telemetry`.
 - **On the laptop only so far:** the agent loop (`yalp agent`), push-to-talk voice
   commands (`--listen`), and person-following (`yalp follow`, simulated wheels).
-- **Not built yet:** replying by message, and continuous listening. Those two complete V1.
+- **Built, not yet tried for real:** replying by message (`yalp telegram`, needs a
+  bot token) and continuous listening (`yalp listen`, tested on the robot against
+  recordings but not yet with a person speaking to it). Those two complete V1.
 
 The full suite (1,000+ tests) runs hardware-free. On macOS a cosmetic objc "libavdevice
 implemented in both cv2 and av" warning may print (transcription unaffected).

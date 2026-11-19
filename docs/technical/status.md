@@ -30,7 +30,7 @@ code and calibration, then tests again.
 | Stop before obstacles | SAFE_STOP at 0.30 m from the front sonar; reverse and rotate allowed as escape moves. | Robot (stop); escape moves laptop-only |
 | Drive a commanded distance | Timed guess, about 1.8× off. No encoders fitted. | Robot, 2026-07-17 |
 | See and describe | `yalp see` captures a frame and Claude describes it. | Robot, 2026-07-17 |
-| Voice commands | Push-to-talk only: one 5 s recording per `yalp agent --listen` run, transcribed locally. | Laptop only |
+| Voice commands | `yalp listen` (built 2026-11-18) keeps listening. Still: a sentence with the wake word "robot" is run as a command. Moving or busy: only "stop" is listened for, and it halts the robot and cancels the command. Tested on the robot against the day's recordings (speech detected and transcribed; "stop" caught over motor noise, about 1–3 s to act) and the live mic opens, but nobody has spoken a command to it yet. | Robot (recordings); laptop (full loop, simulated wheels) |
 | Camera microphone | Works on the robot in a quiet room (2026-11-18): `tiny.en` transcribed counting speech from 1–2 m almost perfectly. The multilingual `tiny` model returned nothing, so `tiny.en` is now the default. With both motors at duty 0.45 the noise at the mic is 4–5× the quiet level and louder than speech from 1–2 m: full commands come out garbled, but the word "stop" was still recognised. Design consequence: listen for commands while stationary; while driving, listen only for "stop". | Robot, 2026-11-18 |
 | Reply by message | Built 2026-11-18, not yet run against the real Telegram service. `yalp telegram` takes text commands from the owner's chat and replies there; `yalp agent --listen --telegram` sends replies to a spoken command. Setup steps are in `.env.example`. | Laptop tests only |
 | Follow a person | Detector runs at about 26 Hz on the Pi. `yalp follow` only drives simulated wheels. | Laptop (follow); Pi (detector speed) |
@@ -90,9 +90,10 @@ until we know they are needed). Against the V1 goal:
    do: create the bot, put the token and chat id in the robot's `.env`, and try it
    for real. On the robot run it as `yalp session start` then
    `yalp telegram --host 127.0.0.1`.
-3. **Continuous listening.** Replace the single 5 s recording with a loop that keeps
-   listening and hands each utterance to the agent. Skip this if step 1 shows the
-   microphone is unusable; do "follow on real wheels" instead.
+3. **Continuous listening.** Code is in (`src/yalp/voice/listen.py`, `yalp listen`).
+   Left to do: try it with a person. On the robot: `yalp session start`, then
+   `yalp listen --dry-run` to see what it hears, then
+   `yalp listen --host 127.0.0.1` with the wheels off the ground.
 4. **Scored self-test.** One command that drives a fixed set of trials and writes a
    JSON score (see below). This is the foundation of the self-improving loop.
 

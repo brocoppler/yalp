@@ -37,6 +37,7 @@ FEATURE_MODULES: list[str] = [
     "yalp.telemetry_cli",
     "yalp.voice.audio_cli",
     "yalp.telegram_cli",
+    "yalp.listen_cli",
 ]
 
 
