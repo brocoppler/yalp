@@ -287,7 +287,7 @@ def test_listen_cli_dry_run_on_a_wav(tmp_path, capsys, monkeypatch):
 
     wav = tmp_path / "clip.wav"
     wav.write_bytes(to_wav_bytes(_speech_stream(1), RATE))
-    monkeypatch.setattr(listen_cli, "_make_transcriber", lambda _rate: lambda _s: "Robot, spin.")
+    monkeypatch.setattr(listen_cli, "_make_transcriber", lambda _rate: lambda _s: "Izzy, spin.")
 
     root = argparse.ArgumentParser()
     listen_cli.add_parser(root.add_subparsers(dest="subcommand"))
