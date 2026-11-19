@@ -315,3 +315,57 @@ def test_idle_is_not_moving_even_when_goal_status_says_running():
     assert not listen_cli._state_is_moving(None)
     assert listen_cli._state_is_moving(RobotState(mode=Mode.DRIVE_GOAL))
     assert listen_cli._state_is_moving(RobotState(mode=Mode.FOLLOW))
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Turn left.", ("turn", {"angle_deg": 90.0})),
+        ("turn right", ("turn", {"angle_deg": -90.0})),
+        ("Spin right 45 degrees", ("turn", {"angle_deg": -45.0})),
+        ("turn around", ("turn", {"angle_deg": 180.0})),
+        ("Go forward.", ("drive", {"distance_m": 0.5})),
+        ("drive forward 1 meter", ("drive", {"distance_m": 1.0})),
+        ("move back 30 cm", ("drive", {"distance_m": -0.3})),
+        ("back up", ("drive", {"distance_m": -0.5})),
+        ("go forward 50 meters", ("drive", {"distance_m": 2.0})),  # capped
+        ("Follow me.", ("enter_follow_mode", {})),
+    ],
+)
+def test_parse_simple_command(text, expected):
+    name, params, _description = listen.parse_simple_command(text)
+    assert name == expected[0]
+    assert params == pytest.approx(expected[1])
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["what do you see", "turn left and tell me what you see", "turn rain", "go", "", "go to the kitchen"],
+)
+def test_parse_simple_command_leaves_the_rest_to_the_agent(text):
+    assert listen.parse_simple_command(text) is None
+
+
+def test_agent_run_direct_sends_one_intent_without_a_model():
+    from yalp.contract.messages import GoalStatus, Mode, RobotState
+    from yalp.deliberative.agent import Agent
+
+    class Reactive:
+        def __init__(self):
+            self.sent = []
+
+        def send_intent(self, intent):
+            self.sent.append(intent)
+
+        def request_state(self, timeout=2.0):
+            done = bool(self.sent)
+            return RobotState(
+                mode=Mode.IDLE, goal_status=GoalStatus.COMPLETED if done else GoalStatus.NONE
+            )
+
+    reactive = Reactive()
+    agent = Agent(client=None, reactive=reactive, describe_scene=lambda **_k: "")
+    entries = agent.run_direct("turn", {"angle_deg": -90.0})
+    assert len(reactive.sent) == 1
+    assert reactive.sent[0].goal == {"kind": "rotate", "target": -90.0, "speed": 0.5}
+    assert "completed" in entries[-1].text

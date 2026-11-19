@@ -98,6 +98,57 @@ def extract_command(text: str, wake_words: Sequence[str]) -> Optional[str]:
     return None
 
 
+_TURN = re.compile(
+    r"^(?:please )?(?:turn|spin|rotate)(?: to(?: the)?| the)? (left|right|around)"
+    r"(?: (?:by )?(\d+(?:\.\d+)?)(?: degrees?)?)?(?: please)?$"
+)
+_DRIVE = re.compile(
+    r"^(?:please )?(?:go|drive|move|come|back)(?: up)? ?"
+    r"(forward|forwards|ahead|straight|back|backward|backwards)?"
+    r"(?: (?:by )?(\d+(?:\.\d+)?|half a|a|one|two|three) ?"
+    r"(m|meter|meters|metre|metres|cm|centimeters|centimetres|foot|feet))?(?: please)?$"
+)
+_UNITS = {"m": 1.0, "meter": 1.0, "meters": 1.0, "metre": 1.0, "metres": 1.0,
+          "cm": 0.01, "centimeters": 0.01, "centimetres": 0.01, "foot": 0.3048, "feet": 0.3048}
+_AMOUNTS = {"half a": 0.5, "a": 1.0, "one": 1.0, "two": 2.0, "three": 3.0}
+DEFAULT_TURN_DEG = 90.0
+DEFAULT_DRIVE_M = 0.5
+MAX_SIMPLE_DRIVE_M = 2.0
+
+
+def parse_simple_command(text: str) -> Optional[tuple[str, dict, str]]:
+    """Recognise a plain motion command without asking the language model.
+
+    Returns ``(ability, params, description)`` — e.g. ``("turn", {"angle_deg":
+    90.0}, "Turning left 90°")`` — or ``None`` for anything else, which then goes
+    to the agent. Only whole-sentence matches count: "turn left and tell me what
+    you see" is not a simple command.
+    """
+    cleaned = " ".join(re.findall(r"[a-z0-9.']+", (text or "").lower())).strip(". ")
+    match = _TURN.match(cleaned)
+    if match:
+        direction, amount = match.group(1), match.group(2)
+        degrees = float(amount) if amount else (180.0 if direction == "around" else DEFAULT_TURN_DEG)
+        degrees = min(degrees, 360.0)
+        signed = -degrees if direction == "right" else degrees
+        label = "around" if direction == "around" and not amount else f"{direction} {degrees:g}°"
+        return "turn", {"angle_deg": signed}, f"Turning {label}"
+    match = _DRIVE.match(cleaned)
+    if match and (match.group(1) or cleaned.startswith("back")):
+        direction, amount, unit = match.group(1), match.group(2), match.group(3)
+        metres = DEFAULT_DRIVE_M
+        if amount and unit:
+            metres = _AMOUNTS.get(amount) or float(amount)
+            metres *= _UNITS[unit]
+        metres = min(metres, MAX_SIMPLE_DRIVE_M)
+        backward = cleaned.startswith("back") or (direction or "").startswith("back")
+        word = "back" if backward else "forward"
+        return "drive", {"distance_m": -metres if backward else metres}, f"Driving {word} {metres:g} m"
+    if cleaned in ("follow me", "please follow me", "follow me please"):
+        return "enter_follow_mode", {}, "Following you"
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Stationary mode: cut the stream into utterances
 # --------------------------------------------------------------------------- #
@@ -126,7 +177,7 @@ class UtteranceSegmenter:
         start_span: int = 5,
         noise_window_s: float = 5.0,
         noise_percentile: float = 20.0,
-        end_silence_s: float = 0.8,
+        end_silence_s: float = 0.6,
         max_utterance_s: float = 12.0,
         min_speech_s: float = 0.3,
         pre_roll_s: float = 0.4,
@@ -507,6 +558,7 @@ __all__ = [
     "extract_command",
     "is_noise_transcript",
     "is_stop",
+    "parse_simple_command",
     "read_wav",
     "wav_blocks",
 ]

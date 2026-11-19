@@ -292,9 +292,30 @@ def run(args) -> int:
 
     def on_stop() -> None:
         agent.cancel()
-        responder.respond("Stopped.")
+        responder.respond('Stopped — you said "stop".')
 
     def on_command(command: str) -> None:
+        simple = listen.parse_simple_command(command)
+        if simple is not None:
+            # A plain motion command: act now, with no model call in the way.
+            name, params, description = simple
+            responder.respond(f"{description}.", kind=KIND_STATUS)
+            try:
+                entries = agent.run_direct(name, params)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("command failed: %s: %s", type(exc).__name__, exc)
+                responder.respond(f"That command failed ({type(exc).__name__}).", kind=KIND_ERROR)
+                return
+            print(format_transcript(entries))
+            if not agent.cancelled:
+                outcome = entries[-1].text if entries else ""
+                if "blocked" in outcome:
+                    responder.respond("Blocked by an obstacle — I stopped by myself.")
+                elif "completed" in outcome:
+                    responder.respond("Finished — the move ended by itself.")
+                elif name != "enter_follow_mode":
+                    responder.respond('Still moving. Say "stop" to end it.', kind=KIND_STATUS)
+            return
         agent.budget = Budget()  # the budget is per command, not per uptime
         before = responder.count
         try:

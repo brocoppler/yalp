@@ -42,8 +42,15 @@ modes, chosen by what the robot is doing:
 
 | Robot is | What is listened for | How |
 |---|---|---|
-| Still, no command running | A sentence containing a wake word ("robot, turn left"). `YALP_WAKE_WORDS`, default `robot`; empty means everything heard is a command. | The stream is cut into utterances by loudness: speech starts when 3 of 5 blocks (0.1 s each) exceed 1.35× the background level, and ends after 0.8 s of quiet or at 12 s. Each utterance is transcribed. |
+| Still, no command running | A sentence containing a wake word ("robot, turn left"). `YALP_WAKE_WORDS`, default `robot`; empty means everything heard is a command. | The stream is cut into utterances by loudness: speech starts when 3 of 5 blocks (0.1 s each) exceed 1.35× the background level, and ends after 0.6 s of quiet or at 12 s. Each utterance is transcribed. |
 | Moving, or working on a command | Only "stop" / "halt". No wake word needed. | The newest 2 s of audio is transcribed every second and checked for a stop word. On a match the robot is sent to IDLE and the running command is cancelled. |
+
+Plain motion commands — "turn left", "turn right 45 degrees", "turn around",
+"go forward", "back up", "drive forward 1 meter", "follow me" — are recognised
+locally (`parse_simple_command`) and sent straight to the wheels with no model
+call, which removes 2–4 s of delay. Anything else goes to the agent. The reply
+says how a move ended: `Stopped — you said "stop".`, `Finished — the move ended
+by itself.`, or `Blocked by an obstacle — I stopped by myself.`
 
 Replies print, and are also sent to Telegram when it is configured. Flags:
 `--host` / `--port` (drive a real reactive server), `--file WAV` (replay a

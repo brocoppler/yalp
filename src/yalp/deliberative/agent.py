@@ -189,6 +189,19 @@ class Agent:
             self._cancelled.set()
             self._fall_to_idle()
 
+    def run_direct(self, name: str, params: Optional[dict] = None) -> list[TranscriptEntry]:
+        """Run ONE motion ability with no model call, and wait for it to settle.
+
+        For commands simple enough to recognise locally ("turn left"): skipping
+        the model removes seconds of delay. Returns the transcript, whose last
+        entry is the settled state.
+        """
+        self._transcript = []
+        self._cancelled.clear()
+        self._record("tool", f"{name}({_fmt_params(params or {})})", name=name, params=params or {})
+        self._dispatch_intent(name, params or {})
+        return self._transcript
+
     @property
     def cancelled(self) -> bool:
         """True if the current (or last) turn was ended by :meth:`cancel`."""
